@@ -348,6 +348,51 @@ fn test_solver() {
     check(solve(ice, 1000, path).solved, "pours that only count down the ice are tried");
 }
 
+// The game runs the solver, the generator and shuffle a slice a frame; they
+// must end where the blocking calls do.
+fn test_resumable() {
+    test("resumable search");
+    var boards: Board[>..] = [];
+    boards.push(board_of(["RGBR", "GBRG", "BRGB", "", ""]));
+    boards.push(board_of(["RGRG", "GRGR"]));
+    boards.push(board_of(["RGRG", "GRG"]));
+    boards.push(generate(level_spec(60).params, level_spec(60).seed).board);
+    boards.push(generate(level_spec(45).params, level_spec(45).seed).board);
+    var path: Move[>..] = [];
+    var stepped: Move[>..] = [];
+    for b in boards {
+        for budget in [5, 300, 50000] {
+            let s = solve(b, budget, path);
+            var search = search_begin(b, budget);
+            var slices = 0;
+            while !search_step(search, 3) { slices++; }
+            search_path(search, stepped);
+            let t = search.stats;
+            check(t.solved == s.solved && t.exhausted == s.exhausted && t.expanded == s.expanded &&
+                  t.length == s.length, "the same stats, a few positions at a time");
+            var same = stepped.len == path.len;
+            for m, i in path { if same && (m.from != stepped[i].from || m.to != stepped[i].to) { same = false; } }
+            check(same, "the same path");
+            let first, ok = search_first_move(search);
+            check(ok == (path.len > 0) && (!ok || (first.from == path[0].from && first.to == path[0].to)),
+                  "the same first move");
+            check(s.expanded <= 3 || slices >= (s.expanded - 1) / 3, "three positions a slice");
+        }
+    }
+    let p = level_spec(70).params;
+    var job = gen_begin(p, 1234);
+    while !gen_step(job, 10) {}
+    let g = generate(p, 1234);
+    check(board_hash(job.result.board) == board_hash(g.board) && job.result.attempts == g.attempts,
+          "generation in slices brews the same board");
+    var sb = board_of(["RGBY", "GBYR", "BYRG", "YRGB", "", ""]);
+    var r = rng { 9 };
+    var sj = shuffle_begin(sb, r, 30, 20000);
+    while !shuffle_step(sj, 4) {}
+    check(shuffle_board(sb, r, 30, 20000) && sj.found && board_hash(sj.trial) == board_hash(sb),
+          "shuffle in slices deals the same board");
+}
+
 fn test_generator() {
     test("generator");
     for seed in 1..6 {
@@ -547,6 +592,7 @@ fn main() {
     test_long();
     test_undo_snapshot();
     test_solver();
+    test_resumable();
     test_generator();
     test_level_io();
     test_tools();

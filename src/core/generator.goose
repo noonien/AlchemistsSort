@@ -270,28 +270,82 @@ fn deal_ok(board: Board) -> bool {
     validate(board).len == 0 && !is_won(board)
 }
 
-fn generate(p: GenParams, seed: u64) -> GenResult {
-    var path: Move[>..] = [];
+// What attempt `attempt` deals with: after many failures, ease off, with
+// fewer obstacles, then fewer colors.
+fn attempt_params(p: GenParams, attempt: i64) -> GenParams {
     var plain = p;
-    for attempt in 400 {
-        // After many failures, ease off: fewer obstacles, then fewer colors.
-        if attempt == 200 {
-            plain.hidden = 0;
-            plain.cloak = 0;
-            plain.frozen = 0;
-            plain.curtain = 0;
-        }
-        if attempt == 300 {
-            plain = GenParams { colors: max(3, p.colors - 1), empties: 2, long: p.long, long_height: p.long_height };
-        }
-        var r = rng { seed * 0x9E3779B97F4A7C15 + (attempt as u64) * 0xD1B54A32D192ED03 + 17 };
-        let board = deal(plain, r);
-        if !deal_ok(board) { continue; }
-        let stats = solve(board, p.budget, path);
-        if stats.solved { return GenResult { board: board, stats: stats, attempts: attempt + 1 }; }
+    if attempt >= 200 {
+        plain.hidden = 0;
+        plain.cloak = 0;
+        plain.frozen = 0;
+        plain.curtain = 0;
     }
-    // Practically unreachable: three colors with two spares always solve.
-    var r = rng { seed };
-    let board = deal(GenParams { colors: 3, empties: 2 }, r);
-    GenResult { board: board, stats: SolveStats {}, attempts: 401 }
+    if attempt >= 300 {
+        plain = GenParams { colors: max(3, p.colors - 1), empties: 2, long: p.long, long_height: p.long_height };
+    }
+    plain
+}
+
+// Generation as a job that runs a slice at a time, so the game can keep
+// drawing while it brews. Each attempt deals a board and searches it.
+struct GenJob {
+    params: GenParams,
+    seed: u64,
+    attempt: i64 = 0,
+    dealt: Board,           // the deal being searched, while `search` runs
+    searching: bool = false,
+    done: bool = false,
+    result: GenResult,      // once done
+    search: Search,
+}
+
+fn gen_begin(p: GenParams, seed: u64) -> GenJob {
+    GenJob { params: p, seed: seed, dealt: Board { .. }, result: GenResult { board: Board { .. }, stats: SolveStats {} },
+             search: Search {}, .. }
+}
+
+// Works on the job for about `nodes` search positions (each deal counts as
+// one). True once it is done and `job.result` holds the board.
+fn gen_step(job: GenJob&, nodes: i64) -> bool {
+    var left = max(1, nodes);
+    while !job.done && left > 0 {
+        if job.searching {
+            let before = job.search.stats.expanded;
+            let over = search_step(job.search, left);
+            left -= max(1, job.search.stats.expanded - before);
+            if !over { continue; }
+            job.searching = false;
+            if job.search.stats.solved {
+                job.result = GenResult { board: job.dealt, stats: job.search.stats, attempts: job.attempt + 1 };
+                job.done = true;
+            }
+            job.search = Search {};
+            job.attempt++;
+            continue;
+        }
+        left--;
+        if job.attempt >= 400 {
+            // Practically unreachable: three colors with two spares always solve.
+            var r = rng { job.seed };
+            let board = deal(GenParams { colors: 3, empties: 2 }, r);
+            job.result = GenResult { board: board, stats: SolveStats {}, attempts: 401 };
+            job.done = true;
+            break;
+        }
+        var r = rng { job.seed * 0x9E3779B97F4A7C15 + (job.attempt as u64) * 0xD1B54A32D192ED03 + 17 };
+        job.dealt = deal(attempt_params(job.params, job.attempt), r);
+        if !deal_ok(job.dealt) {
+            job.attempt++;
+            continue;
+        }
+        job.search = search_begin(job.dealt, job.params.budget);
+        job.searching = true;
+    }
+    job.done
+}
+
+fn generate(p: GenParams, seed: u64) -> GenResult {
+    var job = gen_begin(p, seed);
+    while !gen_step(job, 1 << 30) {}
+    job.result
 }
