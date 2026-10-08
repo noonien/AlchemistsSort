@@ -518,7 +518,7 @@ fn rule_of(f: Feature) -> const u8[:] {
         Seal => "Wax hides what's inside. Pour its color onto it to break it; two warmings break it too.",
         Tall => "Holds more than four. All of one color has to end up in it.",
         Vow => "Takes the first color poured in, then only that, and must end full.",
-        Rime => "Ice keeps a flask shut. It thaws after the pours on it, made anywhere.",
+        Rime => "Ice keeps a flask shut. Its number counts down with every pour, made anywhere; at 0 it thaws.",
         Brazier => "Each pour into its flask warms the flasks beside it.",
         Quicksilver => "Pours onto any color, and sinks to the bottom.",
         Siphon => "Pours from the tap at its base: the bottom layer comes out first.",
