@@ -162,6 +162,30 @@ sends a heat pulse, every Hourglass flips, every Lantern lights.
    Catalysts fire. Repeat until nothing changes, since light or heat can
    uncover a flask that's already complete.
 
+### Details settled during implementation
+
+- **Twins:** the destination must accept the pour first, so a full flask
+  refuses even with a twin. Overflow happens when the destination runs out
+  of room and the color fits the twin; nothing overflows back into the
+  source. A brazier or vine root on the twin isn't set off by overflow.
+- **Seal:** heat breaks it on the second pulse. Any break (key, Drop or
+  heat) lets liquid in only if it fits by the normal rules. A seal's key is
+  never the Drop.
+- **Vine:** at most one root per level. Withering needs emerald poured into
+  the root, even if nothing lands. A rimed root can't take emerald until it
+  thaws.
+- **Hourglass:** a rime that melts on a pour lets its hourglass count that
+  same pour. A catalyst flip doesn't reset the hourglass's counter. An empty
+  hourglass still flips.
+- **Athanor:** it accepts quicksilver when empty or with gold or the Drop on
+  top. With an Athanor on the board, a flask of quicksilver never completes.
+  A vow can take quicksilver as its color.
+- **Light** clears murk and lifts shrouds once, when the lantern lights.
+- **Drop:** one color has one segment fewer to make room for it, so a level
+  with the Drop but no color one short is invalid.
+- **Vow:** a vow flask that starts with liquid is vowed to that liquid's
+  color.
+
 `PourResult` keeps its fields and gains an **event list** (a fixed array,
 e.g. up to 32) of `Event { kind, bottle, from }`. The game animates the
 events in order. Kinds: `SealBroken`, `SealSoftened`, `Thawed`, `HeatPulse`,
