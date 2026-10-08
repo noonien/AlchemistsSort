@@ -32,6 +32,8 @@ import app.fx;
 import app.menus;
 import app.parts;
 import app.forces;
+import app.guide;
+import core.explain;
 
 // The canvas everything is laid out on, scaled to fit the window.
 let VW: f32 = 540.0;
@@ -40,7 +42,7 @@ let VH: f32 = 960.0;
 enum Screen { Home, Play, Settings, Seed, Map }
 
 // What covers the board, if anything.
-enum Overlay { None, Win, Lose, Intro, Reset, Brewing }
+enum Overlay { None, Win, Lose, Intro, Reset, Brewing, Grimoire }
 
 enum PlayMode { Campaign, Seed, Hand }
 
@@ -85,6 +87,9 @@ struct Particle {
 }
 
 struct Slot { pos: float2, half: float2 }
+
+// A click scripted for testing; a hold is not let go.
+struct Scripted { pos: float2, hold: bool = false }
 
 // --- state ------------------------------------------------------------------------
 
@@ -150,8 +155,12 @@ var shuffle_job: ShuffleJob;
 var brewing = false;            // brew is generating the level to load
 var brew: GenJob;
 
-// This frame's clicks, in canvas units, and the pointer.
+// This frame's clicks, in canvas units, and the pointer; right-clicks, and
+// whether a left press was let go. A scripted hold keeps its press down.
 var clicks: float2[..16];
+var right_clicks: float2[..16];
+var released = false;
+var script_hold = false;
 var pointer = float2_0;
 
 var board_layer = Layer { buffer: gfx::Buffer { 0 } };
@@ -330,6 +339,7 @@ fn reset_play_state() {
     hint_from = -1;
     hint_to = -1;
     message_until = 0.0;
+    reset_guides();
     board_changed();
     settle_beats();
     reset_back_shelf(board);
@@ -446,38 +456,6 @@ fn refuse(i: i64, why: const u8[:]) {
     if why.len > 0 { say(why, 2.2); }
 }
 
-fn why_blocked(b: Bottle) -> u8[>..] {
-    if b.done { return str("That flask is complete and sealed."); }
-    match b.cover {
-        Rime => str("Rime: thaws after ", b.thaw, if b.thaw == 1 { " more pour" } else { " more pours" },
-                    ", or sooner with heat."),
-        Seal => str("Sealed: pour ", COLOR_NAMES[b.key], " onto the seal to break it, or heat it twice."),
-        Shroud => str("Shrouded: light from a lantern next to it lifts the shroud."),
-        Vine => str("Vine: heat burns the tendril; emerald poured into the root withers the vine."),
-        None => str(""),
-    }
-}
-
-// Why a flask that has room turns this color away, from its body or the
-// salamander; empty when it is just the colors not matching.
-fn why_refused(i: i64, color: i64) -> u8[>..] {
-    let b = board.bottles[i];
-    if i == board.salamander { return str("The salamander is on that flask: nothing goes in until it hops off."); }
-    match b.body {
-        Moonpetal => if !any_lantern_lit(board) {
-            return str("A moonpetal flask takes liquid only once a lantern is lit.");
-        },
-        Vow => if b.vow != 0 && color != b.vow && color != DROP {
-            return str("This vow flask only takes ", COLOR_NAMES[b.vow], ".");
-        },
-        Athanor => if color == QUICKSILVER && b.n > 0 && top(b) != GOLD {
-            return str("The athanor turns quicksilver to gold only onto gold.");
-        },
-        Plain, Siphon, Hourglass => {},
-    }
-    str("")
-}
-
 fn start_pour(from: i64, to: i64) {
     settle_beats();
     let before = board;
@@ -515,10 +493,9 @@ fn tap_bottle(i: i64) {
             selected = i;
             slosh(i, 0.18);
             play(Sfx.Select);
-        } else if b.n == 0 && !covered(b) {
-            refuse(i, "");
         } else {
-            refuse(i, why_blocked(b));
+            // The words for it are core/explain.goose's.
+            refuse(i, refusal(board, -1, i));
         }
         return;
     }
@@ -541,13 +518,7 @@ fn tap_bottle(i: i64) {
         return;
     }
     selected = -1;
-    let reason = why_blocked(b);
-    if reason.len > 0 { refuse(i, reason); }
-    else if b.n >= b.cap { refuse(i, "That flask is full."); }
-    else {
-        let body = why_refused(i, pour_color(board.bottles[from]));
-        if body.len > 0 { refuse(i, body); } else { refuse(i, "The colors must match."); }
-    }
+    refuse(i, refusal(board, from, i));
 }
 
 fn process_taps() {
@@ -1208,10 +1179,19 @@ fn draw_play(out: Inst[>..]&) {
     if mode == PlayMode.Hand && info.name.len > 0 {
         text(0, VW * 0.5, 100.0, "hand-made", TextStyle.Tiny, white(0.6), Align.Center);
     }
-    text(0, VW - 44.0, 40.0, str(board.pours), TextStyle.Heading, white(0.95), Align.Center);
-    text(0, VW - 44.0, 70.0, "moves", TextStyle.Tiny, white(0.7), Align.Center);
+    // The Grimoire, mirroring the map; the moves beside it.
+    let book = v2(VW - 48.0, 52.0);
+    draw_book_pulse(out, book, 26.0);
+    if round_button(out, 0, book, 26.0, Icon.Book, "", 0, won_at < 0.0) || (gfx::key_pressed("G") && overlay == Overlay.None && won_at < 0.0) {
+        open_grimoire();
+    }
+    text(0, VW - 116.0, 40.0, str(board.pours), TextStyle.Heading, white(0.95), Align.Center);
+    text(0, VW - 116.0, 70.0, "moves", TextStyle.Tiny, white(0.7), Align.Center);
 
+    update_preview();
     draw_board(out);
+    draw_pour_preview(out);
+    draw_focus(out);
 
     // Toolbar.
     let y: f32 = 872.0;
@@ -1227,18 +1207,23 @@ fn draw_play(out: Inst[>..]&) {
     if hint_thinking { thinking(out, v2(x0 + gap * 4.0, y), 32.0); }
 
     if now < message_until {
+        // Long ones wrap, growing up from the toolbar.
         let a = clamp((message_until - now) * 2.0, 0.0, 1.0) as f32;
-        let w = min(250.0, text_width(TextStyle.Small, message) * 0.5 + 20.0);
-        rect(out, v2(VW * 0.5, 800.0), v2(w, 17.0), 17.0, float4 { 0.05, 0.03, 0.1, 0.8 * a });
-        text(0, VW * 0.5, 800.0, message, TextStyle.Small, white(a), Align.Center);
+        let wrap: f32 = 460.0;
+        let w = min(wrap * 0.5 + 20.0, text_width(TextStyle.Small, message) * 0.5 + 20.0);
+        let h = text_block(0, 0.0, 0.0, wrap, message, TextStyle.Small, white(a), Align.Center, false);
+        let lh = line_height(TextStyle.Small);
+        let c = v2(VW * 0.5, 800.0 - (h - lh) * 0.5);
+        rect(out, c, v2(w, h * 0.5 + 6.0), 17.0, float4 { 0.05, 0.03, 0.1, 0.85 * a });
+        text_block(0, VW * 0.5, c.y - (h - lh) * 0.5, wrap, message, TextStyle.Small, white(a), Align.Center, true);
     }
 
-    // Board taps, unless an overlay has the input.
+    // Board taps, unless an overlay has the input: a short press pours, a
+    // long one or a right-click shows the flask's card.
     if overlay == Overlay.None {
-        for c in clicks {
-            let i = flask_hit(c);
-            if i >= 0 { taps.push(i); }
-        }
+        let holding = gfx::mouse_down(gfx::MOUSE_LEFT) || script_hold;
+        let steady = script_hold || length(pointer - press_pos) < 24.0;
+        board_input(clicks[..], released, right_clicks[..], holding, steady);
         clicks.clear();
     }
 }
@@ -1349,9 +1334,11 @@ fn draw_overlay(out: Inst[>..]&) {
         text_shadowed(1, c.x, c.y - 100.0, title, TextStyle.Label, gold(1.0), Align.Center);
         text_wrapped(1, c.x, c.y - 50.0, 380.0, info.hint, TextStyle.Body, white(0.92));
         if button(out, 1, c + v2(0.0, 105.0), v2(110.0, 26.0), "Got it", float4 { 0.2, 0.55, 0.38, 1.0 }, true) {
-            overlay = Overlay.None;
+            close_intro();
         }
         clicks.clear();
+    } else if overlay == Overlay.Grimoire {
+        draw_grimoire(out);
     } else if overlay == Overlay.Reset {
         let c = v2(VW * 0.5, VH * 0.45);
         panel(out, c, v2(210.0, 120.0));
@@ -1368,6 +1355,13 @@ fn draw_overlay(out: Inst[>..]&) {
         }
     }
     clicks.clear();
+}
+
+// The intro goes; the Grimoire's button pulses once after a tutorial's, so
+// it is found.
+fn close_intro() {
+    overlay = Overlay.None;
+    if spec.is_tutorial || mode == PlayMode.Hand { pulse_book(); }
 }
 
 fn toggle_row(out: Inst[>..]&, y: f32, label: const u8[:], on: bool) -> bool {
@@ -1416,7 +1410,7 @@ fn draw_settings(out: Inst[>..]&) {
     text(0, VW * 0.5, 580.0, str("Next level: ", save.level), TextStyle.Small, white(0.7), Align.Center);
     text(0, VW * 0.5, 610.0, str("Saved in ", save_dir), TextStyle.Tiny, white(0.45), Align.Center);
     text_wrapped(0, VW * 0.5, 660.0, 440.0,
-                 "Keys: U undo, R restart, S shuffle, F extra flask, H hint, Esc back.",
+                 "Keys: U undo, R restart, S shuffle, F extra flask, H hint, G grimoire, Esc back. Hold a flask (or right-click it) to read it.",
                  TextStyle.Tiny, white(0.55));
     if button(out, 0, v2(VW * 0.5, 850.0), v2(90.0, 26.0), "Back", float4 { 0.35, 0.25, 0.5, 1.0 }, true) {
         screen_id = Screen.Home;
@@ -1483,14 +1477,16 @@ fn draw_seed(out: Inst[>..]&) {
 
 fn handle_keys() {
     if gfx::key_pressed("Escape") {
-        if overlay == Overlay.Intro || overlay == Overlay.Reset { overlay = Overlay.None; }
+        if overlay == Overlay.Intro { close_intro(); }
+        else if overlay == Overlay.Reset || overlay == Overlay.Grimoire { overlay = Overlay.None; }
+        else if screen_id == Screen.Play && card_flask >= 0 { card_flask = -1; }
         else if screen_id != Screen.Home { screen_id = Screen.Home; overlay = Overlay.None; finish_animations(); }
         else { gfx::quit(); }
     }
     if screen_id != Screen.Play || pending_load { return; }
     let ctrl = gfx::key_down("Left Ctrl") || gfx::key_down("Right Ctrl");
     if overlay == Overlay.Win && (gfx::key_pressed("N") || gfx::key_pressed("Return")) { next_after_win(); return; }
-    if overlay == Overlay.Intro && (gfx::key_pressed("Return") || gfx::key_pressed("Space")) { overlay = Overlay.None; return; }
+    if overlay == Overlay.Intro && (gfx::key_pressed("Return") || gfx::key_pressed("Space")) { close_intro(); return; }
     if won_at >= 0.0 { return; }
     if gfx::key_pressed("U") || (ctrl && gfx::key_pressed("Z")) || gfx::key_pressed("Backspace") { do_undo(); }
     if gfx::key_pressed("R") { do_restart(); }
@@ -1518,12 +1514,16 @@ fn to_screen(insts: Inst[:]) {
 
 fn gather_input() {
     clicks.clear();
+    right_clicks.clear();
+    released = false;
     let m = gfx::mouse_pos();
     pointer = v2((m.x - offset.x) / scale, (m.y - offset.y) / scale);
     for e in gfx::events() {
-        if e.kind == gfx::EVENT_MOUSE_BUTTON && e.down && e.button == gfx::MOUSE_LEFT && clicks.len < 16 {
-            clicks.push(v2((e.x - offset.x) / scale, (e.y - offset.y) / scale));
-        }
+        if e.kind != gfx::EVENT_MOUSE_BUTTON { continue; }
+        let p = v2((e.x - offset.x) / scale, (e.y - offset.y) / scale);
+        if e.down && e.button == gfx::MOUSE_LEFT && clicks.len < 16 { clicks.push(p); }
+        if !e.down && e.button == gfx::MOUSE_LEFT { released = true; }
+        if e.down && e.button == gfx::MOUSE_RIGHT && right_clicks.len < 16 { right_clicks.push(p); }
     }
 }
 
@@ -1550,6 +1550,8 @@ fn draw_frame(dt: f32) {
     else if screen_id == Screen.Seed { draw_seed(base); }
     else if screen_id == Screen.Map { draw_map(base); }
     if screen_id != Screen.Play { draw_overlay(top); }
+    // A held flask's card, over the board.
+    if screen_id == Screen.Play && overlay == Overlay.None { draw_card(top); }
     draw_drops(top);
     draw_finale(top);
     draw_particles(top);
@@ -1578,7 +1580,7 @@ fn music_room_now() -> i64 {
 
 fn lively() -> bool {
     if pending_load || any_pouring() || forces_lively() || taps.len > 0 || clicks.len > 0 { return true; }
-    if screen_id == Screen.Play && (shuffling || !board_search.done) { return true; }
+    if screen_id == Screen.Play && (shuffling || !board_search.done || guides_lively()) { return true; }
     let d = gfx::mouse_delta();
     if d.x != 0.0 || d.y != 0.0 || gfx::mouse_down(gfx::MOUSE_LEFT) { return true; }
     if now - overlay_t < 0.6 || now < message_until || now < hint_until || autoplay { return true; }
@@ -1606,7 +1608,7 @@ fn main() {
     var start_seed_value: i64 = -1;
     var like = 20;
     var start_hand_level = -1;
-    var clicks_script: float2[>..] = [];
+    var clicks_script: Scripted[>..] = [];
     let argv = args();
     var a = 1;
     while a < argv.len {
@@ -1620,10 +1622,10 @@ fn main() {
         else if opt == "--hand" && has_value { let n, ok = parse_int(argv[a + 1]); if ok { start_hand_level = n; } a++; }
         else if opt == "--autoplay" { autoplay = true; }
         else if opt == "--export-music" && has_value { exit(if export_music(argv[a + 1]) { 0 } else { 1 }); }
-        else if opt == "--click" && a + 2 < argv.len {
+        else if (opt == "--click" || opt == "--hold") && a + 2 < argv.len {
             let x, okx = parse_int(argv[a + 1]);
             let y, oky = parse_int(argv[a + 2]);
-            if okx && oky { clicks_script.push(v2(x, y)); }
+            if okx && oky { clicks_script.push(Scripted { pos: v2(x, y), hold: opt == "--hold" }); }
             a += 2;
         }
         else if opt == "--help" {
@@ -1633,6 +1635,8 @@ fn main() {
                   --seed S       play the board brewed from seed S, shaped like level L (default 20)
                   --hand K       play built-in hand-made level K (0 to 24; levels.goose)
                   --autoplay     let the hint solver play
+                  --click X Y    (testing) click at canvas point X, Y; one every 20 frames after frame 10
+                  --hold X Y     (testing) press there and keep holding, in the same turn as the clicks
                   --export-music DIR   write each room's music loop to DIR as a WAV file
                 """);
             return;
@@ -1670,9 +1674,13 @@ fn main() {
         last = now;
         fit_canvas();
         gather_input();
-        // Scripted clicks for testing, one every 20 frames after the first 10.
+        // Scripted clicks for testing, one every 20 frames after the first
+        // 10: a click is let go at once, a hold stays down until the next.
         if drawn >= 10 && (drawn - 10) % 20 == 0 && (drawn - 10) / 20 < clicks_script.len {
-            clicks.push(clicks_script[(drawn - 10) / 20]);
+            let s = clicks_script[(drawn - 10) / 20];
+            clicks.push(s.pos);
+            script_hold = s.hold;
+            if !s.hold { released = true; }
         }
         if pending_load && !brewing && drawn > 0 { do_pending_load(); }
         step_jobs();

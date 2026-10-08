@@ -207,6 +207,35 @@ events in order. Kinds: `SealBroken`, `SealSoftened`, `Thawed`, `HeatPulse`,
 `Overflowed`, `CatalystFired`, `Completed`, `Vowed` (a vow flask took its
 color).
 
+## Explaining the board
+
+Every sentence the game says about the rules comes from
+`src/core/explain.goose`, which draws nothing and is unit-tested:
+
+- `grimoire(board)`: the modifiers on the board, in campaign order, each
+  with its one-sentence rule, its flasks, and only the ways it meets the
+  others *on this board* ("Brazier: each pour into it melts the ice beside
+  it, and softens the seal beside it"), each with the flasks and the pairs
+  of flasks it ties (heat, light, twin, vine, salamander, catalyst, flow).
+- `explain_flask(board, i)`: a flask's card: its parts' names, how it
+  stands in plain words ("Frozen: thaws in 3 pours. Sooner with heat: each
+  pour into the Brazier on its left melts one more."), what it can't do now
+  and what would change that, and the flasks tied to it.
+- `refusal(board, from, to)`: the message a refused tap shows.
+- `preview_pours(board, from)`: every pour from a flask tried on a copy of
+  the board, with the marks of what each would set off (heat, thaw, seal
+  break, flip, vine spread or wither, light, the salamander's hop, gold,
+  overflow, completion). What every allowed pour sets off alike (a rime or
+  hourglass counting down, the salamander's hop) comes back apart, so each
+  flask shows only what is its own.
+
+The game shows them three ways: the **Grimoire** (the book in the level's
+header; tapping a line lights its flasks and ties on the board for a few
+seconds, and the book pulses once after a tutorial's panel), a **flask's
+card** (press and hold, or right-click; it sits where it covers least of
+the flasks it is about), and **pour marks** while a flask is selected
+(flasks that can't take the pour are dimmed with a lock).
+
 ## Built-in levels
 
 Every level is built into the game. There are no level files, no JSON, and

@@ -93,17 +93,23 @@ fn shape_define(s: Shape) -> const u8[:] {
 // The pictures Shape.Icon draws.
 enum Icon {
     Undo, Restart, Shuffle, Bottle, Hint, Home, Gear, SoundOn, SoundOff, Play, Eye, Seed, Book, Back, Check, Map,
+    // What a pour sets off, what ties two flasks, and what can't take a pour.
+    Lock, Flame, Flake, Unseal, Flip, Leaf, Wither, Sun, Gold, Overflow, Hop, Rune, Close,
 }
 
-let ALL_ICONS: const Icon[16] = [
+let ALL_ICONS: const Icon[29] = [
     Icon.Undo, Icon.Restart, Icon.Shuffle, Icon.Bottle, Icon.Hint, Icon.Home, Icon.Gear, Icon.SoundOn,
     Icon.SoundOff, Icon.Play, Icon.Eye, Icon.Seed, Icon.Book, Icon.Back, Icon.Check, Icon.Map,
+    Icon.Lock, Icon.Flame, Icon.Flake, Icon.Unseal, Icon.Flip, Icon.Leaf, Icon.Wither, Icon.Sun, Icon.Gold,
+    Icon.Overflow, Icon.Hop, Icon.Rune, Icon.Close,
 ];
 
 fn icon_index(i: Icon) -> i64 {
     match i {
         Undo => 0, Restart => 1, Shuffle => 2, Bottle => 3, Hint => 4, Home => 5, Gear => 6, SoundOn => 7,
         SoundOff => 8, Play => 9, Eye => 10, Seed => 11, Book => 12, Back => 13, Check => 14, Map => 15,
+        Lock => 16, Flame => 17, Flake => 18, Unseal => 19, Flip => 20, Leaf => 21, Wither => 22, Sun => 23,
+        Gold => 24, Overflow => 25, Hop => 26, Rune => 27, Close => 28,
     }
 }
 
@@ -114,6 +120,9 @@ fn icon_define(i: Icon) -> const u8[:] {
         Hint => "ICON_HINT", Home => "ICON_HOME", Gear => "ICON_GEAR", SoundOn => "ICON_SOUND_ON",
         SoundOff => "ICON_SOUND_OFF", Play => "ICON_PLAY", Eye => "ICON_EYE", Seed => "ICON_SEED",
         Book => "ICON_BOOK", Back => "ICON_BACK", Check => "ICON_CHECK", Map => "ICON_MAP",
+        Lock => "ICON_LOCK", Flame => "ICON_FLAME", Flake => "ICON_FLAKE", Unseal => "ICON_UNSEAL",
+        Flip => "ICON_FLIP", Leaf => "ICON_LEAF", Wither => "ICON_WITHER", Sun => "ICON_SUN", Gold => "ICON_GOLD",
+        Overflow => "ICON_OVERFLOW", Hop => "ICON_HOP", Rune => "ICON_RUNE", Close => "ICON_CLOSE",
     }
 }
 
@@ -209,6 +218,19 @@ let FRAGMENT_SHADER = """
     #define ICON_BACK 13
     #define ICON_CHECK 14
     #define ICON_MAP 15
+    #define ICON_LOCK 16
+    #define ICON_FLAME 17
+    #define ICON_FLAKE 18
+    #define ICON_UNSEAL 19
+    #define ICON_FLIP 20
+    #define ICON_LEAF 21
+    #define ICON_WITHER 22
+    #define ICON_SUN 23
+    #define ICON_GOLD 24
+    #define ICON_OVERFLOW 25
+    #define ICON_HOP 26
+    #define ICON_RUNE 27
+    #define ICON_CLOSE 28
 
     layout(location = 0) in vec2 v_local;
     layout(location = 1) in vec2 v_half;
@@ -820,10 +842,93 @@ let FRAGMENT_SHADER = """
             float tip = sd_triangle(p, vec2(0.0, -r * 0.85), vec2(r * 0.47, r * 0.05), vec2(-r * 0.47, r *
             0.05));
             return min(d, tip);
-        } else if (which == ICON_BOOK) {   // book
-            float l = abs(sd_box(p - vec2(-r * 0.4, 0.0), vec2(r * 0.38, r * 0.6))) - r * 0.07;
-            float rr = abs(sd_box(p - vec2(r * 0.4, 0.0), vec2(r * 0.38, r * 0.6))) - r * 0.07;
-            return min(l, rr);
+        } else if (which == ICON_BOOK) {   // an open book: two pages from the spine, a few lines on each
+            vec2 q = vec2(abs(p.x), p.y);
+            float d = sd_segment(q, vec2(0.0, -r * 0.5), vec2(r * 0.88, -r * 0.68));
+            d = min(d, sd_segment(q, vec2(r * 0.88, -r * 0.68), vec2(r * 0.88, r * 0.5)));
+            d = min(d, sd_segment(q, vec2(r * 0.88, r * 0.5), vec2(0.0, r * 0.7)));
+            d = min(d, sd_segment(q, vec2(0.0, -r * 0.5), vec2(0.0, r * 0.7)));
+            d -= r * 0.08;
+            for (int k = 0; k < 3; k++) {
+                float y = (-0.3 + 0.28 * float(k)) * r;
+                d = min(d, sd_segment(q, vec2(r * 0.22, y), vec2(r * 0.66, y - r * 0.08)) - r * 0.05);
+            }
+            return d;
+        } else if (which == ICON_LOCK) {   // a padlock: a shackle over a body with a keyhole
+            float shackle = min(sd_arc(p - vec2(0.0, -r * 0.18), r * 0.36, -3.1416, 0.0, r * 0.11),
+                                sd_box(vec2(abs(p.x) - r * 0.36, p.y + r * 0.08), vec2(r * 0.11, r * 0.12)));
+            float body = sd_round_box(p - vec2(0.0, r * 0.36), vec2(r * 0.6, r * 0.42), vec4(r * 0.12));
+            float hole = min(sd_circle(p - vec2(0.0, r * 0.28), r * 0.12),
+                             sd_box(p - vec2(0.0, r * 0.45), vec2(r * 0.05, r * 0.14)));
+            return min(shackle, max(body, -hole));
+        } else if (which == ICON_FLAME) {  // a flame, its heart cut out
+            vec2 q = vec2(p.x + p.y * 0.12, p.y);
+            float outer = min(sd_circle(q - vec2(0.0, r * 0.32), r * 0.52),
+                              sd_triangle(q, vec2(r * 0.1, -r * 0.95), vec2(r * 0.5, r * 0.2), vec2(-r * 0.5, r * 0.2)));
+            float inner = min(sd_circle(q - vec2(0.0, r * 0.48), r * 0.24),
+                              sd_triangle(q, vec2(r * 0.02, -r * 0.15), vec2(r * 0.23, r * 0.45), vec2(-r * 0.23, r * 0.45)));
+            return max(outer, -inner);
+        } else if (which == ICON_FLAKE) {  // ice melting: a snowflake
+            float d = 1e5;
+            for (int k = 0; k < 3; k++) {
+                float a = float(k) * 1.0472 + 1.5708;
+                vec2 u = vec2(cos(a), sin(a));
+                d = min(d, sd_segment(p, -u * r * 0.85, u * r * 0.85));
+                for (int s = -1; s <= 1; s += 2) {
+                    vec2 c = u * r * 0.5 * float(s);
+                    vec2 v = vec2(-u.y, u.x);
+                    d = min(d, sd_segment(p, c, c + (u * float(s) + v) * r * 0.24));
+                    d = min(d, sd_segment(p, c, c + (u * float(s) - v) * r * 0.24));
+                }
+            }
+            return d - r * 0.08;
+        } else if (which == ICON_UNSEAL) { // a wax seal cracked in two
+            float disc = sd_circle(p, r * 0.68);
+            float crack = min(min(sd_segment(p, vec2(-r * 0.1, -r * 0.8), vec2(r * 0.12, -r * 0.2)),
+                                  sd_segment(p, vec2(r * 0.12, -r * 0.2), vec2(-r * 0.14, r * 0.2))),
+                              sd_segment(p, vec2(-r * 0.14, r * 0.2), vec2(r * 0.08, r * 0.8))) - r * 0.09;
+            return max(disc, -crack);
+        } else if (which == ICON_FLIP) {   // an hourglass turning over
+            vec2 q = vec2(p.x, abs(p.y));
+            float glass = abs(sd_triangle(q, vec2(0.0, r * 0.04), vec2(r * 0.5, r * 0.62), vec2(-r * 0.5, r * 0.62))) - r * 0.07;
+            float bar = sd_box(q - vec2(0.0, r * 0.74), vec2(r * 0.62, r * 0.08));
+            float sand = sd_triangle(p, vec2(0.0, r * 0.12), vec2(r * 0.3, r * 0.5), vec2(-r * 0.3, r * 0.5));
+            return min(min(glass, bar), sand);
+        } else if (which == ICON_LEAF || which == ICON_WITHER) {   // a leaf, drooping and struck through when it withers
+            vec2 q = which == ICON_LEAF ? rot(-0.785) * p : rot(2.4) * p;
+            float leaf = max(sd_circle(q - vec2(r * 0.42, 0.0), r * 0.72), sd_circle(q + vec2(r * 0.42, 0.0), r * 0.72));
+            float vein = sd_segment(q, vec2(0.0, -r * 0.55), vec2(0.0, r * 0.85)) - r * 0.05;
+            if (which == ICON_LEAF) return min(max(leaf, -(vein + r * 0.02)), sd_segment(q, vec2(0.0, r * 0.5), vec2(0.0, r * 0.9)) - r * 0.07);
+            float d = min(abs(leaf) - r * 0.07, vein);
+            return min(d, sd_segment(p, vec2(-r * 0.75, -r * 0.75), vec2(r * 0.75, r * 0.75)) - r * 0.08);
+        } else if (which == ICON_SUN) {    // light: a sun with rays
+            float d = sd_circle(p, r * 0.32);
+            for (int k = 0; k < 8; k++) {
+                float a = float(k) * 0.7854;
+                vec2 u = vec2(cos(a), sin(a));
+                d = min(d, sd_segment(p, u * r * 0.52, u * r * 0.86) - r * 0.08);
+            }
+            return d;
+        } else if (which == ICON_GOLD) {   // gold: the alchemists' sun, a ring with a dot
+            return min(abs(sd_circle(p, r * 0.68)) - r * 0.12, sd_circle(p, r * 0.2));
+        } else if (which == ICON_OVERFLOW) {   // a flask's worth running over through a tube
+            float cup = abs(sd_box(p - vec2(-r * 0.45, r * 0.3), vec2(r * 0.3, r * 0.42))) - r * 0.07;
+            cup = max(cup, -sd_box(p - vec2(-r * 0.45, -r * 0.2), vec2(r * 0.22, r * 0.2)));
+            float tube = sd_arc(p - vec2(0.0, -r * 0.1), r * 0.45, -3.1416, -0.2, r * 0.08);
+            float head = sd_triangle(p, vec2(r * 0.42, r * 0.5), vec2(r * 0.12, r * 0.02), vec2(r * 0.8, r * 0.02));
+            return min(cup, min(tube, head));
+        } else if (which == ICON_HOP) {    // the salamander's hop: a leap over, with a landing mark
+            float arc = sd_arc(p - vec2(0.0, r * 0.25), r * 0.62, -2.9, -0.45, r * 0.08);
+            float head = sd_triangle(p, vec2(r * 0.68, r * 0.45), vec2(r * 0.2, -r * 0.02), vec2(r * 0.92, -r * 0.15));
+            float spot = sd_circle(p - vec2(-r * 0.62, r * 0.48), r * 0.16);
+            return min(min(arc, head), spot);
+        } else if (which == ICON_RUNE) {   // a catalyst: a circle of runes round a triangle
+            float ring = abs(sd_circle(p, r * 0.78)) - r * 0.07;
+            float tri = abs(sd_triangle(p, vec2(0.0, -r * 0.58), vec2(r * 0.5, r * 0.3), vec2(-r * 0.5, r * 0.3))) - r * 0.07;
+            return min(ring, tri);
+        } else if (which == ICON_CLOSE) {  // close: a cross
+            return min(sd_segment(p, vec2(-r * 0.55), vec2(r * 0.55)),
+                       sd_segment(p, vec2(-r * 0.55, r * 0.55), vec2(r * 0.55, -r * 0.55))) - r * 0.11;
         } else if (which == ICON_BACK) {   // back arrow
             float shaft = sd_segment(p, vec2(-r * 0.6, 0.0), vec2(r * 0.7, 0.0)) - r * 0.1;
             float head = sd_triangle(p, vec2(-r * 0.85, 0.0), vec2(-r * 0.2, -r * 0.55), vec2(-r * 0.2, r

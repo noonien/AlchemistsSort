@@ -139,6 +139,12 @@ fn text_shadowed(layer: i64, x: f32, y: f32, s: const u8[:], font: TextStyle, co
 // Wraps `s` into lines no wider than `width`, centered on x, starting at y.
 // Returns the height used.
 fn text_wrapped(layer: i64, x: f32, y: f32, width: f32, s: const u8[:], font: TextStyle, color: float4) -> f32 {
+    text_block(layer, x, y, width, s, font, color, Align.Center, true)
+}
+
+// The same, aligned at x as `align` says; `draw` false only measures.
+fn text_block(layer: i64, x: f32, y: f32, width: f32, s: const u8[:], font: TextStyle, color: float4, align: Align,
+              draw: bool) -> f32 {
     var line: u8[>..] = [];
     var lines = 0;
     let lh = line_height(font);
@@ -149,7 +155,7 @@ fn text_wrapped(layer: i64, x: f32, y: f32, width: f32, s: const u8[:], font: Te
         if trial.len > 0 { trial.push(' '); }
         trial.append(it);
         if line.len > 0 && text_width(font, trial) > width {
-            text(layer, x, y + lines * lh, line, font, color, Align.Center);
+            if draw { text(layer, x, y + lines * lh, line, font, color, align); }
             lines++;
             line.clear();
             line.append(it);
@@ -159,7 +165,7 @@ fn text_wrapped(layer: i64, x: f32, y: f32, width: f32, s: const u8[:], font: Te
         }
     };
     if line.len > 0 {
-        text(layer, x, y + lines * lh, line, font, color, Align.Center);
+        if draw { text(layer, x, y + lines * lh, line, font, color, align); }
         lines++;
     }
     lines * lh

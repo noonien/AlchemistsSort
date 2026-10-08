@@ -22,6 +22,11 @@ let MAX_LIQUID = 17;
 let EMERALD = 5;        // the color that withers a creeping vine
 let MAX_EVENTS = 32;
 
+// The liquids' names, by number.
+let COLOR_NAMES: const u8[:][18] = ["", "Ruby", "Amber", "Sun", "Lime", "Emerald", "Sky", "Sapphire",
+                                    "Violet", "Rose", "Umber", "Pearl", "Slate", "Teal", "Olive",
+                                    "Quicksilver", "Gold", "Philosopher's Drop"];
+
 // What kind of flask it is.
 enum Body {
     Plain,

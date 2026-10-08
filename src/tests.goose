@@ -10,6 +10,7 @@ import core.generator;
 import core.levels;
 import core.tools;
 import core.campaign;
+import core.explain;
 import app.shaders;
 import app.tunes;
 
@@ -1053,6 +1054,231 @@ fn test_levels() {
 
 // --- music ------------------------------------------------------------------------
 
+// --- the board in words ---------------------------------------------------------------------
+
+fn card_says(c: Card, words: const u8[:]) -> bool {
+    for l in c.lines { if find(l.text[..], words) >= 0 { return true; } }
+    false
+}
+
+fn blocked_says(c: Card, words: const u8[:]) -> bool {
+    for l in c.lines { if l.kind == LineKind.Blocked && find(l.text[..], words) >= 0 { return true; } }
+    false
+}
+
+fn related_to(c: Card, j: i64, tie: Tie, acts: bool) -> bool {
+    for r in c.related { if r.flask == j && r.tie == tie && r.acts == acts { return true; } }
+    false
+}
+
+fn entry_of(es: const Entry[:], f: Feature) -> i64 {
+    for e, k in es { if e.feature == f { return k; } }
+    -1
+}
+
+fn effect_says(es: const Entry[:], f: Feature, words: const u8[:]) -> i64 {
+    let k = entry_of(es, f);
+    if k < 0 { return -1; }
+    for x, n in es[k].effects { if find(x.text[..], words) >= 0 { return n; } }
+    -1
+}
+
+fn test_explain() {
+    test("a flask's card: heat");
+    var b = row_of(["RGB", "", "GBR", "YY"]);
+    b.bottles[0] = rime(b.bottles[0], 3);
+    b.bottles[1] = brazier(b.bottles[1]);
+    b.bottles[2] = seal(b.bottles[2], 'R');
+    var c = explain_flask(b, 0);
+    check(find(c.title[..], "Rime") >= 0, "its name");
+    check(card_says(c, "Frozen: thaws in 3 pours") && card_says(c, "each pour into the Brazier on its right melts one more"),
+          "ice, and the brazier that melts it");
+    check(blocked_says(c, "Can't pour in or out until it thaws"), "blocked both ways");
+    check(related_to(c, 1, Tie.Heat, false) && c.related.len == 1, "tied to the brazier");
+    c = explain_flask(b, 2);
+    check(card_says(c, "Sealed with Ruby wax: pour Ruby onto it, or heat it twice"), "the seal's key and heat");
+    check(blocked_says(c, "Can't pour from it until the seal breaks") && blocked_says(c, "only Ruby can go on"), "what goes on a seal");
+    check(related_to(c, 1, Tie.Heat, false), "tied to the brazier");
+    c = explain_flask(b, 1);
+    check(card_says(c, "Brazier: each pour into it warms") && card_says(c, "the ice on its left and the seal on its right"),
+          "the brazier names what it warms");
+    check(related_to(c, 0, Tie.Heat, true) && related_to(c, 2, Tie.Heat, true), "and points at both");
+    check(blocked_says(c, "Can't pour from it: it's empty"), "an empty flask");
+    c = explain_flask(b, 3);
+    check(card_says(c, "Holds 2 of 4") && c.related.len == 0, "a plain flask");
+
+    test("a flask's card: light");
+    b = row_of(["RRR", "GBYG", "BB"]);
+    b.bottles[0] = lantern(b.bottles[0]);
+    b.bottles[1] = shroud(b.bottles[1]);
+    b.bottles[2] = moonpetal(b.bottles[2]);
+    c = explain_flask(b, 1);
+    check(card_says(c, "Shrouded: hidden until the Lantern on its left lights"), "the shroud waits on its lantern");
+    check(related_to(c, 0, Tie.Light, false), "tied to the lantern");
+    c = explain_flask(b, 0);
+    check(card_says(c, "lights when this flask is completed, and lifts the Shroud on its right"), "the lantern");
+    check(related_to(c, 1, Tie.Light, true) && related_to(c, 2, Tie.Light, true), "it lights the shroud and the moonpetal");
+    c = explain_flask(b, 2);
+    check(card_says(c, "Moonpetal: closed until a lantern is lit") && blocked_says(c, "Can't pour into it until a lantern is lit"),
+          "the moonpetal");
+
+    test("a flask's card: twins, hourglass, siphon, vow, tall");
+    b = row_of(["GGR", "", "RBB", "B", "GG"]);
+    b.bottles[0] = twin_of(b.bottles[0], 1);
+    b.bottles[1] = twin_of(b.bottles[1], 0);
+    b.bottles[2] = hourglass(b.bottles[2], 3);
+    b.bottles[2].flip_count = 1;
+    b.bottles[3] = siphon(b.bottles[3]);
+    b.bottles[4] = vow_flask(b.bottles[4]);
+    settle(b);
+    c = explain_flask(b, 0);
+    check(card_says(c, "Twin: joined to the flask on its right") && related_to(c, 1, Tie.Twin, true), "twins");
+    c = explain_flask(b, 2);
+    check(card_says(c, "Hourglass: flips in 2 pours"), "the hourglass counts down");
+    check(card_says(c, "When it flips, Ruby comes to the top"), "and what comes up");
+    c = explain_flask(b, 3);
+    check(card_says(c, "Siphon: pours from the tap at its base. Next out: 1 Sapphire"), "the siphon's tap");
+    c = explain_flask(b, 4);
+    check(card_says(c, "Vow Flask: sworn to Emerald"), "a vow");
+    let tall = hand_made(3).board;
+    var t = -1;
+    for i in tall.count { if tall.bottles[i].cap > CAP { t = i; } }
+    check(card_says(explain_flask(tall, t), "Tall Flask: holds 9. All the Violet ends up here"), "the tall flask's color");
+
+    test("a flask's card: vine");
+    b = row_of(["R", "GG", "B", "RRBB", ""]);
+    b.bottles[1] = root(b.bottles[1], 4);
+    b.bottles[2] = vine(b.bottles[2]);
+    c = explain_flask(b, 1);
+    check(card_says(c, "Vine root: spreads in 4 pours. Pour Emerald in to wither the vine"), "the root");
+    check(related_to(c, 2, Tie.Vine, true) && related_to(c, 0, Tie.Vine, true), "its tendril, and where it grows next");
+    check(card_says(c, "Next it grows over the flask on its left"), "it names the next flask");
+    c = explain_flask(b, 2);
+    check(card_says(c, "Overgrown by the vine") && related_to(c, 1, Tie.Vine, false), "a tendril, tied to its root");
+    c = explain_flask(b, 0);
+    check(card_says(c, "The vine grows over it next, in 4 pours"), "the next to go under");
+
+    test("a flask's card: salamander");
+    b = row_of(["RG", "R", "R", "", "B"]);
+    b.bottles[0] = rime(b.bottles[0], 9);
+    b.bottles[4] = seal(b.bottles[4], 'G');
+    b.salamander = 2;
+    c = explain_flask(b, 2);
+    check(card_says(c, "Salamander here: nothing can be poured in. It hops to the flask you pour from"), "the perch");
+    check(blocked_says(c, "Can't pour into it while the Salamander sits on it"), "blocked in");
+    check(related_to(c, 0, Tie.Salamander, true) && related_to(c, 4, Tie.Salamander, true) && c.related.len == 2,
+          "it points at what its heat changes");
+    c = explain_flask(b, 0);
+    check(card_says(c, "the Salamander landing beside it") && related_to(c, 2, Tie.Salamander, false), "the ice knows it");
+    c = explain_flask(b, 3);
+    check(blocked_says(c, "Can't pour from it: it's empty"), "empty");
+    b.bottles[3] = flask("RRRB");
+    check(blocked_says(explain_flask(b, 3), "Can't pour into it: it's full"), "full");
+
+    test("refusals");
+    b = row_of(["RG", "R", "BB", "BBBB", "G", ""]);
+    b.bottles[0] = rime(b.bottles[0], 2);
+    b.salamander = 4;
+    check(find(refusal(b, -1, 0)[..], "Frozen: thaws in 2 pours") == 0, "tapping ice");
+    check(refusal(b, -1, 1).len == 0 && refusal(b, 1, 2) == "The colors must match.", "colors");
+    check(refusal(b, 2, 3) == "That flask is full.", "full");
+    check(find(refusal(b, 1, 4)[..], "The Salamander is on that flask") == 0, "the salamander");
+    check(refusal(b, 2, 1) == "The colors must match." && refusal(b, 1, 1).len == 0, "and no reason for a pour that goes");
+    check(refusal(b, 1, 5).len == 0, "a legal pour");
+
+    test("every modifier has its words");
+    for f in ALL_FEATURES {
+        let h, found = campaign_hand_made(tutorial_level(f));
+        let es = grimoire(h.board);
+        let k = entry_of(es[..], f);
+        check(k >= 0 && es[k].rule.len > 10 && es[k].flasks.len > 0 && es[k].name.len > 0,
+              str(feature_name(f), " is in its tutorial's grimoire"));
+        if k < 0 { continue; }
+        for i in es[k].flasks {
+            let cc = explain_flask(h.board, i);
+            check(cc.title.len > 0 && cc.lines.len > 0, str(feature_name(f), ": its flask has a card"));
+        }
+    }
+
+    test("the grimoire: what meets what");
+    b = row_of(["RGB", "", "GBR", "YY", "QQ", "RRB"]);
+    b.bottles[0] = rime(b.bottles[0], 3);
+    b.bottles[1] = brazier(b.bottles[1]);
+    b.bottles[2] = seal(b.bottles[2], 'R');
+    b.bottles[5] = siphon(b.bottles[5]);
+    var es = grimoire(b);
+    check(entry_of(es[..], Feature.Rime) >= 0 && entry_of(es[..], Feature.Seal) >= 0 && entry_of(es[..], Feature.Brazier) >= 0 &&
+          entry_of(es[..], Feature.Quicksilver) >= 0 && entry_of(es[..], Feature.Siphon) >= 0 && es.len == 5,
+          "only what is on the board");
+    let bz = entry_of(es[..], Feature.Brazier);
+    let n = effect_says(es[..], Feature.Brazier, "melts the ice beside it, and softens the seal beside it");
+    check(n >= 0, "the brazier's heat");
+    if n >= 0 {
+        let x = es[bz].effects[n];
+        check(x.flasks.len == 3 && contains(x.flasks[..], 0) && contains(x.flasks[..], 1) && contains(x.flasks[..], 2),
+              "and its flasks");
+        check(x.pairs.len == 2 && x.pairs[0].a == 1, "tied from the brazier");
+    }
+    check(effect_says(es[..], Feature.Quicksilver, "sinks to a siphon's tap") >= 0, "quicksilver in a siphon");
+    check(effect_says(es[..], Feature.Brazier, "vine") < 0, "no vine where there is none");
+    b = row_of(["RRR", "GBYG", "BB", ""]);
+    b.bottles[0] = lantern(b.bottles[0]);
+    b.bottles[1] = shroud(b.bottles[1]);
+    b.bottles[3] = moonpetal(b.bottles[3]);
+    es = grimoire(b);
+    check(effect_says(es[..], Feature.Lantern, "lifts the shroud beside it") >= 0, "the lantern lifts the shroud");
+    check(effect_says(es[..], Feature.Moonpetal, "opens once a lantern is lit") >= 0, "the moonpetal waits");
+    for k in [9, 12, 16, 20, 24] {
+        let h = hand_made(k);
+        es = grimoire(h.board);
+        var any = 0;
+        for e in es { any += e.effects.len; for x in e.effects { check(x.flasks.len > 0 && x.text.len > 0, str("effects name flasks: ", x.text)); } }
+        check(es.len >= 3 && any > 0, str(h.info.name, ": a finale's grimoire"));
+    }
+
+    test("pour preview");
+    for k in HAND_MADE_COUNT {
+        let h = hand_made(k);
+        for from in h.board.count {
+            if !can_pour_from(h.board.bottles[from]) { continue; }
+            let p, common = preview_pours(h.board, from);
+            for j in h.board.count {
+                var copy = h.board;
+                let r = pour(copy, from, j);
+                check(p[j].ok == r.ok, "the preview knows which pours go");
+                if !r.ok { continue; }
+                // What it shows, its own and the common marks, is what the pour does.
+                var seen: Mark[..11] = [];
+                for m in p[j].marks { add_mark(seen, m); }
+                for m in common { add_mark(seen, m); }
+                let real = marks_of(h.board, r);
+                var all_common = true;
+                for m in real { if !contains(seen[..], m) { all_common = false; } }
+                check(all_common, str(h.info.name, ": the marks match a real pour"));
+                for m in p[j].marks { check(contains(real[..], m), "no mark the pour doesn't make"); }
+            }
+        }
+    }
+    b = row_of(["RG", "", "GGR", "BBB", "B"]);
+    b.bottles[0] = rime(b.bottles[0], 2);
+    b.bottles[1] = brazier(b.bottles[1]);
+    b.bottles[2] = seal(b.bottles[2], 'B');
+    let p, common = preview_pours(b, 4);
+    check(p[1].ok && p[3].ok && p[2].ok && !p[0].ok, "the pours that go");
+    check(contains(p[1].marks[..], Mark.Thaw) && contains(p[1].marks[..], Mark.Heat), "into the brazier: thaw and heat");
+    check(contains(p[2].marks[..], Mark.Unseal) && !contains(p[2].marks[..], Mark.Thaw), "onto the seal: it breaks");
+    check(contains(p[3].marks[..], Mark.Complete), "a completion");
+    check(common.len == 0, "nothing common to every pour");
+    let tut = hand_made(7).board;   // the brazier between two rimes
+    let p2, common2 = preview_pours(tut, 4);
+    check(p2[1].ok && contains(p2[1].marks[..], Mark.Heat) && !contains(p2[5].marks[..], Mark.Heat),
+          "heat on ice shows, even before it melts");
+    b = row_of(["RG", "R", "R", "", ""]);
+    b.salamander = 2;
+    let p3, common3 = preview_pours(b, 1);
+    check(contains(common3[..], Mark.Hop) && !contains(p3[3].marks[..], Mark.Hop), "the hop is the same for every pour");
+}
+
 // A short loop (four bars of each of two rooms): its end runs on into its
 // start, and it stays under full scale.
 fn test_music() {
@@ -1109,6 +1335,7 @@ fn main() {
     test_generated_levels();
     test_saves();
     test_tables();
+    test_explain();
     test_music();
     print(checks - failures, "/", checks, " checks passed");
     if failures > 0 { exit(1); }

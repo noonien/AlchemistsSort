@@ -166,7 +166,7 @@ fn draw_cover(out: Inst[>..]&, i: i64, b: Bottle, a: Anchors, look: CoverLook, s
                 // How many pours it has left, on a dark frosted disc.
                 let c = at(a, a.body);
                 glow(out, c, float2 { hx * 0.58, hx * 0.58 }, 0.6, float4 { 0.06, 0.16, 0.3, 0.6 });
-                text_shadowed(parts_layer, c.x, c.y, str(b.thaw), TextStyle.Heading, rgba(0.95, 0.99, 1.0, 1.0), Align.Center);
+                text_shadowed(parts_layer, c.x, c.y, str(b.thaw), if hx < 22.0 { TextStyle.Small } else { TextStyle.Heading }, rgba(0.95, 0.99, 1.0, 1.0), Align.Center);
             }
         },
         Shroud => out.push(inst(Shape.Cloth, pos + float2 { 0.0, hx * 0.15 }, a.half + float2 { hx * 0.2, hx * 0.15 },

@@ -57,7 +57,7 @@ fn feature_on(board: Board, f: Feature) -> bool {
     if f == Feature.Salamander { return board.salamander >= 0; }
     for i in board.count {
         let b = board.bottles[i];
-        let liquid = has_color(b, QUICKSILVER) || (f == Feature.Drop && has_color(b, DROP));
+        let liquid = has_color(b, if f == Feature.Drop { DROP } else { QUICKSILVER });
         let on = match f {
             Murk => b.murk != 0,
             Seal => b.cover == Cover.Seal,

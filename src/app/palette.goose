@@ -6,10 +6,6 @@ import std;
 import vec;
 import .draw;
 
-let COLOR_NAMES: const u8[:][18] = ["", "Ruby", "Amber", "Sun", "Lime", "Emerald", "Sky", "Sapphire",
-                                    "Violet", "Rose", "Umber", "Pearl", "Slate", "Teal", "Olive",
-                                    "Quicksilver", "Gold", "Philosopher's Drop"];
-
 let NORMAL_PALETTE: const f32[3][18] = [
     [0.0, 0.0, 0.0],
     [0.88, 0.17, 0.22],     // ruby

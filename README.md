@@ -72,6 +72,15 @@ them:
 
 `Esc` goes back.
 
+The book at the top right (or `G`) opens the **Grimoire**: the modifiers on
+this level, each with its rule and the ways it meets the others here; tap a
+line and its flasks light up on the board. **Press and hold** a flask (or
+right-click it) to read it: what it is, how it stands, why it can't pour
+right now and what would change that, with dotted lines to the flasks tied
+to it. While a flask is selected, the ones that can't take its pour are
+dimmed with a lock, and small marks over the others show what that pour
+would set off there.
+
 The campaign is six chapters of 15 levels, then the endless Great Work.
 In each chapter, levels 5 and 10 are **Hard** and 15 is a hand-made **Super
 Hard** finale that combines the chapter's modifiers with earlier ones. Each
@@ -124,12 +133,14 @@ src/core/               the rules, with no drawing or input
   campaign.goose        level numbers, tutorials, difficulty ramp
   levels.goose          the hand-made levels, built in
   tools.goose           shuffle and hint
+  explain.goose         the board in words: the Grimoire, a flask's card, refusals, pour previews
 src/app/                rendering, text, sound, saving
   draw.goose            one instanced pipeline; all art is signed distance fields in its shader
   shaders.goose         that shader: every shape, the chapters' rooms and tables, each color's shimmer
   scene.goose           the workbench: rooms, the table, candlelight, motes, the back shelf
   fx.goose              slosh, droplets, stoppers and labels, ink between screens, the win's finale
   menus.goose           the title screen and the chapter map
+  guide.goose           the Grimoire panel, a held flask's card, the pour marks
   sfx.goose             sounds synthesized at startup; each color is a pentatonic note
 src/main.goose          screens, input, animation
 src/tests.goose         unit tests
