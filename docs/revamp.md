@@ -171,6 +171,11 @@ events in order. Kinds: `SealBroken`, `SealSoftened`, `Thawed`, `HeatPulse`,
 
 ## Level format
 
+**Shipped levels** (tutorials, finales, examples) are written in Goose in
+`src/core/levels.goose` and compiled in; there are no level files in the
+game's data. The JSON format below is for the player's own levels only
+(My Levels, `--file`, and the `E` export).
+
 Liquid letters as before, plus `Q` quicksilver, `U` gold, `*` the Drop.
 Bottle objects:
 
