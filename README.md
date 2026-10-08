@@ -159,6 +159,11 @@ src/core/               the rules, with no drawing or input
   tools.goose           shuffle and hint
 src/app/                rendering, text, sound, saving
   draw.goose            one instanced pipeline; all art is signed distance fields in its shader
+  shaders.goose         that shader: every shape, the chapters' rooms, each color's shimmer
+  scene.goose           the workbench: rooms, candlelight, motes, the back shelf
+  fx.goose              slosh, droplets, stoppers and labels, ink between screens, the win's finale
+  menus.goose           the title screen and the chapter map
+  sfx.goose             sounds synthesized at startup; each color is a pentatonic note
 src/main.goose          screens, input, animation
 src/tests.goose         unit tests
 data/levels/            tutorial and example levels

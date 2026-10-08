@@ -26,12 +26,15 @@ import app.palette;
 import app.text;
 import app.sfx;
 import app.save;
+import app.scene;
+import app.fx;
+import app.menus;
 
 // The canvas everything is laid out on, scaled to fit the window.
 let VW: f32 = 540.0;
 let VH: f32 = 960.0;
 
-enum Screen { Home, Play, Settings, Seed, Files }
+enum Screen { Home, Play, Settings, Seed, Files, Map }
 
 // What covers the board, if anything.
 enum Overlay { None, Win, Lose, Intro, Reset, Brewing }
@@ -199,15 +202,6 @@ fn burst(pos: float2, n: i64, color: float4, speed: f32) {
     }
 }
 
-fn confetti() {
-    for k in 90 {
-        let c = palette_color(1 + rand.rand_int(14), save.color_safe);
-        emit(v2(rand.rand_flt() as f32 * VW, -20.0 - rand.rand_flt() as f32 * 200.0),
-             v2((rand.rand_flt() as f32 - 0.5) * 80.0, 120.0 + rand.rand_flt() as f32 * 160.0),
-             3.5, 4.0 + rand.rand_flt() as f32 * 4.0, c, 30.0);
-    }
-}
-
 fn update_particles(dt: f32) {
     for &p in particles {
         if p.life <= 0.0 { continue; }
@@ -282,6 +276,7 @@ fn layout(board: Board) {
 // Where a bottle stands: its slot, raised when selected, shaken when refused.
 fn rest_pos(i: i64) -> float2 {
     var p = slots[i].pos;
+    p.y += drop_offset(i);
     if i == selected { p.y -= slots[i].half.x * 1.2; }
     if now < shake_until[i] {
         let k = (shake_until[i] - now) / 0.35;
@@ -304,6 +299,7 @@ fn reset_play_state() {
     hint_to = -1;
     message_until = 0.0;
     board_changed();
+    reset_back_shelf(board);
 }
 
 fn begin_board(b: Board) {
@@ -312,6 +308,7 @@ fn begin_board(b: Board) {
     used = Counters {};
     reset_play_state();
     layout(board);
+    start_drop();
     overlay = Overlay.None;
     if spec.is_tutorial || info.hint.len > 0 { overlay = Overlay.Intro; overlay_t = now; }
 }
@@ -417,6 +414,7 @@ fn finish_animations() {
 
 fn refuse(i: i64, why: const u8[:]) {
     shake_until[i] = now + 0.35;
+    slosh(i, 0.3);
     play(Sfx.Denied);
     if why.len > 0 { say(why, 2.2); }
 }
@@ -450,7 +448,10 @@ fn start_pour(from: i64, to: i64) {
                        popped: r.popped, effects_done: false };
         break;
     }
-    play(Sfx.Pour);
+    // The pour sounds higher as the flask it fills gets fuller.
+    let full = after.bottles[to].n as f64 / max(1, after.bottles[to].cap as i64);
+    play_pitched(Sfx.Pour, 0.85 + 0.45 * full, 0.8);
+    ripple_x[to] = if slots[from].pos.x <= slots[to].pos.x { 0.2 } else { -0.2 };
     if r.thawed > 0 { play(Sfx.Ice); }
     if r.revealed > 0 || r.opened > 0 { play(Sfx.Reveal); }
     // Effects for bottles that changed without being poured into.
@@ -473,6 +474,7 @@ fn tap_bottle(i: i64) {
     if selected < 0 {
         if can_pour_from(b) {
             selected = i;
+            slosh(i, 0.18);
             play(Sfx.Select);
         } else if b.n == 0 && !blocked(b) {
             refuse(i, "");
@@ -495,6 +497,7 @@ fn tap_bottle(i: i64) {
     // Not a legal pour: pick the new bottle instead when it can pour.
     if can_pour_from(b) && !blocked(b) {
         selected = i;
+        slosh(i, 0.18);
         play(Sfx.Select);
         return;
     }
@@ -605,6 +608,7 @@ fn update_pours() {
         let t = now - a.t0;
         if !a.effects_done && t >= T_LIFT {
             a.effects_done = true;
+            slosh(a.to, ripple_x[a.to] * 0.5);
             if a.popped {
                 play(Sfx.Pop);
                 burst(slots[a.to].pos - v2(0.0, slots[a.to].half.y * 0.6), 18, gold(1.0), 150.0);
@@ -612,10 +616,13 @@ fn update_pours() {
         }
         if t >= T_LIFT + T_POUR && a.dst_after.done && complete_at[a.to] < a.t0 {
             complete_at[a.to] = now;
-            play(Sfx.Complete);
+            play_note(a.color, 0.6);
             burst(slots[a.to].pos, 30, palette_color(a.color, save.color_safe), 180.0);
         }
-        if t >= T_LIFT + T_POUR + T_BACK { a.active = false; }
+        if t >= T_LIFT + T_POUR + T_BACK {
+            a.active = false;
+            slosh(a.from, if slots[a.from].pos.x <= slots[a.to].pos.x { -0.22 } else { 0.22 });
+        }
     }
 }
 
@@ -631,11 +638,10 @@ fn update_play(dt: f32) {
             write_save(save);
         }
     }
-    if won_at >= 0.0 && overlay == Overlay.None && now - won_at > 0.7 {
+    // The finale (fx.goose) plays first, then the panel.
+    if won_at >= 0.0 && overlay == Overlay.None && now - won_at > finale_overlay_at() {
         overlay = Overlay.Win;
         overlay_t = now;
-        play(Sfx.Win);
-        confetti();
     }
     if won_at < 0.0 && !lost_checked && overlay == Overlay.None {
         lost_checked = true;
@@ -670,8 +676,8 @@ fn segment_center(half: float2, k: i64) -> float2 {
     v2(0.0, bottom - (k + 0.5) * seg)
 }
 
-fn liquid_inst(b: Bottle, pos: float2, half: float2, angle: f32, fill: f32, hidden: f32, wave: f32) -> Inst {
-    var i = inst(Shape.Liquid, pos, half, white(1.0));
+fn liquid_inst(n: i64, b: Bottle, pos: float2, half: float2, angle: f32, fill: f32, hidden: f32, wave: f32) -> Inst {
+    var i = inst(Shape.Liquid, pos, half, liquid_fx(n));
     // Two layers to a number: layer k, plus 16 times layer k + 4.
     fn pair(k: i64) -> f32 {
         let lo: i64 = b.seg[k];
@@ -698,7 +704,7 @@ fn draw_flask(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: float2, ang
     let fogged = overlays && b.active && (b.kind == Kind.Cork || b.kind == Kind.Vault);
     if !covered {
         let hidden: f32 = if fogged { b.cap } else { b.hidden };
-        if fill > 0.0 { out.push(liquid_inst(b, pos, half, angle, fill, hidden, wave)); }
+        if fill > 0.0 { out.push(liquid_inst(i, b, pos, half, angle, fill, hidden, wave)); }
     }
     var glass = inst(Shape.Glass, pos, half, float4 { 0.86, 0.92, 1.0, 1.0 });
     glass.misc.y = angle;
@@ -791,10 +797,7 @@ fn draw_flask(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: float2, ang
             text_shadowed(0, pos.x, pos.y + half.y * 0.25 + 24.0, "empty", TextStyle.Tiny, gold(0.9), Align.Center);
         }
     }
-    if b.done {
-        let c = palette_color(b.seg[0], save.color_safe);
-        out.push(inst(Shape.Seal, neck - v2(0.0, half.x * 0.1), v2(half.x * 0.55, half.x * 0.55), c));
-    }
+    if b.done { draw_completion(out, i, b, pos, half); }
 }
 
 fn draw_board(out: Inst[>..]&) {
@@ -894,17 +897,19 @@ fn draw_pouring(out: Inst[>..]&, a: PourAnim) {
         fill = shown.n;
     }
     if stream {
+        // The stream leaves the lip moving forward and arcs down under
+        // gravity, splashing where it lands.
         let lip = v2(pos.x + sin(angle) * half.y, pos.y - cos(angle) * half.y);
         let dst_fill = a.dst_after.n;
         let surface = target.y + segment_center(thalf, max(0, dst_fill - 1)).y - thalf.x * 0.6;
-        let top = lip.y;
-        let bottom = max(surface, top + 4.0);
-        var s = inst(Shape.Stream, v2(lip.x, (top + bottom) * 0.5), v2(half.x * 0.16, (bottom - top) * 0.5),
-                     with_alpha(palette_color(a.color, save.color_safe), stream_a));
-        s.p0 = float4 { a.from * 1.7, 0.0, 0.0, 0.0 };
-        out.push(s);
-        glow(out, v2(lip.x, bottom), v2(half.x * 0.5, half.x * 0.2), 0.8,
-             with_alpha(palette_color(a.color, save.color_safe), 0.5 * stream_a));
+        let land = v2(target.x + side * thalf.x * 0.2, max(surface, lip.y + 6.0));
+        let reach = ease((t - T_LIFT) / 0.12);
+        let end = lerp2(lip, land, reach);
+        let ctrl = v2(lip.x + (end.x - lip.x) * 0.8, lip.y + (end.y - lip.y) * 0.2);
+        let color = palette_color(a.color, save.color_safe);
+        curve(out, Shape.Stream, lip, ctrl, end, half.x * 0.16, a.from * 1.7, with_alpha(color, stream_a));
+        glow(out, end, v2(half.x * 0.5, half.x * 0.2), 0.8, with_alpha(color, 0.5 * stream_a));
+        if reach >= 1.0 && rand.rand_int(3) != 0 { splash(end, color, side); }
     }
     draw_flask(out, a.from, shown, pos, half, angle, fill, if stream { 0.6 } else { 0.0 }, 0.0, gold(1.0), false);
 }
@@ -916,29 +921,39 @@ fn button(out: Inst[>..]&, layer: i64, center: float2, half: float2, label: cons
     let hover = in_rect(pointer, center, half) && enabled;
     let base = if enabled { color } else { float4 { 0.35, 0.33, 0.4, 1.0 } };
     let top = mix4(base, white(1.0), if hover { 0.28 } else { 0.15 });
-    glow(out, center + v2(0.0, 5.0), half + v2(6.0, 6.0), 0.6, float4 { 0.0, 0.0, 0.0, 0.35 });
-    gradient_rect(out, center, half, min(half.y, 18.0), top, mix4(base, float4 { 0.0, 0.0, 0.0, 1.0 }, 0.25));
-    frame_rect(out, center, half, min(half.y, 18.0), 2.0, gold(if hover { 0.95 } else { 0.6 }));
+    // Squashed when pressed, springing back (fx.goose).
+    let k = press_squash(center);
+    let sq = v2(half.x * (1.0 + 0.05 * k), half.y * (1.0 - 0.14 * k));
+    if hover { glow(out, center, half + v2(22.0, 18.0), 0.8, gold(0.16)); }
+    glow(out, center + v2(0.0, 5.0), sq + v2(6.0, 6.0), 0.6, float4 { 0.0, 0.0, 0.0, 0.35 });
+    gradient_rect(out, center, sq, min(sq.y, 18.0), top, mix4(base, float4 { 0.0, 0.0, 0.0, 1.0 }, 0.25));
+    frame_rect(out, center, sq, min(sq.y, 18.0), 2.0, gold(if hover { 0.95 } else { 0.6 }));
     text(layer, center.x, center.y, label, TextStyle.Label, white(if enabled { 1.0 } else { 0.5 }), Align.Center);
-    enabled && clicked(center, half)
+    let hit = enabled && clicked(center, half);
+    if hit { note_press(center); }
+    hit
 }
 
 fn round_button(out: Inst[>..]&, layer: i64, center: float2, r: f32, which: Icon, label: const u8[:],
                 badge: i64, enabled: bool) -> bool {
     let hover = in_rect(pointer, center, v2(r, r)) && enabled;
+    let rr = r * (1.0 - 0.1 * press_squash(center));
+    if hover { glow(out, center, v2(r + 16.0, r + 16.0), 0.8, gold(0.2)); }
     glow(out, center + v2(0.0, 4.0), v2(r + 6.0, r + 6.0), 0.6, float4 { 0.0, 0.0, 0.0, 0.4 });
     let base = if enabled { float4 { 0.30, 0.20, 0.42, 1.0 } } else { float4 { 0.22, 0.2, 0.26, 1.0 } };
-    gradient_rect(out, center, v2(r, r), r, mix4(base, white(1.0), if hover { 0.25 } else { 0.1 }),
+    gradient_rect(out, center, v2(rr, rr), rr, mix4(base, white(1.0), if hover { 0.25 } else { 0.1 }),
                   mix4(base, float4 { 0.0, 0.0, 0.0, 1.0 }, 0.3));
-    ring(out, center, r, 2.5, gold(if hover { 1.0 } else { 0.7 }));
-    icon(out, center, r * 0.55, which, if enabled { gold(1.0) } else { white(0.35) });
+    ring(out, center, rr, 2.5, gold(if hover { 1.0 } else { 0.7 }));
+    icon(out, center, rr * 0.55, which, if enabled { gold(1.0) } else { white(0.35) });
     if label.len > 0 { text(layer, center.x, center.y + r + 14.0, label, TextStyle.Tiny, white(0.85), Align.Center); }
     if badge > 0 {
         let bp = center + v2(r * 0.72, -r * 0.72);
         rect(out, bp, v2(12.0, 11.0), 11.0, float4 { 0.85, 0.25, 0.3, 1.0 });
         text(layer, bp.x, bp.y, str(badge), TextStyle.Tiny, white(1.0), Align.Center);
     }
-    enabled && clicked(center, v2(r, r))
+    let hit = enabled && clicked(center, v2(r, r));
+    if hit { note_press(center); }
+    hit
 }
 
 fn panel(out: Inst[>..]&, center: float2, half: float2) {
@@ -1117,53 +1132,6 @@ fn draw_overlay(out: Inst[>..]&) {
         }
     }
     clicks.clear();
-}
-
-// A row of little flasks for the title screen.
-fn title_flasks(out: Inst[>..]&, y: f32) {
-    let colors: i64[5] = [1, 3, 5, 7, 9];
-    for c, k in colors {
-        var b = Bottle { seg: [0; 8], .. };
-        let n = 4 - (k % 2);
-        for s in n { b.seg[s] = ((c + s * 2) % 14 + 1) as u8; }
-        b.n = n as u8;
-        let x = VW * 0.5 + (k - 2) * 66.0;
-        let bob = sin(now * 1.5 + k) as f32 * 4.0;
-        draw_flask(out, -1, b, v2(x, y + bob), bottle_half(20.0, CAP), 0.0, b.n, 0.4, 0.0, gold(1.0), false);
-    }
-}
-
-fn draw_home(out: Inst[>..]&) {
-    text_shadowed(0, VW * 0.5, 120.0, "Alchemist's", TextStyle.Heading, gold(0.95), Align.Center);
-    text_shadowed(0, VW * 0.5, 172.0, "Sort", TextStyle.Title, gold(1.0), Align.Center);
-    title_flasks(out, 300.0);
-    var plank = inst(Shape.Wood, v2(VW * 0.5, 373.0), v2(190.0, 9.0), float4 { 0.45, 0.28, 0.16, 1.0 });
-    plank.p0 = float4 { 3.0, 0.0, 0.0, 0.0 };
-    out.push(plank);
-
-    // The level card.
-    let card = v2(VW * 0.5, 520.0);
-    panel(out, card, v2(200.0, 105.0));
-    let n = save.level;
-    let s = level_spec(n);
-    text_shadowed(0, card.x, card.y - 60.0, str("Level ", n), TextStyle.Heading, gold(1.0), Align.Center);
-    badge_pill(out, 0, card + v2(0.0, -22.0), difficulty_name(s.difficulty), difficulty_color(s.difficulty));
-    if s.is_tutorial {
-        text(0, card.x, card.y + 8.0, str("New: ", feature_name(s.tutorial)), TextStyle.Small, white(0.85), Align.Center);
-    }
-    if button(out, 0, card + v2(0.0, 58.0), v2(120.0, 28.0), "Play", float4 { 0.2, 0.55, 0.38, 1.0 }, true) {
-        start_campaign(n);
-    }
-    if n > 1 && button(out, 0, card + v2(-160.0, 145.0), v2(28.0, 22.0), "<", float4 { 0.3, 0.22, 0.4, 1.0 }, true) {
-        start_campaign(n - 1);
-    }
-    text(0, card.x, card.y + 145.0, "replay earlier levels with <", TextStyle.Tiny, white(0.55), Align.Center);
-
-    let y: f32 = 800.0;
-    if round_button(out, 0, v2(VW * 0.5 - 120.0, y), 32.0, Icon.Seed, "Seed", 0, true) { screen_id = Screen.Seed; }
-    if round_button(out, 0, v2(VW * 0.5, y), 32.0, Icon.Book, "My Levels", 0, true) { open_files(); }
-    if round_button(out, 0, v2(VW * 0.5 + 120.0, y), 32.0, Icon.Gear, "Settings", 0, true) { screen_id = Screen.Settings; }
-    if now < message_until { text(0, VW * 0.5, 900.0, message, TextStyle.Small, white(0.85), Align.Center); }
 }
 
 fn toggle_row(out: Inst[>..]&, y: f32, label: const u8[:], on: bool) -> bool {
@@ -1367,14 +1335,7 @@ fn fit_canvas() {
 
 // Turns canvas units into pixels, in place.
 fn to_screen(insts: Inst[:]) {
-    for &i in insts {
-        i.pos = offset + i.pos * float2 { scale, scale };
-        i.half = i.half * float2 { scale, scale };
-        let shape = (i.misc.x + 0.5) as! i64;
-        if shape == shape_index(Shape.Rect) || shape == shape_index(Shape.Wood) { i.p0.x *= scale; i.p0.y *= scale; }
-        if shape == shape_index(Shape.Ring) { i.p0.x *= scale; }
-        i.misc.z *= scale;
-    }
+    for &i in insts { scale_inst(i, scale, offset); }
 }
 
 fn gather_input() {
@@ -1391,14 +1352,16 @@ fn gather_input() {
 fn draw_frame(dt: f32) {
     var base: Inst[>..] = [];
     var top: Inst[>..] = [];
-    base.push(inst(Shape.Backdrop, v2(VW * 0.5, VH * 0.5), v2(VW * 0.5 + 400.0, VH * 0.5 + 200.0), white(1.0)));
-    // Dust motes drifting in the candle light.
-    for k in 14 {
-        let fx = (k * 0.618034) % 1.0;
-        let x = (fx * VW + sin(now * 0.2 + k) as f32 * 30.0);
-        let y = VH - ((now * (6.0 + k % 5) + k * 97.0) % (VH as f64 + 40.0)) as f32;
-        glow(base, v2(x, y), v2(2.5, 2.5), 0.9, gold(0.25));
+    var ink: Inst[>..] = [];
+    let theme = current_theme();
+    look.light = scene_light(theme, now);
+    // The room (scene.goose); no clicks while the ink moves between screens.
+    draw_scene(base, theme);
+    if screen_id == Screen.Play {
+        update_back_shelf(board);
+        draw_back_shelf(base);
     }
+    if transition_busy() { clicks.clear(); }
     begin_text(0, screen_px);
     begin_text(1, screen_px);
     // Overlays take the clicks first.
@@ -1408,16 +1371,22 @@ fn draw_frame(dt: f32) {
     else if screen_id == Screen.Settings { draw_settings(base); }
     else if screen_id == Screen.Seed { draw_seed(base); }
     else if screen_id == Screen.Files { draw_files(base); }
+    else if screen_id == Screen.Map { draw_map(base); }
     if screen_id != Screen.Play { draw_overlay(top); }
+    draw_drops(top);
+    draw_finale(top);
     draw_particles(top);
+    draw_transition(ink);
     to_screen(base);
     to_screen(top);
+    to_screen(ink);
     look.screen = float4 { screen_px.x, screen_px.y, (now % 1000.0) as f32, if save.color_safe { 1.0 } else { 0.0 } };
     fill_palette(look, save.color_safe);
     flush_layer(board_layer, base, look, true);
     end_text(0);
     flush_layer(overlay_layer, top, look, false);
     end_text(1);
+    if ink.len > 0 { flush_layer(ink_layer, ink, look, false); }
 }
 
 // Whether this frame has anything moving or waiting on input soon.
@@ -1431,7 +1400,7 @@ fn lively() -> bool {
     for i in MAX_BOTTLES {
         if now < shake_until[i] || now - complete_at[i] < 1.3 { return true; }
     }
-    false
+    fx_lively()
 }
 
 fn env_or(name: const u8[:], fallback: const u8[:], out: u8[>..]&) {
@@ -1501,8 +1470,11 @@ fn main() {
 
     var drawn = 0;
     var last = gfx::time();
+    begin_transitions();
     while gfx::frame() {
         now = gfx::time();
+        // Scripted runs keep a steady clock, so a screenshot shows the same moment.
+        if frames >= 0 { now = 10.0 + drawn / 60.0; }
         let dt = clamp(now - last, 0.0, 0.1) as f32;
         last = now;
         fit_canvas();
@@ -1520,7 +1492,9 @@ fn main() {
         handle_keys();
         if screen_id == Screen.Play && !pending_load { update_play(dt); }
         update_particles(dt);
+        update_fx(dt);
         draw_frame(dt);
+        update_transition();
         drawn++;
         // When nothing moves, draw a few frames a second instead of sixty:
         // with software rendering every frame costs real CPU.
