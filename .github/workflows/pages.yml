@@ -1,0 +1,64 @@
+# Runs the tests and builds the browser version with Nix on every push and
+# pull request; a push to main also publishes the browser version on GitHub
+# Pages. (Pages must be set to deploy from GitHub Actions: Settings > Pages >
+# Source.)
+#
+# The Nix store is kept in GitHub's Actions cache between runs, keyed by what
+# decides the toolchain (flake.lock and nix/): a change to the game itself
+# reuses the cached Goose compiler and SDL and rebuilds only the game.
+name: Build and publish
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write           # to purge the caches this run replaces
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'nix/**') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 8G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
+      - name: Unit tests
+        run: nix flake check -L
+      - name: Build the browser version
+        run: nix build .#web -L
+      # The store path is read-only and a symlink: copy it out as plain files.
+      - name: Collect the site
+        run: cp -rL result site && chmod -R u+w site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

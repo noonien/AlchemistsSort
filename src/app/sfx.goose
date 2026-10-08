@@ -3,6 +3,7 @@
 
 import std;
 import math;
+import os;
 import audio;
 
 enum Sfx { Select, Deselect, Pour, Denied, Complete, Win, Pop, Ice, Reveal, Tool, Lose }
@@ -80,9 +81,14 @@ fn make(id: Sfx, pcm: f32[>..]&) {
 }
 
 fn init_sounds() {
-    if !audio::available() || !audio::open(RATE) { return; }
+    if !audio::available() || !audio::open(RATE) {
+        write_stderr(str("alchemists-sort: no sound (", audio::error(), ")\n"));
+        return;
+    }
     sound_ready = true;
-    for id in ALL_SFX {
+    assert(ALL_SFX.len == sounds.len);
+    for id, k in ALL_SFX {
+        assert(sfx_index(id) == k);     // the list is in index order, every sound once
         var pcm: f32[>..] = [];
         match id {
             Select => tone(pcm, 0.0, 1320.0, 0.12, 0.25, 30.0),

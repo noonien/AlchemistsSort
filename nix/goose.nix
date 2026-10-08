@@ -8,43 +8,38 @@
 #   bin/goose                  wrapper that sets up SDL's runtime libraries
 #
 # SDL is built static with its system dependencies loaded at runtime, so the
-# wrapper puts X11/Wayland/audio/Vulkan on LD_LIBRARY_PATH. On WSLg, Mesa's
-# "dozen" Vulkan driver (D3D12) is used, with llvmpipe as the fallback.
-{ lib, stdenv, src, cmake, ninja, pkg-config, python3, makeWrapper
-, glibc, xorg, libxkbcommon, wayland, wayland-scanner, wayland-protocols, libdecor
-, libpulseaudio, alsa-lib, pipewire, vulkan-loader, vulkan-headers, mesa, systemdLibs, dbus
+# wrapper puts X11/Wayland/audio/Vulkan on LD_LIBRARY_PATH. The Vulkan driver
+# is the system's: on NixOS, hardware.graphics.enable provides it.
+#
+# `minimal = true` builds the compiler alone, without SDL, the in-process
+# backend or the gfx/ui/audio/physics modules. It emits the same C, which is
+# all the tests and the web build need, and builds in a fraction of the time.
+{ minimal ? false, lib, stdenv, src, cmake, ninja, pkg-config, python3, makeWrapper
+, glibc, libx11, libxext, libxcursor, libxi, libxfixes, libxrandr, libxrender
+, libxscrnsaver, libxtst, libxcb, xorgproto, libxkbcommon, wayland, wayland-scanner, wayland-protocols, libdecor
+, libpulseaudio, alsa-lib, pipewire, vulkan-loader, vulkan-headers, systemdLibs, dbus
 }:
 
 let
   runtimeLibs = [
-    xorg.libX11 xorg.libXext xorg.libXcursor xorg.libXi xorg.libXfixes
-    xorg.libXrandr xorg.libXrender xorg.libXScrnSaver xorg.libXtst libxkbcommon wayland libdecor
+    libx11 libxext libxcursor libxi libxfixes libxrandr libxrender libxscrnsaver libxtst
+    libxkbcommon wayland libdecor
     libpulseaudio alsa-lib pipewire vulkan-loader systemdLibs dbus
   ];
-  arch = stdenv.hostPlatform.uname.processor;
-  icds = lib.concatStringsSep ":" [
-    "${mesa}/share/vulkan/icd.d/dzn_icd.${arch}.json"
-    "${mesa}/share/vulkan/icd.d/lvp_icd.${arch}.json"
-  ];
-  # Shell snippet shared by the wrapper and the dev shell. Each setting defers
-  # to one already in the environment, so a native NixOS GPU still wins.
+  # Shell snippet shared by the wrapper and the dev shell.
   runtimeEnv = ''
     export LD_LIBRARY_PATH="${lib.makeLibraryPath runtimeLibs}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-    if [ -z "''${VK_DRIVER_FILES:-}''${VK_ICD_FILENAMES:-}" ] && [ ! -d /run/opengl-driver/share/vulkan/icd.d ]; then
-      export VK_DRIVER_FILES="${icds}"
-    fi
-    if [ -d /usr/lib/wsl/lib ]; then
-      export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/usr/lib/wsl/lib"
-    fi
   '';
 in
 stdenv.mkDerivation {
-  pname = "goose";
+  pname = if minimal then "goose-compiler" else "goose";
   version = "unstable-${src.lastModifiedDate or "0"}";
   inherit src;
 
-  nativeBuildInputs = [ cmake ninja pkg-config python3 makeWrapper wayland-scanner ];
-  buildInputs = runtimeLibs ++ [ xorg.libxcb xorg.xorgproto wayland-protocols vulkan-headers ];
+  nativeBuildInputs = [ cmake ninja pkg-config python3 makeWrapper ]
+    ++ lib.optional (!minimal) wayland-scanner;
+  buildInputs = lib.optionals (!minimal)
+    (runtimeLibs ++ [ libxcb xorgproto wayland-protocols vulkan-headers ]);
 
   # TinyCC's defaults look for the C library under /usr, which NixOS lacks.
   postPatch = ''
@@ -57,7 +52,9 @@ stdenv.mkDerivation {
     #define CONFIG_TCC_ELFINTERP \"${stdenv.cc.bintools.dynamicLinker}\"'
   '';
 
-  cmakeFlags = [ "-DCMAKE_BUILD_TYPE=Release" ];
+  cmakeFlags = [ "-DCMAKE_BUILD_TYPE=Release" ] ++ lib.optionals minimal [
+    "-DGOOSE_LIBTCC=OFF" "-DGOOSE_GFX=OFF" "-DGOOSE_AUDIO=OFF" "-DGOOSE_PHYSICS=OFF" "-DGOOSE_UI=OFF"
+  ];
 
   # Generated link files name archives inside the build tree; they are copied
   # next to the installed compiler and rewritten to point there.
@@ -77,11 +74,11 @@ stdenv.mkDerivation {
       done
       sed -E "s#[^ \"]*/([^/ \"]+\.a)#$dest/$m/\1#g" "$rsp" > $dest/$m/link-cc.rsp
     done
-    makeWrapper $dest/goose $out/bin/goose --run ${lib.escapeShellArg runtimeEnv}
+    makeWrapper $dest/goose $out/bin/goose ${lib.optionalString (!minimal) "--run ${lib.escapeShellArg runtimeEnv}"}
     runHook postInstall
   '';
 
-  passthru = { inherit runtimeEnv runtimeLibs; };
+  passthru = { inherit runtimeEnv runtimeLibs; source = src; };
 
   meta = {
     description = "A memory-safe systems language with no heap allocator";

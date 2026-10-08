@@ -1,0 +1,6 @@
+{
+  "name": "Long Flask",
+  "difficulty": "normal",
+  "hint": "The tall flask holds more than four layers. Violet comes in six here, enough to fill it. Otherwise it's an ordinary flask.",
+  "bottles": ["RGBV", "VBRG", "GVRB", "BRGV", { "liquid": "VV", "height": 6 }, ""]
+}

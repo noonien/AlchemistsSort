@@ -2,14 +2,16 @@
 // about drawing, input or files; the game, the solver, the generator and the
 // tests all run the same code.
 //
-// A bottle holds up to CAP segments, bottom first. Colors are 1..MAX_COLORS;
-// 0 is "no liquid". An obstacle is a bottle `kind` plus an `active` flag:
-// while active it changes what the bottle accepts and shows, and once
-// removed (thawed, popped, unwrapped...) the bottle is an ordinary one.
+// A bottle holds up to `cap` segments, bottom first: CAP, or more for a long
+// flask. Colors are 1..MAX_COLORS; 0 is "no liquid". An obstacle is a bottle
+// `kind` plus an `active` flag: while active it changes what the bottle
+// accepts and shows, and once removed (thawed, popped, unwrapped...) the
+// bottle is an ordinary one.
 
 import std;
 
-let CAP = 4;
+let CAP = 4;            // an ordinary flask, and how much there is of most colors
+let MAX_CAP = 8;        // the tallest long flask
 let MAX_BOTTLES = 24;
 let MAX_COLORS = 14;
 
@@ -37,8 +39,9 @@ fn kind_index(k: Kind) -> i64 {
 }
 
 struct Bottle {
-    seg: u8[4],         // bottom to top; only the first `n` mean anything
+    seg: u8[8],         // bottom to top; only the first `n` mean anything
     n: u8 = 0,
+    cap: u8 = 4,        // segments it holds: CAP, or more for a long flask
     hidden: u8 = 0,     // the lowest `hidden` segments show as "?"
     kind: Kind = Kind.Plain,
     key: u8 = 0,        // see the kinds above
@@ -48,7 +51,7 @@ struct Bottle {
 }
 
 struct Board {
-    bottles: Bottle[24],
+    bottles: Bottle[MAX_BOTTLES],
     count: i64 = 0,     // bottles in use
     colors: i64 = 0,    // distinct colors in the level
     pours: i64 = 0,     // successful pours so far
@@ -90,9 +93,8 @@ fn top_run(b: Bottle) -> i64 {
 }
 
 fn is_complete(b: Bottle) -> bool {
-    if b.n != CAP { return false; }
-    let c = b.seg[0];
-    c != 0 && b.seg[1] == c && b.seg[2] == c && b.seg[3] == c
+    if b.n != b.cap || b.seg[0] == 0 { return false; }
+    is_uniform(b)
 }
 
 // Every segment one color (or none at all).
@@ -137,7 +139,7 @@ fn accepts(b: Bottle, color: i64) -> bool {
             Plain, Mystery => {},
         }
     }
-    if b.n >= CAP { return false; }
+    if b.n >= b.cap { return false; }
     if b.kind == Kind.Mystery && b.key != 0 && b.key != color { return false; }
     b.n == 0 || top(b) == color
 }
@@ -153,7 +155,7 @@ fn can_pour(board: Board, from: i64, to: i64) -> bool {
 
 fn bottle(colors: const i64[:]) -> Bottle {
     assert(colors.len <= CAP);
-    var b = Bottle { seg: [0; 4], .. };
+    var b = Bottle { seg: [0; 8], .. };
     for c, i in colors { b.seg[i] = c as u8; }
     b.n = colors.len as u8;
     b
@@ -169,7 +171,7 @@ fn push_bottle(board: Board&, b: Bottle) -> i64 {
 // Adds an empty bottle, as the extra-bottle tool does. False when full up.
 fn add_empty_bottle(board: Board&) -> bool {
     if board.count >= MAX_BOTTLES { return false; }
-    push_bottle(board, Bottle { seg: [0; 4], .. });
+    push_bottle(board, Bottle { seg: [0; 8], .. });
     true
 }
 
@@ -247,7 +249,7 @@ fn pour(board: Board&, from: i64, to: i64) -> PourResult {
         dst.active = false;
         r.popped = true;      // the box takes any color, whatever lies under it
     }
-    let room = CAP - dst.n as i64;
+    let room: i64 = dst.cap - dst.n;
     let amount = if lands { min(run, room) } else { 0 };
     for k in amount {
         dst.seg[dst.n] = color as u8;
@@ -334,11 +336,12 @@ fn settle(board: Board&) {
 
 // Empty when the board is well formed, else what is wrong with it.
 fn validate(board: Board) -> u8[>..] {
-    var tally: i64[15] = [0; 15];
+    var tally: i64[MAX_COLORS + 1] = [0; MAX_COLORS + 1];
     if board.count < 2 { return str("a level needs at least two bottles"); }
     for i in board.count {
         let b = board.bottles[i];
-        if b.n > CAP { return str("bottle ", i + 1, " holds more than ", CAP); }
+        if b.cap < CAP || b.cap > MAX_CAP { return str("bottle ", i + 1, " is not ", CAP, " to ", MAX_CAP, " tall"); }
+        if b.n > b.cap { return str("bottle ", i + 1, " holds more than ", b.cap); }
         for k in b.n as i64 {
             let c: i64 = b.seg[k];
             if c < 1 || c > MAX_COLORS { return str("bottle ", i + 1, " has an unknown color"); }
@@ -349,10 +352,21 @@ fn validate(board: Board) -> u8[>..] {
         }
     }
     var colors = 0;
+    var long_used: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
     for c in 1..MAX_COLORS + 1 {
         if tally[c] == 0 { continue; }
         colors++;
-        if tally[c] != CAP { return str("color ", c, " has ", tally[c], " segments, not ", CAP); }
+        if tally[c] == CAP { continue; }
+        // A color with more is there to fill a long flask of its own.
+        var fits = false;
+        for i in board.count {
+            if !long_used[i] && board.bottles[i].cap == tally[c] {
+                long_used[i] = true;
+                fits = true;
+                break;
+            }
+        }
+        if !fits { return str("color ", c, " has ", tally[c], " segments, not ", CAP, " or a long flask's height"); }
     }
     if colors == 0 { return str("a level needs some liquid"); }
     str("")
@@ -360,7 +374,7 @@ fn validate(board: Board) -> u8[>..] {
 
 // The distinct colors on the board.
 fn color_count(board: Board) -> i64 {
-    var seen: bool[15] = [false; 15];
+    var seen: bool[MAX_COLORS + 1] = [false; MAX_COLORS + 1];
     var colors = 0;
     for i in board.count {
         let b = board.bottles[i];
@@ -381,7 +395,7 @@ fn board_hash(board: Board) -> u64 {
         let b = board.bottles[i];
         var x: u64 = 1469598103934665603;
         for k in b.n as i64 { x = (x ^ b.seg[k]) * 1099511628211; }
-        x = (x ^ (b.n as u64 << 8)) * 1099511628211;
+        x = (x ^ (b.n as u64 << 8) ^ (b.cap as u64 << 40)) * 1099511628211;
         x = (x ^ (b.hidden as u64 << 12)) * 1099511628211;
         x = (x ^ (kind_index(b.kind) as u64 << 16)) * 1099511628211;
         x = (x ^ (b.key as u64 << 20)) * 1099511628211;

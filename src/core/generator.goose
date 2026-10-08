@@ -20,6 +20,8 @@ struct GenParams {
     vault: i64 = 0,         // 2 chains them: one's key lies inside the other
     curtain: i64 = 0,
     gift: i64 = 0,
+    long: i64 = 0,          // long flasks, each with one color dealt to fill it
+    long_height: i64 = 6,   // their height, CAP + 1 to MAX_CAP
     budget: i64 = 40000,    // solver positions per attempt
 }
 
@@ -91,18 +93,19 @@ fn deal(p: GenParams, r: rng&) -> Board {
     var board = Board { .. };
     let colors = clamp(p.colors, 1, MAX_COLORS);
     board.colors = colors;
-    let bottles = min(colors + p.empties, MAX_BOTTLES - p.mystery);
+    let longs = clamp(p.long, 0, colors);
+    let bottles = min(colors + p.empties, MAX_BOTTLES - p.mystery - longs);
     // Fill heights: full bottles, then the spares; `partial` segments move
     // from the top of full bottles to the spares, one at a time.
-    var heights: i64[24] = [0; 24];
+    var heights: i64[MAX_BOTTLES] = [0; MAX_BOTTLES];
     for i in colors { heights[i] = CAP; }
     // Corks, padlocks and gift boxes want a bottle with room under them. A
     // curtain wants every spare to start with something in it (see below).
     var partial = max(p.partial, p.cork + p.vault + p.gift);
     if p.curtain > 0 { partial = max(partial, p.empties * 2); }
     for k in partial {
-        var from_ok: bool[24] = [false; 24];
-        var to_ok: bool[24] = [false; 24];
+        var from_ok: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
+        var to_ok: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
         var lowest = CAP;
         for i in colors..bottles { lowest = min(lowest, heights[i]); }
         for i in bottles {
@@ -120,7 +123,7 @@ fn deal(p: GenParams, r: rng&) -> Board {
     shuffle(segs, r);
     var at = 0;
     for i in bottles {
-        var b = Bottle { seg: [0; 4], .. };
+        var b = Bottle { seg: [0; 8], .. };
         for k in heights[i] {
             b.seg[k] = segs[at];
             at++;
@@ -128,11 +131,26 @@ fn deal(p: GenParams, r: rng&) -> Board {
         b.n = heights[i] as u8;
         push_bottle(board, b);
     }
+    // A long flask comes with the extra share of its color already in it;
+    // the color's other CAP segments are in the deal like any other's.
+    let tall = clamp(p.long_height, CAP + 1, MAX_CAP);
+    var long_color: bool[MAX_COLORS + 1] = [false; MAX_COLORS + 1];
+    for k in longs {
+        var free: bool[MAX_COLORS + 1] = [false; MAX_COLORS + 1];
+        for c in 1..colors + 1 { free[c] = !long_color[c]; }
+        let c = pick(r, free[..colors + 1]);
+        if c < 0 { break; }
+        long_color[c] = true;
+        var b = Bottle { seg: [0; 8], cap: tall as u8, .. };
+        for s in tall - CAP { b.seg[s] = c as u8; }
+        b.n = (tall - CAP) as u8;
+        push_bottle(board, b);
+    }
 
-    var taken: bool[24] = [false; 24];
-    var ok: bool[24] = [false; 24];
+    var taken: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
+    var ok: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
     if p.split && colors >= 2 {
-        for i in board.count { ok[i] = board.bottles[i].n == CAP; }
+        for i in board.count { ok[i] = board.bottles[i].n == CAP && board.bottles[i].cap == CAP; }
         let a = pick(r, ok[..board.count]);
         if a >= 0 {
             ok[a] = false;
@@ -160,7 +178,7 @@ fn deal(p: GenParams, r: rng&) -> Board {
         let i = pick(r, ok[..board.count]);
         if i < 0 { break; }
         // The key is a color this bottle does not hold.
-        var keys: bool[15] = [false; 15];
+        var keys: bool[MAX_COLORS + 1] = [false; MAX_COLORS + 1];
         for c in 1..colors + 1 { keys[c] = !has_color(board.bottles[i], c); }
         let key = pick(r, keys[..colors + 1]);
         if key < 0 { continue; }
@@ -175,17 +193,17 @@ fn deal(p: GenParams, r: rng&) -> Board {
     for k in locks {
         candidates(board, taken[..board.count], ok);
         // Prefer a bottle with room, so the key color lands inside.
-        var roomy: bool[24] = [false; 24];
+        var roomy: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
         var any_roomy = false;
         for i in board.count {
-            roomy[i] = ok[i] && board.bottles[i].n < CAP;
+            roomy[i] = ok[i] && board.bottles[i].n < board.bottles[i].cap;
             if roomy[i] { any_roomy = true; }
         }
         let i = if any_roomy { pick(r, roomy[..board.count]) } else { pick(r, ok[..board.count]) };
         if i < 0 { break; }
         let is_vault = k >= p.cork;
         var b .= board.bottles[i];
-        var key = if b.n < CAP { top(b) } else { 1 + r.rand_int(colors) };
+        var key = if b.n < b.cap { top(b) } else { 1 + r.rand_int(colors) };
         if is_vault && vault_inside > 0 { key = vault_inside; }
         b.kind = if is_vault { Kind.Vault } else { Kind.Cork };
         b.key = key as u8;
@@ -198,7 +216,7 @@ fn deal(p: GenParams, r: rng&) -> Board {
     }
     for k in p.gift {
         candidates(board, taken[..board.count], ok);
-        for i in board.count { if board.bottles[i].n >= CAP { ok[i] = false; } }
+        for i in board.count { if board.bottles[i].n >= board.bottles[i].cap { ok[i] = false; } }
         let i = pick(r, ok[..board.count]);
         if i < 0 { break; }
         var b .= board.bottles[i];
@@ -233,7 +251,7 @@ fn deal(p: GenParams, r: rng&) -> Board {
         b.hidden = b.n - 1;
     }
     for k in p.mystery {
-        var b = Bottle { seg: [0; 4], .. };
+        var b = Bottle { seg: [0; 8], .. };
         b.kind = Kind.Mystery;
         b.active = true;
         push_bottle(board, b);
@@ -246,7 +264,7 @@ fn deal(p: GenParams, r: rng&) -> Board {
 fn deal_ok(board: Board) -> bool {
     for i in board.count {
         let b = board.bottles[i];
-        if b.done || (b.n == CAP && is_uniform(b)) { return false; }
+        if b.done || (b.n == b.cap && is_uniform(b)) { return false; }
         if b.kind == Kind.Curtain && !b.active { return false; }   // opened before the first pour
     }
     validate(board).len == 0 && !is_won(board)
@@ -263,7 +281,9 @@ fn generate(p: GenParams, seed: u64) -> GenResult {
             plain.frozen = 0;
             plain.curtain = 0;
         }
-        if attempt == 300 { plain = GenParams { colors: max(3, p.colors - 1), empties: 2 }; }
+        if attempt == 300 {
+            plain = GenParams { colors: max(3, p.colors - 1), empties: 2, long: p.long, long_height: p.long_height };
+        }
         var r = rng { seed * 0x9E3779B97F4A7C15 + (attempt as u64) * 0xD1B54A32D192ED03 + 17 };
         let board = deal(plain, r);
         if !deal_ok(board) { continue; }

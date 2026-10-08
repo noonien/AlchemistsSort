@@ -8,18 +8,18 @@ import .generator;
 import .level_io;
 
 // Obstacle "features", in the order they are introduced.
-enum Feature { Hidden, Split, Mystery, Cloak, Frozen, Cork, Vault, Curtain, Gift }
+enum Feature { Hidden, Split, Mystery, Cloak, Frozen, Cork, Vault, Curtain, Gift, Long }
 
-let ALL_FEATURES: const Feature[9] = [Feature.Hidden, Feature.Split, Feature.Mystery, Feature.Cloak,
-                                      Feature.Frozen, Feature.Cork, Feature.Vault, Feature.Curtain,
-                                      Feature.Gift];
+let ALL_FEATURES: const Feature[10] = [Feature.Hidden, Feature.Split, Feature.Mystery, Feature.Cloak,
+                                       Feature.Frozen, Feature.Cork, Feature.Vault, Feature.Curtain,
+                                       Feature.Gift, Feature.Long];
 
 // The level that teaches each feature (none is a multiple of 5, which are
 // the Hard and Super Hard levels).
 fn tutorial_level(f: Feature) -> i64 {
     match f {
         Hidden => 4, Split => 8, Mystery => 13, Cloak => 17, Frozen => 21, Cork => 26, Vault => 31,
-        Curtain => 36, Gift => 41,
+        Curtain => 36, Gift => 41, Long => 46,
     }
 }
 
@@ -28,6 +28,7 @@ fn tutorial_file(f: Feature) -> const u8[:] {
         Hidden => "04_hidden_layers", Split => "08_split_color", Mystery => "13_mystery_bottle",
         Cloak => "17_cloaked_bottle", Frozen => "21_frozen_bottle", Cork => "26_corked_bottle",
         Vault => "31_locked_vaults", Curtain => "36_curtain", Gift => "41_gift_box",
+        Long => "46_long_flask",
     }
 }
 
@@ -35,7 +36,7 @@ fn feature_name(f: Feature) -> const u8[:] {
     match f {
         Hidden => "Hidden Layers", Split => "Split Color", Mystery => "Mystery Flask",
         Cloak => "Cloaked Flask", Frozen => "Frozen Flask", Cork => "Corked Flask",
-        Vault => "Locked Vault", Curtain => "Curtain", Gift => "Gift Box",
+        Vault => "Locked Vault", Curtain => "Curtain", Gift => "Gift Box", Long => "Long Flask",
     }
 }
 
@@ -91,7 +92,7 @@ fn params_for(level: i64, difficulty: Difficulty, seed: u64) -> GenParams {
         Hard => 1,
         Normal => if r.rand_int(10) < 4 { 1 } else { 0 },
     };
-    var chosen: Feature[..9] = [];
+    var chosen: Feature[..10] = [];
     while wanted > 0 && pool.len > 0 {
         let f = pool[r.rand_int(pool.len)];
         if contains(chosen, f) {
@@ -112,6 +113,10 @@ fn params_for(level: i64, difficulty: Difficulty, seed: u64) -> GenParams {
             Vault => { p.vault = 1 + r.rand_int(2); },
             Curtain => { p.curtain = 1; },
             Gift => { p.gift = 1 + r.rand_int(2); },
+            Long => {
+                p.long = 1;
+                p.long_height = CAP + 1 + r.rand_int(MAX_CAP - CAP);
+            },
             Hidden, Split => {},
         }
     }

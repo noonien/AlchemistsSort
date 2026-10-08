@@ -9,6 +9,7 @@ import core.generator;
 import core.level_io;
 import core.tools;
 import core.campaign;
+import app.shaders;
 
 var failures = 0;
 var checks = 0;
@@ -31,7 +32,7 @@ fn test(name: const u8[:]) {
 fn board_of(rows: const u8[:][:]) -> Board {
     var board = Board { .. };
     for row in rows {
-        var b = Bottle { seg: [0; 4], .. };
+        var b = Bottle { seg: [0; 8], .. };
         for ch in row {
             let c = color_of_letter(ch);
             assert(c > 0);
@@ -272,6 +273,44 @@ fn test_gift() {
     check(!b.bottles[1].active, "unwrapped");
 }
 
+fn test_long() {
+    test("long flask");
+    var b = board_of(["RRGG", "GGRR", "RR", ""]);
+    b.bottles[2].cap = 6;
+    check(validate(b).len == 0, "a color as tall as a long flask is valid");
+    b.bottles[2].cap = 5;
+    check(validate(b).len > 0, "but must match its height");
+    b.bottles[2].cap = 6;
+    settle(b);
+    check(is_complete(board_of(["RRRR"]).bottles[0]), "an ordinary flask is complete at four");
+    var r = pour(b, 1, 2);
+    check(r.ok && r.amount == 2 && b.bottles[2].n == 4 && !b.bottles[2].done, "four is not full in a long flask");
+    check(can_pour(b, 2, 3), "it pours like any flask");
+    r = pour(b, 0, 1);
+    r = pour(b, 0, 2);
+    check(r.amount == 2 && b.bottles[2].done && is_won(b), "complete at its height");
+    var text: u8[>..] = [];
+    write_level(b, LevelInfo { name: [], hint: [] }, text);
+    var back = Board { .. };
+    var info = LevelInfo { name: [], hint: [] };
+    check(parse_level(text, back, info).len == 0 && back.bottles[2].cap == 6, "its height is saved");
+    var path: Move[>..] = [];
+    var c = board_of(["RRGG", "GGRR", "RR", ""]);
+    c.bottles[2].cap = 6;
+    settle(c);
+    check(solve(c, 20000, path).solved, "the solver fills it");
+    c.bottles[2].kind = Kind.Cork;
+    c.bottles[2].key = 1;
+    c.bottles[2].active = true;
+    check(validate(c).len == 0, "and it can carry an obstacle");
+
+    var p = GenParams { colors: 5, long: 1, long_height: 7, cork: 1 };
+    let g = generate(p, 7);
+    var tall = 0;
+    for i in g.board.count { if g.board.bottles[i].cap == 7 { tall++; } }
+    check(g.stats.solved && tall == 1 && validate(g.board).len == 0, "generated with a long flask");
+}
+
 fn test_undo_snapshot() {
     test("boards copy as values");
     var b = board_of(["RG", "", "GR"]);
@@ -293,6 +332,20 @@ fn test_solver() {
     check(is_won(replay), "the path wins");
     let stuck = board_of(["RGRG", "GRGR"]);
     check(!solve(stuck, 1000, path).solved, "a dead board has no solution");
+    check(dead_end(stuck, 1000), "and the search proves it");
+    check(!dead_end(b, 50000), "a board that can be won is no dead end");
+    let pointless = board_of(["RGRG", "GRG"]);
+    check(has_move(pointless) && dead_end(pointless, 1000), "a dead end can still have pours");
+    check(cornered(pointless) && !cornered(b), "the game only searches when cornered");
+    let big = generate(level_spec(60).params, level_spec(60).seed).board;
+    check(!dead_end(big, 10), "running out of budget proves nothing");
+    // The only way on is a pour that just moves a bottle, to melt the ice.
+    var ice = board_of(["RR", "", "RR"]);
+    ice.bottles[2].kind = Kind.Frozen;
+    ice.bottles[2].timer = 1;
+    ice.bottles[2].active = true;
+    settle(ice);
+    check(solve(ice, 1000, path).solved, "pours that only count down the ice are tried");
 }
 
 fn test_generator() {
@@ -386,6 +439,23 @@ fn test_campaign() {
           " at ", worst, "s");
 }
 
+// --- enum tables -------------------------------------------------------------------
+
+fn test_tables() {
+    test("enum tables");
+    for k, i in ALL_KINDS { check(kind_index(k) == i, "ALL_KINDS is in index order"); }
+    for s, i in ALL_SHAPES {
+        check(shape_index(s) == i, "ALL_SHAPES is in index order");
+        check(find(FRAGMENT_SHADER, str("#define ", shape_define(s), " ", i, "\n")) >= 0,
+              str("the shader numbers ", shape_define(s), " ", i));
+    }
+    for c, i in ALL_ICONS {
+        check(icon_index(c) == i, "ALL_ICONS is in index order");
+        check(find(FRAGMENT_SHADER, str("#define ", icon_define(c), " ", i, "\n")) >= 0,
+              str("the shader numbers ", icon_define(c), " ", i));
+    }
+}
+
 // --- level format -------------------------------------------------------------------
 
 fn test_level_io() {
@@ -474,12 +544,14 @@ fn main() {
     test_vault_chain();
     test_curtain();
     test_gift();
+    test_long();
     test_undo_snapshot();
     test_solver();
     test_generator();
     test_level_io();
     test_tools();
     test_campaign();
+    test_tables();
     print(checks - failures, "/", checks, " checks passed");
     if failures > 0 { exit(1); }
 }

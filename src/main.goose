@@ -21,6 +21,7 @@ import core.level_io;
 import core.tools;
 import core.campaign;
 import app.draw;
+import app.shaders;
 import app.palette;
 import app.text;
 import app.sfx;
@@ -36,6 +37,15 @@ enum Screen { Home, Play, Settings, Seed, Files }
 enum Overlay { None, Win, Lose, Intro, Reset, Brewing }
 
 enum PlayMode { Campaign, Seed, File }
+
+// Solver positions each use may search.
+let HINT_BUDGET = 80000;        // a hint, or a move in autoplay
+let SHUFFLE_BUDGET = 30000;     // each shuffled deal tried
+let SHUFFLE_TRIES = 40;
+let DEAD_END_BUDGET = 5000;     // only asked when cornered, where positions are few
+
+// The most flasks the layout keeps readable.
+let MAX_ON_SCREEN = 22;
 
 // Timing of a pour, in seconds.
 let T_LIFT: f64 = 0.2;
@@ -102,8 +112,8 @@ var taps: i64[>..<];
 var pours: PourAnim[8];
 var particles: Particle[400];
 var next_particle = 0;
-var shake_until: f64[24];
-var complete_at: f64[24];
+var shake_until: f64[MAX_BOTTLES];
+var complete_at: f64[MAX_BOTTLES];
 var hint_from = -1;
 var hint_to = -1;
 var hint_until: f64 = 0.0;
@@ -111,7 +121,9 @@ var message: u8[..160];
 var message_until: f64 = 0.0;
 var won_at: f64 = -1.0;
 var lost_checked = false;
-var slots: Slot[24];
+var dead_end_shown = false;    // the Lose overlay is for a dead end, not no moves
+var dead_end_waved = false;    // the player chose to keep pouring anyway
+var slots: Slot[MAX_BOTTLES];
 var shelves: float4[6];        // x, y, half width, unused
 var shelf_count = 0;
 var pending_load = false;
@@ -215,10 +227,16 @@ fn draw_particles(out: Inst[>..]&) {
 
 // --- layout ---------------------------------------------------------------------------
 
-fn bottle_half(hx: f32) -> float2 { v2(hx, hx * 3.2) }
+// A flask's half size for a half width; every segment is as tall in any flask.
+fn bottle_half(hx: f32, cap: i64) -> float2 { v2(hx, hx * (0.68 + 0.63 * cap)) }
 
-// Places `n` flasks in rows on shelves, as large as fit the board area.
-fn layout(n: i64) {
+// Places the flasks in rows on shelves, as large as fit the board area. Long
+// flasks stand on the same shelf, rising higher.
+fn layout(board: Board) {
+    let n = board.count;
+    var tallest = CAP;
+    for i in n { tallest = max(tallest, board.bottles[i].cap); }
+    let rise = (tallest - CAP) * 1.26;      // in half widths
     let top: f32 = 120.0;
     let bottom: f32 = 790.0;
     let width: f32 = 510.0;
@@ -227,7 +245,7 @@ fn layout(n: i64) {
     for rows in 1..6 {
         let per = (n + rows - 1) / rows;
         let hx_w = width / per * 0.34;
-        let hx_h = ((bottom - top) / rows - 34.0) / 7.6;
+        let hx_h = ((bottom - top) / rows - 34.0) / (7.6 + rise);
         let hx = min(min(hx_w, hx_h), 30.0);
         if hx > best_hx + 0.5 {
             best_hx = hx;
@@ -235,11 +253,11 @@ fn layout(n: i64) {
         }
     }
     let hx = best_hx;
-    let half = bottle_half(hx);
+    let half = bottle_half(hx, CAP);
     let per = (n + best_rows - 1) / best_rows;
-    let row_h = half.y * 2.0 + hx * 1.4 + 34.0;
+    let row_h = half.y * 2.0 + hx * (1.4 + rise) + 34.0;
     let total_h = row_h * best_rows;
-    let y0 = top + ((bottom - top) - total_h) * 0.5 + hx * 1.4 + half.y;
+    let y0 = top + ((bottom - top) - total_h) * 0.5 + hx * (1.4 + rise) + half.y;
     let cell = min(width / per, hx * 3.1);
     shelf_count = 0;
     var i = 0;
@@ -250,7 +268,8 @@ fn layout(n: i64) {
         let x0 = VW * 0.5 - row_w * 0.5 + cell * 0.5;
         let y = y0 + r * row_h;
         for k in in_row {
-            slots[i] = Slot { pos: v2(x0 + k * cell, y), half: half };
+            let h = bottle_half(hx, board.bottles[i].cap);
+            slots[i] = Slot { pos: v2(x0 + k * cell, y + half.y - h.y), half: h };
             i++;
         }
         if shelf_count < shelves.len {
@@ -277,16 +296,14 @@ fn reset_play_state() {
     history.clear();
     taps.clear();
     for &a in pours { a.active = false; }
-    for i in 24 {
+    for i in MAX_BOTTLES {
         shake_until[i] = 0.0;
         complete_at[i] = -10.0;
     }
-    selected = -1;
     hint_from = -1;
     hint_to = -1;
-    won_at = -1.0;
-    lost_checked = false;
     message_until = 0.0;
+    board_changed();
 }
 
 fn begin_board(b: Board) {
@@ -294,7 +311,7 @@ fn begin_board(b: Board) {
     board = b;
     used = Counters {};
     reset_play_state();
-    layout(board.count);
+    layout(board);
     overlay = Overlay.None;
     if spec.is_tutorial || info.hint.len > 0 { overlay = Overlay.Intro; overlay_t = now; }
 }
@@ -484,7 +501,7 @@ fn tap_bottle(i: i64) {
     selected = -1;
     let reason = why_blocked(b);
     if reason.len > 0 { refuse(i, reason); }
-    else if b.n >= CAP { refuse(i, "That flask is full."); }
+    else if b.n >= b.cap { refuse(i, "That flask is full."); }
     else if b.kind == Kind.Mystery && b.key != 0 {
         refuse(i, str("This mystery flask only takes ", COLOR_NAMES[b.key], "."));
     } else { refuse(i, "The colors must match."); }
@@ -499,15 +516,21 @@ fn process_taps() {
     }
 }
 
+// After a tool changes the board: what was known about the old one is void.
+fn board_changed() {
+    selected = -1;
+    won_at = -1.0;
+    lost_checked = false;
+    dead_end_waved = false;
+    if overlay == Overlay.Lose { overlay = Overlay.None; }
+}
+
 fn do_undo() {
     if history.len == 0 { say("Nothing to undo.", 1.5); return; }
     finish_animations();
     board = history.pop();
-    selected = -1;
     used.undo++;
-    won_at = -1.0;
-    lost_checked = false;
-    if overlay == Overlay.Lose { overlay = Overlay.None; }
+    board_changed();
     play(Sfx.Tool);
 }
 
@@ -521,17 +544,16 @@ fn do_restart() {
 }
 
 fn do_extra_bottle() {
-    if board.count >= MAX_BOTTLES || board.count >= 22 { say("No room for another flask.", 2.0); return; }
+    if board.count >= min(MAX_BOTTLES, MAX_ON_SCREEN) { say("No room for another flask.", 2.0); return; }
     finish_animations();
     add_empty_bottle(board);
     // The flask stays for this attempt, whatever is undone.
     for &h in history { add_empty_bottle(h); }
     used.extra++;
-    layout(board.count);
+    layout(board);
     complete_at[board.count - 1] = -10.0;
     burst(slots[board.count - 1].pos, 20, gold(1.0), 140.0);
-    lost_checked = false;
-    if overlay == Overlay.Lose { overlay = Overlay.None; }
+    board_changed();
     play(Sfx.Tool);
 }
 
@@ -539,12 +561,10 @@ fn do_shuffle() {
     finish_animations();
     var r = rng { random_seed() };
     let before = board;
-    if shuffle_board(board, r, 40, 30000) {
+    if shuffle_board(board, r, SHUFFLE_TRIES, SHUFFLE_BUDGET) {
         history.push(before);
         used.shuffle++;
-        selected = -1;
-        lost_checked = false;
-        if overlay == Overlay.Lose { overlay = Overlay.None; }
+        board_changed();
         for i in board.count { burst(slots[i].pos, 6, gold(0.8), 90.0); }
         play(Sfx.Reveal);
     } else {
@@ -555,15 +575,17 @@ fn do_shuffle() {
 
 fn do_hint() {
     finish_animations();
-    let m, ok = hint_move(board, 80000);
+    var path: Move[>..] = [];
+    let s = solve(board, HINT_BUDGET, path);
     used.hint++;
-    if !ok {
-        say("No winning path from here. Try Undo or another flask.", 3.0);
+    if !s.solved || path.len == 0 {
+        if s.exhausted { say("No winning path from here. Try Undo or another flask.", 3.0); }
+        else { say("No path found in time. Try Undo or another flask.", 3.0); }
         play(Sfx.Denied);
         return;
     }
-    hint_from = m.from;
-    hint_to = m.to;
+    hint_from = path[0].from;
+    hint_to = path[0].to;
     hint_until = now + 3.5;
     selected = -1;
     play(Sfx.Tool);
@@ -615,16 +637,20 @@ fn update_play(dt: f32) {
         play(Sfx.Win);
         confetti();
     }
-    if won_at < 0.0 && !lost_checked {
+    if won_at < 0.0 && !lost_checked && overlay == Overlay.None {
         lost_checked = true;
-        if is_lost(board) && overlay == Overlay.None {
+        // The solver only runs when the player is nearly cornered.
+        let stuck = is_lost(board);
+        let dead = !stuck && !dead_end_waved && cornered(board) && dead_end(board, DEAD_END_BUDGET);
+        if stuck || dead {
+            dead_end_shown = dead;
             overlay = Overlay.Lose;
             overlay_t = now;
             play(Sfx.Lose);
         }
     }
     if autoplay && overlay == Overlay.None && won_at < 0.0 && now > autoplay_next && taps.len == 0 {
-        let m, ok = hint_move(board, 80000);
+        let m, ok = hint_move(board, HINT_BUDGET);
         if ok {
             taps.push(m.from);
             taps.push(m.to);
@@ -640,14 +666,20 @@ fn update_play(dt: f32) {
 fn segment_center(half: float2, k: i64) -> float2 {
     let bottom = half.y - half.x * 0.16;
     let top = -half.y + half.x * 0.95 + half.x * 0.25;
-    let seg = (bottom - top) / 4.0;
+    let seg = half.x * 1.26;
     v2(0.0, bottom - (k + 0.5) * seg)
 }
 
 fn liquid_inst(b: Bottle, pos: float2, half: float2, angle: f32, fill: f32, hidden: f32, wave: f32) -> Inst {
-    var i = inst(K_LIQUID, pos, half, white(1.0));
-    i.p0 = float4 { b.seg[0], b.seg[1], b.seg[2], b.seg[3] };
-    i.p1 = float4 { fill, hidden, wave, 0.0 };
+    var i = inst(Shape.Liquid, pos, half, white(1.0));
+    // Two layers to a number: layer k, plus 16 times layer k + 4.
+    fn pair(k: i64) -> f32 {
+        let lo: i64 = b.seg[k];
+        let hi: i64 = b.seg[k + 4];
+        lo + 16 * hi
+    }
+    i.p0 = float4 { pair(0), pair(1), pair(2), pair(3) };
+    i.p1 = float4 { fill, hidden, wave, b.cap };
     i.misc.y = angle;
     i
 }
@@ -659,18 +691,18 @@ fn draw_flask(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: float2, ang
         glow(out, pos + v2(0.0, half.y * 0.98), v2(half.x * 1.3, half.x * 0.3), 0.9,
              float4 { 0.0, 0.0, 0.0, 0.45 });
     }
-    var back = inst(K_FLASK_BACK, pos, half, float4 { 0.10, 0.08, 0.16, 0.6 });
+    var back = inst(Shape.FlaskBack, pos, half, float4 { 0.10, 0.08, 0.16, 0.6 });
     back.misc.y = angle;
     out.push(back);
     let covered = overlays && b.active && (b.kind == Kind.Cloak || b.kind == Kind.Curtain || b.kind == Kind.Gift);
     let fogged = overlays && b.active && (b.kind == Kind.Cork || b.kind == Kind.Vault);
     if !covered {
-        let hidden: f32 = if fogged { 4.0 } else { b.hidden };
+        let hidden: f32 = if fogged { b.cap } else { b.hidden };
         if fill > 0.0 { out.push(liquid_inst(b, pos, half, angle, fill, hidden, wave)); }
     }
-    var glass = inst(K_GLASS, pos, half, float4 { 0.86, 0.92, 1.0, 1.0 });
+    var glass = inst(Shape.Glass, pos, half, float4 { 0.86, 0.92, 1.0, 1.0 });
     glass.misc.y = angle;
-    glass.misc.z = 14.0;
+    glass.misc.z = 18.0;
     glass.p0 = float4 { glow_amount, 0.0, 0.0, 0.0 };
     glass.p1 = glow_color;
     out.push(glass);
@@ -681,7 +713,7 @@ fn draw_flask(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: float2, ang
     if save.color_safe && !covered && !fogged {
         for k in b.n as i64 {
             if k < b.hidden { continue; }
-            var s = inst(K_SYMBOL, pos + segment_center(half, k), v2(half.x * 0.42, half.x * 0.42), white(0.95));
+            var s = inst(Shape.Symbol, pos + segment_center(half, k), v2(half.x * 0.42, half.x * 0.42), white(0.95));
             s.p0 = float4 { b.seg[k], 0.0, 0.0, 0.0 };
             out.push(s);
         }
@@ -705,7 +737,7 @@ fn draw_flask(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: float2, ang
     }
     if b.active {
         if kind == Kind.Frozen {
-            var ice = inst(K_ICE, pos + v2(0.0, half.x * 0.1), half + v2(half.x * 0.25, half.x * 0.2),
+            var ice = inst(Shape.Ice, pos + v2(0.0, half.x * 0.1), half + v2(half.x * 0.25, half.x * 0.2),
                            white(1.0));
             ice.p0 = float4 { i * 3.7, 0.0, 0.0, 0.0 };
             out.push(ice);
@@ -714,45 +746,45 @@ fn draw_flask(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: float2, ang
         } else if kind == Kind.Cloak {
             let c = palette_color(b.key, save.color_safe);
             let cloth_color = mix4(float4 { 0.36, 0.22, 0.45, 1.0 }, c, 0.35);
-            out.push(inst(K_CLOTH, pos + v2(0.0, half.x * 0.15), half + v2(half.x * 0.2, half.x * 0.15),
+            out.push(inst(Shape.Cloth, pos + v2(0.0, half.x * 0.15), half + v2(half.x * 0.2, half.x * 0.15),
                           cloth_color));
             let badge = pos + v2(0.0, half.y * 0.15);
             glow(out, badge, v2(half.x * 0.55, half.x * 0.55), 0.25, float4 { 0.0, 0.0, 0.0, 0.5 });
             glow(out, badge, v2(half.x * 0.42, half.x * 0.42), 0.2, c);
             ring(out, badge, half.x * 0.48, 2.5, gold(0.9));
             if save.color_safe {
-                var s = inst(K_SYMBOL, badge, v2(half.x * 0.3, half.x * 0.3), white(1.0));
+                var s = inst(Shape.Symbol, badge, v2(half.x * 0.3, half.x * 0.3), white(1.0));
                 s.p0 = float4 { b.key, 0.0, 0.0, 0.0 };
                 out.push(s);
             }
         } else if kind == Kind.Cork {
-            var cork = inst(K_CORK, neck, v2(half.x * 0.62, half.x * 0.5), white(1.0));
+            var cork = inst(Shape.Cork, neck, v2(half.x * 0.62, half.x * 0.5), white(1.0));
             cork.p1 = palette_color(b.key, save.color_safe);
             out.push(cork);
             if save.color_safe {
-                var s = inst(K_SYMBOL, neck, v2(half.x * 0.26, half.x * 0.26), white(1.0));
+                var s = inst(Shape.Symbol, neck, v2(half.x * 0.26, half.x * 0.26), white(1.0));
                 s.p0 = float4 { b.key, 0.0, 0.0, 0.0 };
                 out.push(s);
             }
         } else if kind == Kind.Vault {
             let c = palette_color(b.key, save.color_safe);
-            var bar = inst(K_RECT, pos - v2(0.0, half.y * 0.05), v2(half.x * 1.08, half.x * 0.13),
+            var bar = inst(Shape.Rect, pos - v2(0.0, half.y * 0.05), v2(half.x * 1.08, half.x * 0.13),
                            float4 { 0.55, 0.55, 0.62, 1.0 });
             bar.p0 = float4 { 3.0, 0.0, 0.0, 0.0 };
             out.push(bar);
-            out.push(inst(K_PADLOCK, pos + v2(0.0, half.y * 0.1), v2(half.x * 0.62, half.x * 0.72), c));
+            out.push(inst(Shape.Padlock, pos + v2(0.0, half.y * 0.1), v2(half.x * 0.62, half.x * 0.72), c));
             if save.color_safe {
-                var s = inst(K_SYMBOL, pos + v2(0.0, half.y * 0.18), v2(half.x * 0.24, half.x * 0.24), white(1.0));
+                var s = inst(Shape.Symbol, pos + v2(0.0, half.y * 0.18), v2(half.x * 0.24, half.x * 0.24), white(1.0));
                 s.p0 = float4 { b.key, 0.0, 0.0, 0.0 };
                 out.push(s);
             }
         } else if kind == Kind.Gift {
-            var box = inst(K_GIFT, pos + v2(0.0, half.y * 0.12), v2(half.x * 1.15, half.y * 0.8),
+            var box = inst(Shape.Gift, pos + v2(0.0, half.y * 0.12), v2(half.x * 1.15, half.y * 0.8),
                            float4 { 0.55, 0.2, 0.42, 1.0 });
             box.p1 = gold(1.0);
             out.push(box);
         } else if kind == Kind.Curtain {
-            var cur = inst(K_CURTAIN, pos, half + v2(half.x * 0.45, half.x * 0.2), float4 { 0.55, 0.12, 0.2, 1.0 });
+            var cur = inst(Shape.Curtain, pos, half + v2(half.x * 0.45, half.x * 0.2), float4 { 0.55, 0.12, 0.2, 1.0 });
             out.push(cur);
             glow(out, pos + v2(0.0, half.y * 0.25), v2(half.x * 0.7, half.x * 0.7), 0.4, float4 { 0.0, 0.0, 0.0, 0.5 });
             text_shadowed(0, pos.x, pos.y + half.y * 0.25, str(b.key), TextStyle.Heading, gold(1.0), Align.Center);
@@ -761,7 +793,7 @@ fn draw_flask(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: float2, ang
     }
     if b.done {
         let c = palette_color(b.seg[0], save.color_safe);
-        out.push(inst(K_SEAL, neck - v2(0.0, half.x * 0.1), v2(half.x * 0.55, half.x * 0.55), c));
+        out.push(inst(Shape.Seal, neck - v2(0.0, half.x * 0.1), v2(half.x * 0.55, half.x * 0.55), c));
     }
 }
 
@@ -769,12 +801,12 @@ fn draw_board(out: Inst[>..]&) {
     for k in shelf_count {
         let s = shelves[k];
         glow(out, v2(s.x, s.y + 16.0), v2(s.z * 1.02, 10.0), 0.9, float4 { 0.0, 0.0, 0.0, 0.4 });
-        var plank = inst(K_WOOD, v2(s.x, s.y), v2(s.z, 9.0), float4 { 0.45, 0.28, 0.16, 1.0 });
+        var plank = inst(Shape.Wood, v2(s.x, s.y), v2(s.z, 9.0), float4 { 0.45, 0.28, 0.16, 1.0 });
         plank.p0 = float4 { 3.0, 0.0, 0.0, 0.0 };
         out.push(plank);
     }
     // Flasks at rest first, then the ones moving, so those pass in front.
-    var moving: bool[24] = [false; 24];
+    var moving: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
     for a in pours { if a.active { moving[a.from] = true; } }
     for i in board.count {
         if moving[i] { continue; }
@@ -867,7 +899,7 @@ fn draw_pouring(out: Inst[>..]&, a: PourAnim) {
         let surface = target.y + segment_center(thalf, max(0, dst_fill - 1)).y - thalf.x * 0.6;
         let top = lip.y;
         let bottom = max(surface, top + 4.0);
-        var s = inst(K_STREAM, v2(lip.x, (top + bottom) * 0.5), v2(half.x * 0.16, (bottom - top) * 0.5),
+        var s = inst(Shape.Stream, v2(lip.x, (top + bottom) * 0.5), v2(half.x * 0.16, (bottom - top) * 0.5),
                      with_alpha(palette_color(a.color, save.color_safe), stream_a));
         s.p0 = float4 { a.from * 1.7, 0.0, 0.0, 0.0 };
         out.push(s);
@@ -891,7 +923,7 @@ fn button(out: Inst[>..]&, layer: i64, center: float2, half: float2, label: cons
     enabled && clicked(center, half)
 }
 
-fn round_button(out: Inst[>..]&, layer: i64, center: float2, r: f32, which: i64, label: const u8[:],
+fn round_button(out: Inst[>..]&, layer: i64, center: float2, r: f32, which: Icon, label: const u8[:],
                 badge: i64, enabled: bool) -> bool {
     let hover = in_rect(pointer, center, v2(r, r)) && enabled;
     glow(out, center + v2(0.0, 4.0), v2(r + 6.0, r + 6.0), 0.6, float4 { 0.0, 0.0, 0.0, 0.4 });
@@ -933,7 +965,7 @@ fn level_title() -> u8[>..] {
 
 fn draw_play(out: Inst[>..]&) {
     // Top bar.
-    if round_button(out, 0, v2(48.0, 52.0), 26.0, I_HOME, "", 0, true) {
+    if round_button(out, 0, v2(48.0, 52.0), 26.0, Icon.Home, "", 0, true) {
         screen_id = Screen.Home;
         finish_animations();
         play(Sfx.Tool);
@@ -954,11 +986,11 @@ fn draw_play(out: Inst[>..]&) {
     let gap: f32 = 96.0;
     let x0 = VW * 0.5 - gap * 2.0;
     let enabled = won_at < 0.0;
-    if round_button(out, 0, v2(x0, y), 32.0, I_UNDO, "Undo", used.undo, enabled && history.len > 0) { do_undo(); }
-    if round_button(out, 0, v2(x0 + gap, y), 32.0, I_RESTART, "Restart", used.restart, enabled) { do_restart(); }
-    if round_button(out, 0, v2(x0 + gap * 2.0, y), 32.0, I_SHUFFLE, "Shuffle", used.shuffle, enabled) { do_shuffle(); }
-    if round_button(out, 0, v2(x0 + gap * 3.0, y), 32.0, I_BOTTLE, "Flask", used.extra, enabled) { do_extra_bottle(); }
-    if round_button(out, 0, v2(x0 + gap * 4.0, y), 32.0, I_HINT, "Hint", used.hint, enabled) { do_hint(); }
+    if round_button(out, 0, v2(x0, y), 32.0, Icon.Undo, "Undo", used.undo, enabled && history.len > 0) { do_undo(); }
+    if round_button(out, 0, v2(x0 + gap, y), 32.0, Icon.Restart, "Restart", used.restart, enabled) { do_restart(); }
+    if round_button(out, 0, v2(x0 + gap * 2.0, y), 32.0, Icon.Shuffle, "Shuffle", used.shuffle, enabled) { do_shuffle(); }
+    if round_button(out, 0, v2(x0 + gap * 3.0, y), 32.0, Icon.Bottle, "Flask", used.extra, enabled) { do_extra_bottle(); }
+    if round_button(out, 0, v2(x0 + gap * 4.0, y), 32.0, Icon.Hint, "Hint", used.hint, enabled) { do_hint(); }
 
     if now < message_until {
         let a = clamp((message_until - now) * 2.0, 0.0, 1.0) as f32;
@@ -1031,9 +1063,11 @@ fn draw_overlay(out: Inst[>..]&) {
     } else if overlay == Overlay.Lose {
         let c = v2(VW * 0.5, VH * 0.45);
         panel(out, c, v2(210.0, 170.0));
-        text_shadowed(1, c.x, c.y - 120.0, "No Moves Left", TextStyle.Heading, gold(1.0), Align.Center);
-        text_wrapped(1, c.x, c.y - 70.0, 360.0, "Every flask is stuck. Retry the same board, or keep going with a tool.",
-                     TextStyle.Small, white(0.85));
+        let title = if dead_end_shown { "Dead End" } else { "No Moves Left" };
+        let why = if dead_end_shown { "Pours are left, but none of them can win this board. Retry, or keep going with a tool." }
+                  else { "Every flask is stuck. Retry the same board, or keep going with a tool." };
+        text_shadowed(1, c.x, c.y - 120.0, title, TextStyle.Heading, gold(1.0), Align.Center);
+        text_wrapped(1, c.x, c.y - 70.0, 360.0, why, TextStyle.Small, white(0.85));
         if button(out, 1, c + v2(0.0, 10.0), v2(140.0, 26.0), "Retry", float4 { 0.2, 0.55, 0.38, 1.0 }, true) {
             do_restart();
         }
@@ -1043,7 +1077,16 @@ fn draw_overlay(out: Inst[>..]&) {
         if button(out, 1, c + v2(75.0, 75.0), v2(68.0, 24.0), "+Flask", float4 { 0.35, 0.25, 0.5, 1.0 }, true) {
             do_extra_bottle();
         }
-        if button(out, 1, c + v2(0.0, 132.0), v2(68.0, 22.0), "Home", float4 { 0.3, 0.22, 0.4, 1.0 }, true) {
+        if dead_end_shown {
+            if button(out, 1, c + v2(-75.0, 132.0), v2(68.0, 22.0), "Home", float4 { 0.3, 0.22, 0.4, 1.0 }, true) {
+                screen_id = Screen.Home;
+                overlay = Overlay.None;
+            }
+            if button(out, 1, c + v2(75.0, 132.0), v2(68.0, 22.0), "Continue", float4 { 0.3, 0.22, 0.4, 1.0 }, true) {
+                dead_end_waved = true;
+                overlay = Overlay.None;
+            }
+        } else if button(out, 1, c + v2(0.0, 132.0), v2(68.0, 22.0), "Home", float4 { 0.3, 0.22, 0.4, 1.0 }, true) {
             screen_id = Screen.Home;
             overlay = Overlay.None;
         }
@@ -1080,13 +1123,13 @@ fn draw_overlay(out: Inst[>..]&) {
 fn title_flasks(out: Inst[>..]&, y: f32) {
     let colors: i64[5] = [1, 3, 5, 7, 9];
     for c, k in colors {
-        var b = Bottle { seg: [0; 4], .. };
+        var b = Bottle { seg: [0; 8], .. };
         let n = 4 - (k % 2);
         for s in n { b.seg[s] = ((c + s * 2) % 14 + 1) as u8; }
         b.n = n as u8;
         let x = VW * 0.5 + (k - 2) * 66.0;
         let bob = sin(now * 1.5 + k) as f32 * 4.0;
-        draw_flask(out, -1, b, v2(x, y + bob), bottle_half(20.0), 0.0, b.n, 0.4, 0.0, gold(1.0), false);
+        draw_flask(out, -1, b, v2(x, y + bob), bottle_half(20.0, CAP), 0.0, b.n, 0.4, 0.0, gold(1.0), false);
     }
 }
 
@@ -1094,7 +1137,7 @@ fn draw_home(out: Inst[>..]&) {
     text_shadowed(0, VW * 0.5, 120.0, "Alchemist's", TextStyle.Heading, gold(0.95), Align.Center);
     text_shadowed(0, VW * 0.5, 172.0, "Sort", TextStyle.Title, gold(1.0), Align.Center);
     title_flasks(out, 300.0);
-    var plank = inst(K_WOOD, v2(VW * 0.5, 373.0), v2(190.0, 9.0), float4 { 0.45, 0.28, 0.16, 1.0 });
+    var plank = inst(Shape.Wood, v2(VW * 0.5, 373.0), v2(190.0, 9.0), float4 { 0.45, 0.28, 0.16, 1.0 });
     plank.p0 = float4 { 3.0, 0.0, 0.0, 0.0 };
     out.push(plank);
 
@@ -1117,9 +1160,9 @@ fn draw_home(out: Inst[>..]&) {
     text(0, card.x, card.y + 145.0, "replay earlier levels with <", TextStyle.Tiny, white(0.55), Align.Center);
 
     let y: f32 = 800.0;
-    if round_button(out, 0, v2(VW * 0.5 - 120.0, y), 32.0, I_SEED, "Seed", 0, true) { screen_id = Screen.Seed; }
-    if round_button(out, 0, v2(VW * 0.5, y), 32.0, I_BOOK, "My Levels", 0, true) { open_files(); }
-    if round_button(out, 0, v2(VW * 0.5 + 120.0, y), 32.0, I_GEAR, "Settings", 0, true) { screen_id = Screen.Settings; }
+    if round_button(out, 0, v2(VW * 0.5 - 120.0, y), 32.0, Icon.Seed, "Seed", 0, true) { screen_id = Screen.Seed; }
+    if round_button(out, 0, v2(VW * 0.5, y), 32.0, Icon.Book, "My Levels", 0, true) { open_files(); }
+    if round_button(out, 0, v2(VW * 0.5 + 120.0, y), 32.0, Icon.Gear, "Settings", 0, true) { screen_id = Screen.Settings; }
     if now < message_until { text(0, VW * 0.5, 900.0, message, TextStyle.Small, white(0.85), Align.Center); }
 }
 
@@ -1152,7 +1195,7 @@ fn draw_settings(out: Inst[>..]&) {
         let p = v2(VW * 0.5 + (c - 7.5) * 26.0, 365.0);
         rect(out, p, v2(11.0, 11.0), 4.0, palette_color(c, save.color_safe));
         if save.color_safe {
-            var s = inst(K_SYMBOL, p, v2(8.0, 8.0), white(1.0));
+            var s = inst(Shape.Symbol, p, v2(8.0, 8.0), white(1.0));
             s.p0 = float4 { c, 0.0, 0.0, 0.0 };
             out.push(s);
         }
@@ -1327,9 +1370,9 @@ fn to_screen(insts: Inst[:]) {
     for &i in insts {
         i.pos = offset + i.pos * float2 { scale, scale };
         i.half = i.half * float2 { scale, scale };
-        let kind = (i.misc.x + 0.5) as! i64;
-        if kind == K_RECT || kind == K_WOOD { i.p0.x *= scale; i.p0.y *= scale; }
-        if kind == K_RING { i.p0.x *= scale; }
+        let shape = (i.misc.x + 0.5) as! i64;
+        if shape == shape_index(Shape.Rect) || shape == shape_index(Shape.Wood) { i.p0.x *= scale; i.p0.y *= scale; }
+        if shape == shape_index(Shape.Ring) { i.p0.x *= scale; }
         i.misc.z *= scale;
     }
 }
@@ -1348,7 +1391,7 @@ fn gather_input() {
 fn draw_frame(dt: f32) {
     var base: Inst[>..] = [];
     var top: Inst[>..] = [];
-    base.push(inst(K_BACKDROP, v2(VW * 0.5, VH * 0.5), v2(VW * 0.5 + 400.0, VH * 0.5 + 200.0), white(1.0)));
+    base.push(inst(Shape.Backdrop, v2(VW * 0.5, VH * 0.5), v2(VW * 0.5 + 400.0, VH * 0.5 + 200.0), white(1.0)));
     // Dust motes drifting in the candle light.
     for k in 14 {
         let fx = (k * 0.618034) % 1.0;
@@ -1375,6 +1418,20 @@ fn draw_frame(dt: f32) {
     end_text(0);
     flush_layer(overlay_layer, top, look, false);
     end_text(1);
+}
+
+// Whether this frame has anything moving or waiting on input soon.
+fn lively() -> bool {
+    if pending_load || any_pouring() || taps.len > 0 || clicks.len > 0 { return true; }
+    let d = gfx::mouse_delta();
+    if d.x != 0.0 || d.y != 0.0 || gfx::mouse_down(gfx::MOUSE_LEFT) { return true; }
+    if now - overlay_t < 0.6 || now < message_until || now < hint_until || autoplay { return true; }
+    if won_at >= 0.0 && now - won_at < 1.5 { return true; }
+    for p in particles { if p.life > 0.0 { return true; } }
+    for i in MAX_BOTTLES {
+        if now < shake_until[i] || now - complete_at[i] < 1.3 { return true; }
+    }
+    false
 }
 
 fn env_or(name: const u8[:], fallback: const u8[:], out: u8[>..]&) {
@@ -1465,6 +1522,9 @@ fn main() {
         update_particles(dt);
         draw_frame(dt);
         drawn++;
+        // When nothing moves, draw a few frames a second instead of sixty:
+        // with software rendering every frame costs real CPU.
+        if frames < 0 && !lively() { sleep_ms(70); }
         if drawn == frames { break; }
     }
     if shot.len > 0 {

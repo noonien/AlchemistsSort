@@ -61,7 +61,9 @@ fn init_text(dir: const u8[:]) -> bool {
         write_stderr(str("alchemists-sort: fonts not found in '", dir,
                          "', using the built-in font (set ALCHEMIST_SORT_DATA)\n"));
     }
-    for f in ALL_STYLES {
+    assert(ALL_STYLES.len == fonts.len);
+    for f, k in ALL_STYLES {
+        assert(style_index(f) == k);    // the list is in index order, every style once
         let size = style_size(f);
         let path = if style_is_title(f) { title[..] } else { body[..] };
         let have = if style_is_title(f) { have_title } else { have_body };

@@ -140,7 +140,7 @@ fn parse_level(text: const u8[:], board: Board&, info: LevelInfo&) -> u8[>..] {
             if ch == ' ' || ch == '-' || ch == '.' { continue; }
             let c = color_of_letter(ch);
             if c < 0 { fail("unknown color letter in liquid"); }
-            if n >= CAP { fail("a bottle holds at most 4 segments"); }
+            if n >= MAX_CAP { fail("a bottle holds at most 8 segments"); }
             b.seg[n] = c as u8;
             n++;
         }
@@ -153,7 +153,7 @@ fn parse_level(text: const u8[:], board: Board&, info: LevelInfo&) -> u8[>..] {
         c as u8
     }
     fn bottle_value() -> Bottle {
-        var b = Bottle { seg: [0; 4], .. };
+        var b = Bottle { seg: [0; 8], .. };
         if peek() == '"' {
             liquid(string(), b);
             return b;
@@ -167,7 +167,8 @@ fn parse_level(text: const u8[:], board: Board&, info: LevelInfo&) -> u8[>..] {
             let k = string();
             expect(':');
             if k == "liquid" { liquid(string(), b); }
-            else if k == "hidden" { b.hidden = clamp(number(), 0, CAP) as u8; }
+            else if k == "hidden" { b.hidden = clamp(number(), 0, MAX_CAP) as u8; }
+            else if k == "height" { b.cap = clamp(number(), 0, 99) as u8; }
             else if k == "kind" {
                 let name = string();
                 var found = false;
@@ -239,16 +240,17 @@ fn write_level(board: Board, info: LevelInfo, out: u8[>..]&) {
     format(out, "  \"bottles\": [\n");
     for i in board.count {
         let b = board.bottles[i];
-        var liq: u8[..4] = [];
+        var liq: u8[..8] = [];
         for k in b.n as i64 { liq.push(letter_of_color(b.seg[k])); }
         let kind = b.kind;
-        let plain = kind == Kind.Plain && b.hidden == 0;
+        let plain = kind == Kind.Plain && b.hidden == 0 && b.cap == CAP;
         if plain { format(out, "    \"", liq, "\""); }
         else {
             format(out, "    { ");
             if kind != Kind.Plain { format(out, "\"kind\": \"", kind_name(kind), "\", "); }
             format(out, "\"liquid\": \"", liq, "\"");
             if b.hidden > 0 { format(out, ", \"hidden\": ", b.hidden); }
+            if b.cap != CAP { format(out, ", \"height\": ", b.cap); }
             if kind == Kind.Cloak || kind == Kind.Cork || kind == Kind.Vault {
                 var k: u8[..1] = [];
                 k.push(letter_of_color(b.key));

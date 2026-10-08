@@ -13,6 +13,7 @@ struct SolveNode { board: Board, parent: i32, from: i8, to: i8, g: i32 }
 
 struct SolveStats {
     solved: bool = false,
+    exhausted: bool = false,// every reachable position was tried: no win exists
     expanded: i64 = 0,      // positions taken off the queue
     length: i64 = 0,        // moves in the solution found
 }
@@ -26,34 +27,42 @@ fn heuristic(board: Board) -> i64 {
         if b.n > 0 {
             h += 1;
             for k in 1..b.n as i64 { if b.seg[k] != b.seg[k - 1] { h += 1; } }
-            if b.n < CAP { h += 1; }
+            if b.n < b.cap { h += 1; }
         }
         h += b.hidden;
         if blocked(b) { h += 2; }
-        if b.kind == Kind.Mystery && b.n < CAP { h += 1; }
+        if b.kind == Kind.Mystery && b.n < b.cap { h += 1; }
     }
     max(0, h - board.colors)
 }
 
-// An empty bottle anything can be poured into; all of these are alike.
+// An empty bottle anything can be poured into; those of one height are alike.
 fn plain_empty(b: Bottle) -> bool { b.n == 0 && b.kind != Kind.Mystery && !blocked(b) && !b.done }
 
 // Pours worth trying from `board`, without ones that cannot lead anywhere new.
+// Leaving none out that could matter keeps a search that runs dry a proof
+// that the board cannot be won.
 fn useful_moves(board: Board, out: Move[>..]&) {
-    var first_empty = -1;
+    var first_empty: i64[MAX_CAP + 1] = [-1; MAX_CAP + 1];     // by height
+    var ice = false;
     for j in board.count {
-        if plain_empty(board.bottles[j]) { first_empty = j; break; }
+        let b = board.bottles[j];
+        if plain_empty(b) && first_empty[b.cap] < 0 { first_empty[b.cap] = j; }
+        if b.kind == Kind.Frozen && b.active { ice = true; }
     }
     for i in board.count {
         let src = board.bottles[i];
         if !can_pour_from(src) { continue; }
-        let whole = src.hidden == 0 && is_uniform(src);
+        // Moving a whole bottle to an empty one as tall only swaps the two,
+        // unless the pour is needed to count down the ice or the source is a
+        // mystery bottle, which keeps its color when emptied.
+        let whole = src.hidden == 0 && is_uniform(src) && src.kind != Kind.Mystery && !ice;
         for j in board.count {
             if i == j || !can_pour(board, i, j) { continue; }
             let dst = board.bottles[j];
             if plain_empty(dst) {
-                if j != first_empty { continue; }   // every empty bottle is the same
-                if whole { continue; }               // moving a whole bottle changes nothing
+                if j != first_empty[dst.cap] { continue; }  // every empty bottle this tall is the same
+                if whole && dst.cap == src.cap { continue; } // moving a whole bottle changes nothing
             }
             out.push(Move { i, j });
         }
@@ -95,7 +104,10 @@ fn solve(start: Board, budget: i64, path: Move[>..]&) -> SolveStats {
             queue.heap_push(((g + 4 * heuristic(next)) << 32) | id);
         }
     }
-    if goal < 0 { return stats; }
+    if goal < 0 {
+        stats.exhausted = queue.len == 0 && stats.expanded <= budget;
+        return stats;
+    }
     var at = goal;
     while nodes[at].parent >= 0 {
         path.push(Move { nodes[at].from, nodes[at].to });
@@ -105,6 +117,24 @@ fn solve(start: Board, budget: i64, path: Move[>..]&) -> SolveStats {
     stats.solved = true;
     stats.length = path.len;
     stats
+}
+
+// Whether `board` is proven to have no way to win, searching at most
+// `budget` positions; false when it can be won or the search ran out first.
+fn dead_end(board: Board, budget: i64) -> bool {
+    var path: Move[>..] = [];
+    solve(board, budget, path).exhausted
+}
+
+// Few pours left and no empty bottle to work with: where boards go dead, and
+// where proving it takes little search. Cheap enough to ask after every pour.
+fn cornered(board: Board) -> bool {
+    var pours = 0;
+    for i in board.count {
+        if plain_empty(board.bottles[i]) { return false; }
+        for j in board.count { if can_pour(board, i, j) { pours++; } }
+    }
+    pours <= 2
 }
 
 fn solvable(start: Board, budget: i64) -> bool {
