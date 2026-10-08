@@ -28,6 +28,7 @@ struct Corner { c: float2 }
 struct Look {
     palette: float4[16],
     screen: float4,     // width, height, time, color-blind on
+    light: float4,      // the room's candlelight: color, flicker 0..1
 }
 
 
@@ -132,4 +133,42 @@ fn ring(out: Inst[>..]&, center: float2, r: f32, thickness: f32, color: float4) 
 
 fn spark(out: Inst[>..]&, center: float2, r: f32, color: float4) {
     out.push(inst(Shape.Spark, center, float2 { r, r }, color));
+}
+
+// A shape drawn along the quadratic curve a-ctrl-b (Stream, Beam): the
+// instance covers the curve's box and holds the points relative to it.
+fn curve(out: Inst[>..]&, shape: Shape, a: float2, ctrl: float2, b: float2, width: f32, last: f32, color: float4) {
+    let lo = float2 { min(min(a.x, b.x), ctrl.x), min(min(a.y, b.y), ctrl.y) };
+    let hi = float2 { max(max(a.x, b.x), ctrl.x), max(max(a.y, b.y), ctrl.y) };
+    let c = float2 { (lo.x + hi.x) * 0.5, (lo.y + hi.y) * 0.5 };
+    let margin = width * 3.0 + 2.0;
+    var i = inst(shape, c, float2 { (hi.x - lo.x) * 0.5 + margin, (hi.y - lo.y) * 0.5 + margin }, color);
+    i.p0 = float4 { a.x - c.x, a.y - c.y, ctrl.x - c.x, ctrl.y - c.y };
+    i.p1 = float4 { b.x - c.x, b.y - c.y, width, last };
+    out.push(i);
+}
+
+fn candle(out: Inst[>..]&, base: float2, height: f32, seed: f32) {
+    let w: f32 = 12.0;
+    var i = inst(Shape.Candle, base - float2 { 0.0, height * 0.5 }, float2 { w, height * 0.5 }, rgba(1.0, 1.0, 1.0, 1.0));
+    i.p0 = float4 { seed, 0.0, 0.0, 0.0 };
+    i.misc.z = 14.0;
+    out.push(i);
+}
+
+// Turns an instance's lengths in canvas units into pixels, in place: its
+// position and size, and the parameters that are lengths.
+fn scale_inst(i: Inst&, scale: f32, offset: float2) {
+    i.pos = offset + i.pos * float2 { scale, scale };
+    i.half = i.half * float2 { scale, scale };
+    let shape = (i.misc.x + 0.5) as! i64;
+    if shape == shape_index(Shape.Rect) || shape == shape_index(Shape.Wood) { i.p0.x *= scale; i.p0.y *= scale; }
+    if shape == shape_index(Shape.Ring) { i.p0.x *= scale; }
+    if shape == shape_index(Shape.Stream) || shape == shape_index(Shape.Beam) {
+        i.p0 = i.p0 * float4 { scale, scale, scale, scale };
+        i.p1.x *= scale;
+        i.p1.y *= scale;
+        i.p1.z *= scale;
+    }
+    i.misc.z *= scale;
 }

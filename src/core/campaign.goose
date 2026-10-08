@@ -148,3 +148,32 @@ fn seed_spec(seed: u64, like: i64) -> LevelSpec {
     let d = difficulty_of(n);
     LevelSpec { number: n, difficulty: d, file: [], params: params_for(n, d, seed), seed: seed }
 }
+
+// --- chapters ------------------------------------------------------------------
+
+// Six rooms of 15 levels each, then the endless Great Work. `theme` picks the
+// workbench scene (0..5 the rooms; 6 the Great Work, which cycles through
+// them). `last` is -1 for the Great Work, which never ends.
+struct Chapter { name: const u8[:], first: i64, last: i64, theme: i64 }
+
+let CHAPTERS: const Chapter[7] = [
+    Chapter { name: "The Apothecary", first: 1, last: 15, theme: 0 },
+    Chapter { name: "The Frost Cellar", first: 16, last: 30, theme: 1 },
+    Chapter { name: "The Glassworks", first: 31, last: 45, theme: 2 },
+    Chapter { name: "The Observatory", first: 46, last: 60, theme: 3 },
+    Chapter { name: "The Greenhouse", first: 61, last: 75, theme: 4 },
+    Chapter { name: "The Athanor", first: 76, last: 90, theme: 5 },
+    Chapter { name: "The Great Work", first: 91, last: -1, theme: 6 },
+];
+
+fn chapter_count() -> i64 { CHAPTERS.len }
+
+// The chapter (an index for chapter_info) that level n belongs to.
+fn chapter_of(level: i64) -> i64 {
+    for c, i in CHAPTERS {
+        if c.last < 0 || level <= c.last { return i; }
+    }
+    CHAPTERS.len - 1
+}
+
+fn chapter_info(i: i64) -> Chapter { CHAPTERS[clamp(i, 0, CHAPTERS.len - 1)] }
