@@ -17,7 +17,7 @@ struct GenParams {
     seal: i64 = 0,
     rime: i64 = 0,
     tall: i64 = 0,          // tall flasks, each with one color dealt to fill it
-    tall_height: i64 = 6,   // their height, CAP + 1 to MAX_CAP
+    tall_rows: i64 = 2,     // the rows each spans: its height is tall_cap(tall_rows)
     brazier: i64 = 0,       // next to something heat changes, where there is one
     quicksilver: bool = false,  // one color is quicksilver
     siphon: i64 = 0,
@@ -149,7 +149,7 @@ fn deal(p: GenParams, r: rng&) -> Board {
     }
     // A tall flask comes with the extra share of its color already in it;
     // the color's other CAP segments are in the deal like any other's.
-    let tall = clamp(p.tall_height, CAP + 1, MAX_CAP);
+    let tall = tall_cap(clamp(p.tall_rows, 2, 3));
     var tall_color: bool[MAX_COLORS + 1] = [false; MAX_COLORS + 1];
     for k in talls {
         var free: bool[MAX_COLORS + 1] = [false; MAX_COLORS + 1];
@@ -384,7 +384,7 @@ fn attempt_params(p: GenParams, attempt: i64) -> GenParams {
         plain.vine = false;
     }
     if attempt >= 300 {
-        plain = GenParams { colors: max(3, p.colors - 1), empties: 2, tall: p.tall, tall_height: p.tall_height };
+        plain = GenParams { colors: max(3, p.colors - 1), empties: 2, tall: p.tall, tall_rows: p.tall_rows };
     }
     plain
 }

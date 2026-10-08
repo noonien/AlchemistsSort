@@ -648,7 +648,13 @@ fn finish_hint() {
 }
 
 fn next_after_win() {
-    if mode == PlayMode.Campaign { start_campaign(level_number + 1); }
+    let ch = chapter_info(chapter_of(level_number));
+    if mode == PlayMode.Campaign && level_number == ch.last {
+        // A chapter's finale: on to the next room, on the map.
+        overlay = Overlay.None;
+        open_map_at(level_number + 1);
+    }
+    else if mode == PlayMode.Campaign { start_campaign(level_number + 1); }
     else if mode == PlayMode.Seed { start_seed(play_seed + 1, play_like); }
     else { screen_id = Screen.Home; overlay = Overlay.None; }
 }
@@ -1091,7 +1097,8 @@ fn level_title() -> u8[>..] {
 fn draw_play(out: Inst[>..]&) {
     // Top bar.
     if round_button(out, 0, v2(48.0, 52.0), 26.0, Icon.Home, "", 0, true) {
-        screen_id = Screen.Home;
+        if mode == PlayMode.Campaign { open_map_at(level_number); } else { screen_id = Screen.Home; }
+        overlay = Overlay.None;
         finish_animations();
         play(Sfx.Tool);
     }
@@ -1500,7 +1507,7 @@ fn main() {
                 alchemists-sort [--level N] [--seed S [--like L]] [--hand K] [--autoplay]
                   --level N      play campaign level N
                   --seed S       play the board brewed from seed S, shaped like level L (default 20)
-                  --hand K       play built-in hand-made level K (0 to 9; levels.goose)
+                  --hand K       play built-in hand-made level K (0 to 24; levels.goose)
                   --autoplay     let the hint solver play
                 """);
             return;

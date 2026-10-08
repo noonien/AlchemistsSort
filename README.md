@@ -11,7 +11,7 @@ from this repo's Nix flake.
 nix run                                   # play
 nix run . -- --level 26                   # jump to a campaign level
 nix run . -- --seed 4242 --like 30        # the board brewed from a seed
-nix run . -- --hand 8                     # a built-in hand-made level (see src/core/levels.goose)
+nix run . -- --hand 8                     # built-in hand-made level 8 of 0-24 (src/core/levels.goose)
 nix run . -- --autoplay                   # watch the hint solver play
 nix flake check                           # unit tests
 ```
@@ -71,22 +71,25 @@ them:
 
 `Esc` goes back.
 
-Levels are numbered and get harder: more colors, more murk, more modifiers.
-Every 5th level is **Hard** and every 10th is **Super Hard**. Each modifier is
-introduced in its own tutorial level before it appears anywhere else. The
-rules of every modifier, and how they meet through heat, light, flow, flip,
-growth and transmutation, are in [docs/revamp.md](docs/revamp.md); the
-campaign still uses the first ones:
+The campaign is six chapters of 15 levels, then the endless Great Work.
+In each chapter, levels 5 and 10 are **Hard** and 15 is a hand-made **Super
+Hard** finale that combines the chapter's modifiers with earlier ones. Each
+modifier is taught in its own hand-made tutorial, then shows up in every
+level until the next tutorial, alongside one or two from earlier chapters.
+Murk is the background of every level from 3 on, and from level 12 every
+fourth level has a Tall Flask. The rules of every modifier, and how they meet
+through heat, light, flow, flip, growth and transmutation, are in
+[docs/revamp.md](docs/revamp.md).
 
-| Level | Modifier | Rule |
+| Chapter | Levels | New (tutorial level) |
 |---|---|---|
-| 4 | Murk | Segments under smoke show as `?` until they reach the top or light reaches them |
-| 8 | Split color | One color starts spread over two flasks |
-| 13 | Vow flask | Takes the first color poured in, then only that color; must end full |
-| 17 | Shroud | Hidden and shut until the lantern next to it lights |
-| 21 | Rime | Shut until N more pours have been made anywhere (heat melts it faster) |
-| 26 | Seal | Pour the seal's color onto it to break it; the liquid lands inside |
-| 46 | Tall flask | A taller flask (5 to 8 layers); one color comes in enough to fill it |
+| The Apothecary | 1–15 | Murk (3), Seal (6), Tall Flask (8), Vow Flask (11) |
+| The Frost Cellar | 16–30 | Rime (18), Brazier (21), Quicksilver (26) |
+| The Glassworks | 31–45 | Siphon (33), Twin Flasks (36) |
+| The Observatory | 46–60 | Lantern (48), Shroud (51), Hourglass (56) |
+| The Greenhouse | 61–75 | Creeping Vine (63), Salamander (66), Moonpetal (71) |
+| The Athanor | 76–90 | Athanor (78), Philosopher's Drop (81), Catalyst (86) |
+| The Great Work | 91+ | three or four modifiers from everything |
 
 Settings has sound, a color-blind palette that adds a symbol to every color,
 and a progress reset. Progress is saved in
