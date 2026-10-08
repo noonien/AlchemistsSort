@@ -5,38 +5,25 @@
 import std;
 import .board;
 import .generator;
-import .level_io;
 
-// Obstacle "features", in the order they are introduced.
-enum Feature { Hidden, Split, Mystery, Cloak, Frozen, Cork, Vault, Curtain, Gift, Long }
+import .levels;
 
-let ALL_FEATURES: const Feature[10] = [Feature.Hidden, Feature.Split, Feature.Mystery, Feature.Cloak,
-                                       Feature.Frozen, Feature.Cork, Feature.Vault, Feature.Curtain,
-                                       Feature.Gift, Feature.Long];
+// Modifier "features", in the order they are introduced.
+enum Feature { Murk, Split, Vow, Shroud, Rime, Seal, Tall }
+
+let ALL_FEATURES: const Feature[7] = [Feature.Murk, Feature.Split, Feature.Vow, Feature.Shroud, Feature.Rime,
+                                      Feature.Seal, Feature.Tall];
 
 // The level that teaches each feature (none is a multiple of 5, which are
-// the Hard and Super Hard levels).
+// the Hard and Super Hard levels). Its board is in levels.goose.
 fn tutorial_level(f: Feature) -> i64 {
-    match f {
-        Hidden => 4, Split => 8, Mystery => 13, Cloak => 17, Frozen => 21, Cork => 26, Vault => 31,
-        Curtain => 36, Gift => 41, Long => 46,
-    }
-}
-
-fn tutorial_file(f: Feature) -> const u8[:] {
-    match f {
-        Hidden => "04_hidden_layers", Split => "08_split_color", Mystery => "13_mystery_bottle",
-        Cloak => "17_cloaked_bottle", Frozen => "21_frozen_bottle", Cork => "26_corked_bottle",
-        Vault => "31_locked_vaults", Curtain => "36_curtain", Gift => "41_gift_box",
-        Long => "46_long_flask",
-    }
+    match f { Murk => 4, Split => 8, Vow => 13, Shroud => 17, Rime => 21, Seal => 26, Tall => 46 }
 }
 
 fn feature_name(f: Feature) -> const u8[:] {
     match f {
-        Hidden => "Hidden Layers", Split => "Split Color", Mystery => "Mystery Flask",
-        Cloak => "Cloaked Flask", Frozen => "Frozen Flask", Cork => "Corked Flask",
-        Vault => "Locked Vault", Curtain => "Curtain", Gift => "Gift Box", Long => "Long Flask",
+        Murk => "Murk", Split => "Split Color", Vow => "Vow Flask", Shroud => "Shroud", Rime => "Rime",
+        Seal => "Seal", Tall => "Tall Flask",
     }
 }
 
@@ -44,8 +31,8 @@ struct LevelSpec {
     number: i64,
     difficulty: Difficulty,
     is_tutorial: bool = false,
-    tutorial: Feature = Feature.Hidden,     // the feature it teaches, when is_tutorial
-    file: u8[..48],             // a hand-made level to load, if any
+    tutorial: Feature = Feature.Murk,       // the feature it teaches, when is_tutorial
+    hand_made: bool = false,    // the board is levels.goose's for this number
     params: GenParams,
     seed: u64,
 }
@@ -70,20 +57,20 @@ fn params_for(level: i64, difficulty: Difficulty, seed: u64) -> GenParams {
     p.colors = clamp(colors, 3, 12);
     p.empties = 2;
     p.partial = r.rand_int(p.colors / 2 + 1);
-    if introduced(Feature.Hidden, level) {
-        p.hidden = match difficulty {
+    if introduced(Feature.Murk, level) {
+        p.murk = match difficulty {
             SuperHard => 3 + r.rand_int(3),
             Hard => 2 + r.rand_int(2),
             Normal => r.rand_int(3),
         };
-        p.hidden = min(p.hidden, p.colors - 1);
+        p.murk = min(p.murk, p.colors - 1);
     }
     p.split = introduced(Feature.Split, level) && r.rand_int(3) == 0;
-    // Mechanical obstacles: none to two of those introduced so far, with the
+    // Mechanical modifiers: none to two of those introduced so far, with the
     // newest one favored for the few levels after its tutorial.
     var pool: Feature[>..] = [];
     for f in ALL_FEATURES {
-        if f == Feature.Hidden || f == Feature.Split || !introduced(f, level) { continue; }
+        if f == Feature.Murk || f == Feature.Split || !introduced(f, level) { continue; }
         pool.push(f);
         if level - tutorial_level(f) < 4 { pool.push(f); pool.push(f); }
     }
@@ -92,7 +79,7 @@ fn params_for(level: i64, difficulty: Difficulty, seed: u64) -> GenParams {
         Hard => 1,
         Normal => if r.rand_int(10) < 4 { 1 } else { 0 },
     };
-    var chosen: Feature[..10] = [];
+    var chosen: Feature[..7] = [];
     while wanted > 0 && pool.len > 0 {
         let f = pool[r.rand_int(pool.len)];
         if contains(chosen, f) {
@@ -106,18 +93,15 @@ fn params_for(level: i64, difficulty: Difficulty, seed: u64) -> GenParams {
     }
     for f in chosen {
         match f {
-            Mystery => { p.mystery = 1; },
-            Cloak => { p.cloak = 1 + r.rand_int(2); },
-            Frozen => { p.frozen = 1 + r.rand_int(2); },
-            Cork => { p.cork = 1 + r.rand_int(2); },
-            Vault => { p.vault = 1 + r.rand_int(2); },
-            Curtain => { p.curtain = 1; },
-            Gift => { p.gift = 1 + r.rand_int(2); },
-            Long => {
-                p.long = 1;
-                p.long_height = CAP + 1 + r.rand_int(MAX_CAP - CAP);
+            Vow => { p.vow = 1; },
+            Shroud => { p.shroud = 1 + r.rand_int(2); },
+            Rime => { p.rime = 1 + r.rand_int(2); },
+            Seal => { p.seal = 1 + r.rand_int(2); },
+            Tall => {
+                p.tall = 1;
+                p.tall_height = CAP + 1 + r.rand_int(MAX_CAP - CAP);
             },
-            Hidden, Split => {},
+            Murk, Split => {},
         }
     }
     p.budget = 40000;
@@ -126,15 +110,16 @@ fn params_for(level: i64, difficulty: Difficulty, seed: u64) -> GenParams {
 
 fn level_spec(level: i64) -> LevelSpec {
     let n = max(1, level);
-    var spec = LevelSpec { number: n, difficulty: difficulty_of(n), file: [], params: GenParams {},
-                           seed: level_seed(n) };
-    if n == 1 { spec.file.append("01_first_pour"); spec.difficulty = Difficulty.Normal; }
+    var spec = LevelSpec { number: n, difficulty: difficulty_of(n), params: GenParams {}, seed: level_seed(n) };
+    let h, made = campaign_hand_made(n);
+    if made {
+        spec.hand_made = true;
+        spec.difficulty = h.info.difficulty;
+    }
     for f in ALL_FEATURES {
         if tutorial_level(f) == n {
             spec.is_tutorial = true;
             spec.tutorial = f;
-            spec.file.append(tutorial_file(f));
-            spec.difficulty = Difficulty.Normal;
         }
     }
     spec.params = params_for(n, spec.difficulty, spec.seed);
@@ -142,9 +127,9 @@ fn level_spec(level: i64) -> LevelSpec {
 }
 
 // A board for a custom seed, shaped like level `like` (its colors and
-// whichever obstacles are introduced by then).
+// whichever modifiers are introduced by then).
 fn seed_spec(seed: u64, like: i64) -> LevelSpec {
     let n = max(1, like);
     let d = difficulty_of(n);
-    LevelSpec { number: n, difficulty: d, file: [], params: params_for(n, d, seed), seed: seed }
+    LevelSpec { number: n, difficulty: d, params: params_for(n, d, seed), seed: seed }
 }

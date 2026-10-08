@@ -5,11 +5,12 @@ import std;
 import .board;
 import .solver;
 
-// Visible liquid that a shuffle may move: in bottles with no obstacle on
-// them, not sealed, not a mystery bottle (whose color is fixed once chosen),
-// and above any "?" layers.
+// Visible liquid that a shuffle may move: in bottles with no cover on
+// them, not sealed, not a vow (whose color is fixed once chosen), clear of
+// murk, and not quicksilver (which has to stay sunk) or the Drop.
 fn shuffle_slot(b: Bottle, k: i64) -> bool {
-    !b.done && !blocked(b) && b.kind != Kind.Mystery && k >= b.hidden && k < b.n
+    k < b.n && !b.done && !covered(b) && b.body != Body.Vow && !murky(b, k) &&
+        b.seg[k] != QUICKSILVER && b.seg[k] != DROP
 }
 
 // Re-deals the visible liquid among the same slots, keeping every bottle's
@@ -37,7 +38,7 @@ fn shuffle_board(board: Board&, r: rng&, tries: i64, budget: i64) -> bool {
             }
         }
         // Bottles the deal happened to complete are sealed as usual.
-        for i in trial.count { let d, l = seal_if_complete(trial, i); }
+        seal_complete(trial);
         if is_won(trial) { continue; }
         if solve(trial, budget, path).solved {
             board = trial;

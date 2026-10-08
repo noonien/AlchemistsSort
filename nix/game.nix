@@ -27,7 +27,6 @@ stdenv.mkDerivation {
     runHook preInstall
     mkdir -p $out/bin $out/libexec $out/${data}/fonts
     cp alchemists-sort $out/libexec/
-    cp -r data/levels $out/${data}/levels
     cp ${cinzel}/share/fonts/truetype/Cinzel-Bold.ttf $out/${data}/fonts/
     cp ${goose.source}/third_party/nuklear/extra_font/Raleway-Bold.ttf $out/${data}/fonts/
     makeWrapper $out/libexec/alchemists-sort $out/bin/alchemists-sort \

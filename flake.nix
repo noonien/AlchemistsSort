@@ -20,7 +20,7 @@
       # nothing.
       src = nixpkgs.lib.fileset.toSource {
         root = ./.;
-        fileset = nixpkgs.lib.fileset.unions [ ./src ./data ./web ];
+        fileset = nixpkgs.lib.fileset.unions [ ./src ./web ];
       };
     in {
       packages = forAll (system: pkgs:

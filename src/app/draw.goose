@@ -26,7 +26,7 @@ struct Corner { c: float2 }
 
 // The fragment shader's uniform block: the palette and a little state.
 struct Look {
-    palette: float4[16],
+    palette: float4[20],     // the liquids by number; 19 is murk
     screen: float4,     // width, height, time, color-blind on
 }
 

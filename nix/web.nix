@@ -53,7 +53,6 @@ stdenv.mkDerivation {
     done
 
     mkdir -p site/data/fonts
-    cp -r data/levels site/data/levels
     cp ${cinzel}/share/fonts/truetype/Cinzel-Bold.ttf site/data/fonts/
     cp ${gs}/third_party/nuklear/extra_font/Raleway-Bold.ttf site/data/fonts/
     chmod -R u+w site

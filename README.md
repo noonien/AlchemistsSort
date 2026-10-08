@@ -11,7 +11,7 @@ from this repo's Nix flake.
 nix run                                   # play
 nix run . -- --level 26                   # jump to a campaign level
 nix run . -- --seed 4242 --like 30        # the board brewed from a seed
-nix run . -- --file my_level.json         # a hand-made level
+nix run . -- --hand 8                     # a built-in hand-made level (see src/core/levels.goose)
 nix run . -- --autoplay                   # watch the hint solver play
 nix flake check                           # unit tests
 ```
@@ -69,26 +69,24 @@ them:
 | Extra flask | `F` | One more empty flask, for this attempt |
 | Hint | `H` | Highlight the solver's next move |
 
-`E` saves the current board to your levels folder as a level file. `Esc`
-goes back.
+`Esc` goes back.
 
-Levels are numbered and get harder: more colors, more hidden layers, more
-obstacles. Every 5th level is **Hard** and every 10th is **Super Hard**. Each
-obstacle is introduced in its own tutorial level before it appears anywhere
-else:
+Levels are numbered and get harder: more colors, more murk, more modifiers.
+Every 5th level is **Hard** and every 10th is **Super Hard**. Each modifier is
+introduced in its own tutorial level before it appears anywhere else. The
+rules of every modifier, and how they meet through heat, light, flow, flip,
+growth and transmutation, are in [docs/revamp.md](docs/revamp.md); the
+campaign still uses the first ones:
 
-| Level | Obstacle | Rule |
+| Level | Modifier | Rule |
 |---|---|---|
-| 4 | Hidden layers | Segments under the top show as `?` until uncovered |
+| 4 | Murk | Segments under smoke show as `?` until they reach the top or light reaches them |
 | 8 | Split color | One color starts spread over two flasks |
-| 13 | Mystery flask | Takes the first color poured in, then only that color; must end full |
-| 17 | Cloaked flask | Hidden and shut until a flask of the badge's color is completed |
-| 21 | Frozen flask | Shut until N more pours have been made anywhere |
-| 26 | Corked flask | Pour the cork's color onto it to pop it; the liquid lands inside |
-| 31 | Locked vault | Like a cork, with a padlock; one vault can hold the next one's key |
-| 36 | Curtain | A hidden flask that appears once enough flasks stand empty |
-| 41 | Gift box | Opens on any pour, which lands on the mixed flask inside |
-| 46 | Long flask | A taller flask (5 to 8 layers); one color comes in enough to fill it |
+| 13 | Vow flask | Takes the first color poured in, then only that color; must end full |
+| 17 | Shroud | Hidden and shut until the lantern next to it lights |
+| 21 | Rime | Shut until N more pours have been made anywhere (heat melts it faster) |
+| 26 | Seal | Pour the seal's color onto it to break it; the liquid lands inside |
+| 46 | Tall flask | A taller flask (5 to 8 layers); one color comes in enough to fill it |
 
 Settings has sound, a color-blind palette that adds a symbol to every color,
 and a progress reset. Progress is saved in
@@ -97,51 +95,15 @@ and a progress reset. Progress is saved in
 
 ## Adding levels
 
-Levels are JSON. Put your own in `~/.local/share/alchemists-sort/levels/` and
-they show up under **My Levels**. You can also play one directly with
-`--file`.
-
-```json
-{
-  "name": "First Frost",
-  "difficulty": "hard",
-  "hint": "Shown when the level starts.",
-  "bottles": [
-    "RRGB",
-    { "liquid": "GGBR", "hidden": 3 },
-    { "kind": "frozen", "liquid": "BRGG", "thaw": 4 },
-    { "kind": "cork",   "liquid": "YY",   "key": "Y" },
-    { "liquid": "VV", "height": 6 },
-    "VVVV",
-    ""
-  ]
-}
-```
-
-- **Liquid** is written bottom to top, one letter per segment, as many as the
-  flask's height. `""` is an empty flask. Every color used must appear exactly
-  4 times, or as many times as a long flask is tall, one color per long flask.
-- **Colors:** `R` ruby, `O` amber, `Y` sun, `L` lime, `G` emerald, `C` sky,
-  `B` sapphire, `V` violet, `K` rose, `N` umber, `W` pearl, `S` slate, `T`
-  teal, `A` olive.
-- **Kinds:** `plain` (the default), `mystery`, `cloak` (`key`), `frozen`
-  (`thaw`), `cork` (`key`), `vault` (`key`), `curtain` (`empties`), `gift`.
-- **`hidden`** is how many of the lowest segments start as `?`.
-- **`height`** makes a long flask, 5 to 8 segments tall (4 by default). It
-  works with any kind.
-- **`difficulty`** is `normal`, `hard` or `super hard` and only sets the
-  label.
-
-The game checks a level's structure when it loads it. To check that a level
-can actually be won, drop it into `data/levels/examples/` and run the tests:
-every shipped level is solved as part of `nix flake check`.
-
-The campaign's tutorials are in `data/levels/tutorial/`. A file
-`data/levels/campaign/<n>.json` replaces generated level `n` with a hand-made
-one. Generated levels come from `src/core/campaign.goose` (what each level
-asks for) and `src/core/generator.goose`, which deals a random board, adds
-the obstacles and keeps the deal only if the solver can win it. A seed plus
-a level shape always gives the same board.
+Every shipped level is built in: the tutorials and examples are written in
+Goose in `src/core/levels.goose`, in a compact form close to how a level
+reads (`flask("GGBR").under_murk(3)`, `flask("BRGG").rime(4)`, ...); the
+comment at the top of that file describes it. Generated levels come from
+`src/core/campaign.goose` (what each level asks for) and
+`src/core/generator.goose`, which deals a random board, adds the modifiers
+and keeps the deal only if the solver can win it. A seed plus a level shape
+always gives the same board. Every hand-made level is checked and solved by
+the tests.
 
 ## Code layout
 
@@ -151,17 +113,16 @@ nix/goose.nix           goose + its vendored SDL3/TinyCC/Nuklear/Box3D, set up f
 nix/game.nix            native build of the game, with its levels and fonts
 nix/tests.nix           the unit tests, for `nix flake check`
 src/core/               the rules, with no drawing or input
-  board.goose           bottles, pours, every obstacle, win and loss
+  board.goose           bottles, pours, every modifier, win and loss
   solver.goose          weighted A*, used by the generator, shuffle and hints
   generator.goose       seeded level generation
   campaign.goose        level numbers, tutorials, difficulty ramp
-  level_io.goose        the JSON level format, read and write
+  levels.goose          the hand-made levels, built in
   tools.goose           shuffle and hint
 src/app/                rendering, text, sound, saving
   draw.goose            one instanced pipeline; all art is signed distance fields in its shader
 src/main.goose          screens, input, animation
 src/tests.goose         unit tests
-data/levels/            tutorial and example levels
 ```
 
 The art and sounds are original and procedural: shapes drawn in a shader and

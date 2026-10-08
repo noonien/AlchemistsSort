@@ -3,7 +3,7 @@
 //   goose src/main.goose                       play (in-process)
 //   goose src/main.goose -- --level 12         jump to a campaign level
 //   goose src/main.goose -- --seed 99 --like 30
-//   goose src/main.goose -- --file my.json     play a hand-made level
+//   goose src/main.goose -- --hand 8           play built-in hand-made level 8
 //
 // The rules live in core/ and know nothing of drawing; this file is the
 // game around them: screens, input, animation and the board's pictures.
@@ -17,7 +17,7 @@ import ui;
 import core.board;
 import core.solver;
 import core.generator;
-import core.level_io;
+import core.levels;
 import core.tools;
 import core.campaign;
 import app.draw;
@@ -31,12 +31,12 @@ import app.save;
 let VW: f32 = 540.0;
 let VH: f32 = 960.0;
 
-enum Screen { Home, Play, Settings, Seed, Files }
+enum Screen { Home, Play, Settings, Seed }
 
 // What covers the board, if anything.
 enum Overlay { None, Win, Lose, Intro, Reset, Brewing }
 
-enum PlayMode { Campaign, Seed, File }
+enum PlayMode { Campaign, Seed, Hand }
 
 // Solver positions each use may search.
 let HINT_BUDGET = 80000;        // a hint, or a move in autoplay
@@ -101,7 +101,6 @@ var spec: LevelSpec;
 var info: LevelInfo;
 var play_seed: u64 = 0;
 var play_like = 20;
-var file_path: u8[..512];
 
 var start_board: Board;
 var board: Board;
@@ -128,8 +127,6 @@ var shelves: float4[6];        // x, y, half width, unused
 var shelf_count = 0;
 var pending_load = false;
 var seed_text: u8[..20];
-var file_list: u8[>..];
-var file_scroll = 0;
 var autoplay = false;
 var autoplay_next: f64 = 0.0;
 var rand = rng { 12345 };
@@ -230,31 +227,23 @@ fn draw_particles(out: Inst[>..]&) {
 // A flask's half size for a half width; every segment is as tall in any flask.
 fn bottle_half(hx: f32, cap: i64) -> float2 { v2(hx, hx * (0.68 + 0.63 * cap)) }
 
-// Places the flasks in rows on shelves, as large as fit the board area. Long
+// Places the flasks in rows on shelves, as large as fit the board area. The
+// row length is the board's (shelf_per_row), so neighbors on screen are the
+// rules' neighbors; an extra flask adds to the last row or starts one. Tall
 // flasks stand on the same shelf, rising higher.
 fn layout(board: Board) {
     let n = board.count;
-    var tallest = CAP;
-    for i in n { tallest = max(tallest, board.bottles[i].cap); }
+    let tallest = tallest_cap(board);
     let rise = (tallest - CAP) * 1.26;      // in half widths
     let top: f32 = 120.0;
     let bottom: f32 = 790.0;
     let width: f32 = 510.0;
-    var best_rows = 1;
-    var best_hx: f32 = 0.0;
-    for rows in 1..6 {
-        let per = (n + rows - 1) / rows;
-        let hx_w = width / per * 0.34;
-        let hx_h = ((bottom - top) / rows - 34.0) / (7.6 + rise);
-        let hx = min(min(hx_w, hx_h), 30.0);
-        if hx > best_hx + 0.5 {
-            best_hx = hx;
-            best_rows = rows;
-        }
-    }
-    let hx = best_hx;
+    let per = row_length(board);
+    let best_rows = (n + per - 1) / per;
+    let hx_w = width / max(per, 1) * 0.34;
+    let hx_h = ((bottom - top) / best_rows - 34.0) / (7.6 + rise);
+    let hx: f32 = min(min(hx_w, hx_h), 30.0);
     let half = bottle_half(hx, CAP);
-    let per = (n + best_rows - 1) / best_rows;
     let row_h = half.y * 2.0 + hx * (1.4 + rise) + 34.0;
     let total_h = row_h * best_rows;
     let y0 = top + ((bottom - top) - total_h) * 0.5 + hx * (1.4 + rise) + half.y;
@@ -316,24 +305,6 @@ fn begin_board(b: Board) {
     if spec.is_tutorial || info.hint.len > 0 { overlay = Overlay.Intro; overlay_t = now; }
 }
 
-// Loads a level file; false (with a message) if it cannot be read.
-fn load_file_level(path: const u8[:]) -> bool {
-    var text: u8[>..] = [];
-    if !read_file(path, text) {
-        say(str("Cannot read ", path), 4.0);
-        return false;
-    }
-    var b = Board { .. };
-    let err = parse_level(text, b, info);
-    if err.len > 0 {
-        say(str("Level file: ", err), 6.0);
-        write_stderr(str(path, ": ", err, "\n"));
-        return false;
-    }
-    begin_board(b);
-    true
-}
-
 fn generated_info(d: Difficulty) {
     info = LevelInfo { name: [], hint: [], difficulty: d };
 }
@@ -342,20 +313,24 @@ fn load_campaign(n: i64) {
     mode = PlayMode.Campaign;
     level_number = max(1, n);
     spec = level_spec(level_number);
-    let override_path = str(data_dir, "/levels/campaign/", level_number, ".json");
-    if file_exists(override_path) && load_file_level(override_path) { return; }
-    if spec.file.len > 0 {
-        let path = str(data_dir, "/levels/tutorial/", spec.file, ".json");
-        if load_file_level(path) {
-            if spec.is_tutorial && info.hint.len == 0 {
-                info.hint.append(feature_name(spec.tutorial));
-            }
-            return;
-        }
+    if spec.hand_made {
+        let h, found = campaign_hand_made(level_number);
+        info = h.info;
+        if spec.is_tutorial && info.hint.len == 0 { info.hint.append(feature_name(spec.tutorial)); }
+        begin_board(h.board);
+        return;
     }
     let g = generate(spec.params, spec.seed);
     generated_info(spec.difficulty);
     begin_board(g.board);
+}
+
+// One of the built-in hand-made levels, by its place in levels.goose.
+fn load_hand(k: i64) {
+    mode = PlayMode.Hand;
+    let h = hand_made(clamp(k, 0, HAND_MADE_COUNT - 1));
+    info = h.info;
+    begin_board(h.board);
 }
 
 fn load_seed(seed: u64, like: i64) {
@@ -376,26 +351,19 @@ fn request_load() {
 }
 
 var load_kind = PlayMode.Campaign;
+var hand_index = 0;
 
 fn start_campaign(n: i64) { load_kind = PlayMode.Campaign; level_number = n; request_load(); }
 fn start_seed(seed: u64, like: i64) { load_kind = PlayMode.Seed; play_seed = seed; play_like = like; request_load(); }
-fn start_file(path: const u8[:]) {
-    file_path.clear();
-    file_path.append(path[..min(512, path.len)]);
-    load_kind = PlayMode.File;
-    request_load();
-}
+fn start_hand(k: i64) { load_kind = PlayMode.Hand; hand_index = k; request_load(); }
 
 fn do_pending_load() {
     pending_load = false;
     overlay = Overlay.None;
-    spec = LevelSpec { number: 0, difficulty: Difficulty.Normal, file: [], params: GenParams {}, seed: 0 };
+    spec = LevelSpec { number: 0, difficulty: Difficulty.Normal, params: GenParams {}, seed: 0 };
     if load_kind == PlayMode.Campaign { load_campaign(level_number); }
     else if load_kind == PlayMode.Seed { load_seed(play_seed, play_like); }
-    else {
-        mode = PlayMode.File;
-        if !load_file_level(file_path) { screen_id = Screen.Files; }
-    }
+    else { load_hand(hand_index); }
 }
 
 // --- the game's actions ------------------------------------------------------------
@@ -423,16 +391,34 @@ fn refuse(i: i64, why: const u8[:]) {
 
 fn why_blocked(b: Bottle) -> u8[>..] {
     if b.done { return str("That flask is complete and sealed."); }
-    if !b.active { return str(""); }
-    match b.kind {
-        Frozen => str("Frozen: thaws after ", b.timer, if b.timer == 1 { " more pour." } else { " more pours." }),
-        Cloak => str("Cloaked: complete a ", COLOR_NAMES[b.key], " flask to lift the cloth."),
-        Cork => str("Corked: pour ", COLOR_NAMES[b.key], " onto the cork to pop it."),
-        Vault => str("Locked: pour ", COLOR_NAMES[b.key], " onto the padlock to open it."),
-        Gift => str("Wrapped: pour anything onto the box to open it."),
-        Curtain => str("Behind the curtain: needs ", b.key, " empty flasks to open."),
-        Plain, Mystery => str(""),
+    match b.cover {
+        Rime => str("Rime: thaws after ", b.thaw, if b.thaw == 1 { " more pour" } else { " more pours" },
+                    ", or sooner with heat."),
+        Seal => str("Sealed: pour ", COLOR_NAMES[b.key], " onto the seal to break it, or heat it twice."),
+        Shroud => str("Shrouded: light from a lantern next to it lifts the shroud."),
+        Vine => str("Vine: heat burns the tendril; emerald poured into the root withers the vine."),
+        None => str(""),
     }
+}
+
+// Why a flask that has room turns this color away, from its body or the
+// salamander; empty when it is just the colors not matching.
+fn why_refused(i: i64, color: i64) -> u8[>..] {
+    let b = board.bottles[i];
+    if i == board.salamander { return str("The salamander is on that flask: nothing goes in until it hops off."); }
+    match b.body {
+        Moonpetal => if !any_lantern_lit(board) {
+            return str("A moonpetal flask takes liquid only once a lantern is lit.");
+        },
+        Vow => if b.vow != 0 && color != b.vow && color != DROP {
+            return str("This vow flask only takes ", COLOR_NAMES[b.vow], ".");
+        },
+        Athanor => if color == QUICKSILVER && b.n > 0 && top(b) != GOLD {
+            return str("The athanor turns quicksilver to gold only onto gold.");
+        },
+        Plain, Siphon, Hourglass => {},
+    }
+    str("")
 }
 
 fn start_pour(from: i64, to: i64) {
@@ -452,16 +438,26 @@ fn start_pour(from: i64, to: i64) {
     }
     play(Sfx.Pour);
     if r.thawed > 0 { play(Sfx.Ice); }
-    if r.revealed > 0 || r.opened > 0 { play(Sfx.Reveal); }
-    // Effects for bottles that changed without being poured into.
+    if r.revealed > 0 { play(Sfx.Reveal); }
+    // Effects for bottles that changed without being poured into. (Placeholder
+    // bursts, one per event; the events carry what each force did.)
+    for e in r.events {
+        let i: i64 = e.bottle;
+        if i < 0 || i >= board.count { continue; }
+        let c = match e.kind {
+            Thawed => float4 { 0.8, 0.95, 1.0, 1.0 },
+            HeatPulse => float4 { 1.0, 0.5, 0.15, 1.0 },
+            Lit, ShroudLifted, MurkCleared => float4 { 1.0, 0.95, 0.7, 1.0 },
+            VineSpread, VineWithered, TendrilBurned => float4 { 0.3, 0.8, 0.35, 1.0 },
+            Transmuted => float4 { 1.0, 0.8, 0.25, 1.0 },
+            _ => gold(1.0),
+        };
+        let small = e.kind == EventKind.HeatPulse || e.kind == EventKind.MurkCleared;
+        if i != to || e.kind != EventKind.SealBroken { burst(slots[i].pos, if small { 8 } else { 24 }, c, 160.0); }
+    }
     for i in board.count {
         if i == to { continue; }
-        let was = before.bottles[i];
-        let is = after.bottles[i];
-        if was.active && !is.active {
-            burst(slots[i].pos, 24, if was.kind == Kind.Frozen { float4 { 0.8, 0.95, 1.0, 1.0 } } else { gold(1.0) }, 160.0);
-        }
-        if !was.done && is.done { complete_at[i] = now; }
+        if !before.bottles[i].done && after.bottles[i].done { complete_at[i] = now; }
     }
     hint_from = -1;
     lost_checked = false;
@@ -474,7 +470,7 @@ fn tap_bottle(i: i64) {
         if can_pour_from(b) {
             selected = i;
             play(Sfx.Select);
-        } else if b.n == 0 && !blocked(b) {
+        } else if b.n == 0 && !covered(b) {
             refuse(i, "");
         } else {
             refuse(i, why_blocked(b));
@@ -493,7 +489,7 @@ fn tap_bottle(i: i64) {
         return;
     }
     // Not a legal pour: pick the new bottle instead when it can pour.
-    if can_pour_from(b) && !blocked(b) {
+    if can_pour_from(b) {
         selected = i;
         play(Sfx.Select);
         return;
@@ -502,9 +498,10 @@ fn tap_bottle(i: i64) {
     let reason = why_blocked(b);
     if reason.len > 0 { refuse(i, reason); }
     else if b.n >= b.cap { refuse(i, "That flask is full."); }
-    else if b.kind == Kind.Mystery && b.key != 0 {
-        refuse(i, str("This mystery flask only takes ", COLOR_NAMES[b.key], "."));
-    } else { refuse(i, "The colors must match."); }
+    else {
+        let body = why_refused(i, pour_color(board.bottles[from]));
+        if body.len > 0 { refuse(i, body); } else { refuse(i, "The colors must match."); }
+    }
 }
 
 fn process_taps() {
@@ -594,7 +591,7 @@ fn do_hint() {
 fn next_after_win() {
     if mode == PlayMode.Campaign { start_campaign(level_number + 1); }
     else if mode == PlayMode.Seed { start_seed(play_seed + 1, play_like); }
-    else { screen_id = Screen.Files; overlay = Overlay.None; }
+    else { screen_id = Screen.Home; overlay = Overlay.None; }
 }
 
 // --- per-frame update ---------------------------------------------------------------
@@ -670,18 +667,26 @@ fn segment_center(half: float2, k: i64) -> float2 {
     v2(0.0, bottom - (k + 0.5) * seg)
 }
 
-fn liquid_inst(b: Bottle, pos: float2, half: float2, angle: f32, fill: f32, hidden: f32, wave: f32) -> Inst {
+fn liquid_inst(b: Bottle, pos: float2, half: float2, angle: f32, fill: f32, murk: f32, wave: f32) -> Inst {
     var i = inst(Shape.Liquid, pos, half, white(1.0));
-    // Two layers to a number: layer k, plus 16 times layer k + 4.
+    // Two layers to a number: layer k, plus 32 times layer k + 4.
     fn pair(k: i64) -> f32 {
         let lo: i64 = b.seg[k];
         let hi: i64 = b.seg[k + 4];
-        lo + 16 * hi
+        lo + 32 * hi
     }
     i.p0 = float4 { pair(0), pair(1), pair(2), pair(3) };
-    i.p1 = float4 { fill, hidden, wave, b.cap };
+    i.p1 = float4 { fill, murk, wave, b.cap };
     i.misc.y = angle;
     i
+}
+
+// A placeholder marker: a colored disc with a letter or number on it.
+fn badge(out: Inst[>..]&, at: float2, r: f32, color: float4, label: const u8[:]) {
+    glow(out, at, v2(r * 1.25, r * 1.25), 0.3, float4 { 0.0, 0.0, 0.0, 0.5 });
+    glow(out, at, v2(r, r), 0.12, color);
+    ring(out, at, r, 2.0, white(0.85));
+    text_shadowed(0, at.x, at.y, label, TextStyle.Small, white(1.0), Align.Center);
 }
 
 // One flask with its contents and whatever stands on or over it.
@@ -694,11 +699,12 @@ fn draw_flask(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: float2, ang
     var back = inst(Shape.FlaskBack, pos, half, float4 { 0.10, 0.08, 0.16, 0.6 });
     back.misc.y = angle;
     out.push(back);
-    let covered = overlays && b.active && (b.kind == Kind.Cloak || b.kind == Kind.Curtain || b.kind == Kind.Gift);
-    let fogged = overlays && b.active && (b.kind == Kind.Cork || b.kind == Kind.Vault);
-    if !covered {
-        let hidden: f32 = if fogged { b.cap } else { b.hidden };
-        if fill > 0.0 { out.push(liquid_inst(b, pos, half, angle, fill, hidden, wave)); }
+    // A shroud hides the flask entirely; a seal hides what is in it.
+    let shrouded = overlays && b.cover == Cover.Shroud;
+    let sealed = overlays && b.cover == Cover.Seal;
+    if !shrouded {
+        let murk: f32 = if sealed { (1 << b.cap) - 1 } else { b.murk };
+        if fill > 0.0 { out.push(liquid_inst(b, pos, half, angle, fill, murk, wave)); }
     }
     var glass = inst(Shape.Glass, pos, half, float4 { 0.86, 0.92, 1.0, 1.0 });
     glass.misc.y = angle;
@@ -708,56 +714,58 @@ fn draw_flask(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: float2, ang
     out.push(glass);
     if !overlays || angle != 0.0 { return; }
 
-    let kind = b.kind;
-    // Color-blind symbols on visible segments.
-    if save.color_safe && !covered && !fogged {
+    // Color-blind symbols on visible segments, "?" on murky ones.
+    if !shrouded && !sealed {
         for k in b.n as i64 {
-            if k < b.hidden { continue; }
-            var s = inst(Shape.Symbol, pos + segment_center(half, k), v2(half.x * 0.42, half.x * 0.42), white(0.95));
-            s.p0 = float4 { b.seg[k], 0.0, 0.0, 0.0 };
-            out.push(s);
-        }
-    }
-    if !covered && !fogged {
-        for k in b.hidden as i64 {
             let c = pos + segment_center(half, k);
-            text(0, c.x, c.y, "?", TextStyle.Label, white(0.8), Align.Center);
+            if murky(b, k) {
+                text(0, c.x, c.y, "?", TextStyle.Label, white(0.8), Align.Center);
+            } else if save.color_safe {
+                var s = inst(Shape.Symbol, c, v2(half.x * 0.42, half.x * 0.42), white(0.95));
+                s.p0 = float4 { b.seg[k], 0.0, 0.0, 0.0 };
+                out.push(s);
+            }
         }
     }
     let neck = pos - v2(0.0, half.y - half.x * 0.35);
-    if kind == Kind.Mystery {
-        let badge = pos - v2(0.0, half.y * 0.35);
-        if b.key == 0 {
-            text_shadowed(0, badge.x, badge.y, "?", TextStyle.Heading, gold(0.95), Align.Center);
-        } else {
-            ring(out, neck + v2(0.0, half.x * 0.9), half.x * 0.42, 3.0, gold(0.9));
-            glow(out, neck + v2(0.0, half.x * 0.9), v2(half.x * 0.32, half.x * 0.32), 0.3,
-                 palette_color(b.key, save.color_safe));
-        }
+    let foot = pos + v2(0.0, half.y + half.x * 0.55);
+    let r = max(half.x * 0.42, 9.0);
+    // The body. (Placeholders: a badge on the glass, except the vow's.)
+    match b.body {
+        Vow => {
+            let mark = pos - v2(0.0, half.y * 0.35);
+            if b.vow == 0 {
+                text_shadowed(0, mark.x, mark.y, "?", TextStyle.Heading, gold(0.95), Align.Center);
+            } else {
+                ring(out, neck + v2(0.0, half.x * 0.9), half.x * 0.42, 3.0, gold(0.9));
+                glow(out, neck + v2(0.0, half.x * 0.9), v2(half.x * 0.32, half.x * 0.32), 0.3,
+                     palette_color(b.vow, save.color_safe));
+            }
+        },
+        Siphon => badge(out, pos + v2(half.x * 0.95, half.y * 0.8), r * 0.8, float4 { 0.35, 0.55, 0.75, 1.0 }, "S"),
+        Hourglass => badge(out, pos - v2(0.0, half.y * 0.45), r, float4 { 0.7, 0.55, 0.3, 1.0 },
+                           str(b.flip_every - b.flip_count)),
+        Athanor => badge(out, pos - v2(0.0, half.y * 0.45), r, float4 { 0.85, 0.35, 0.1, 1.0 }, "A"),
+        Moonpetal => badge(out, pos - v2(0.0, half.y * 0.45), r,
+                           if any_lantern_lit(board) { float4 { 0.6, 0.75, 1.0, 1.0 } } else { float4 { 0.3, 0.32, 0.45, 1.0 } },
+                           "M"),
+        Plain => {},
     }
-    if b.active {
-        if kind == Kind.Frozen {
+    // The cover: the old cork, ice and cloth where they fit.
+    match b.cover {
+        Rime => {
             var ice = inst(Shape.Ice, pos + v2(0.0, half.x * 0.1), half + v2(half.x * 0.25, half.x * 0.2),
                            white(1.0));
             ice.p0 = float4 { i * 3.7, 0.0, 0.0, 0.0 };
             out.push(ice);
             glow(out, pos, v2(half.x * 0.62, half.x * 0.62), 0.5, float4 { 0.1, 0.3, 0.5, 0.55 });
-            text_shadowed(0, pos.x, pos.y, str(b.timer), TextStyle.Heading, white(1.0), Align.Center);
-        } else if kind == Kind.Cloak {
-            let c = palette_color(b.key, save.color_safe);
-            let cloth_color = mix4(float4 { 0.36, 0.22, 0.45, 1.0 }, c, 0.35);
+            text_shadowed(0, pos.x, pos.y, str(b.thaw), TextStyle.Heading, white(1.0), Align.Center);
+        },
+        Shroud => {
             out.push(inst(Shape.Cloth, pos + v2(0.0, half.x * 0.15), half + v2(half.x * 0.2, half.x * 0.15),
-                          cloth_color));
-            let badge = pos + v2(0.0, half.y * 0.15);
-            glow(out, badge, v2(half.x * 0.55, half.x * 0.55), 0.25, float4 { 0.0, 0.0, 0.0, 0.5 });
-            glow(out, badge, v2(half.x * 0.42, half.x * 0.42), 0.2, c);
-            ring(out, badge, half.x * 0.48, 2.5, gold(0.9));
-            if save.color_safe {
-                var s = inst(Shape.Symbol, badge, v2(half.x * 0.3, half.x * 0.3), white(1.0));
-                s.p0 = float4 { b.key, 0.0, 0.0, 0.0 };
-                out.push(s);
-            }
-        } else if kind == Kind.Cork {
+                          float4 { 0.30, 0.22, 0.42, 1.0 }));
+        },
+        Seal => {
             var cork = inst(Shape.Cork, neck, v2(half.x * 0.62, half.x * 0.5), white(1.0));
             cork.p1 = palette_color(b.key, save.color_safe);
             out.push(cork);
@@ -766,33 +774,39 @@ fn draw_flask(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: float2, ang
                 s.p0 = float4 { b.key, 0.0, 0.0, 0.0 };
                 out.push(s);
             }
-        } else if kind == Kind.Vault {
-            let c = palette_color(b.key, save.color_safe);
-            var bar = inst(Shape.Rect, pos - v2(0.0, half.y * 0.05), v2(half.x * 1.08, half.x * 0.13),
-                           float4 { 0.55, 0.55, 0.62, 1.0 });
-            bar.p0 = float4 { 3.0, 0.0, 0.0, 0.0 };
-            out.push(bar);
-            out.push(inst(Shape.Padlock, pos + v2(0.0, half.y * 0.1), v2(half.x * 0.62, half.x * 0.72), c));
-            if save.color_safe {
-                var s = inst(Shape.Symbol, pos + v2(0.0, half.y * 0.18), v2(half.x * 0.24, half.x * 0.24), white(1.0));
-                s.p0 = float4 { b.key, 0.0, 0.0, 0.0 };
-                out.push(s);
-            }
-        } else if kind == Kind.Gift {
-            var box = inst(Shape.Gift, pos + v2(0.0, half.y * 0.12), v2(half.x * 1.15, half.y * 0.8),
-                           float4 { 0.55, 0.2, 0.42, 1.0 });
-            box.p1 = gold(1.0);
-            out.push(box);
-        } else if kind == Kind.Curtain {
-            var cur = inst(Shape.Curtain, pos, half + v2(half.x * 0.45, half.x * 0.2), float4 { 0.55, 0.12, 0.2, 1.0 });
-            out.push(cur);
-            glow(out, pos + v2(0.0, half.y * 0.25), v2(half.x * 0.7, half.x * 0.7), 0.4, float4 { 0.0, 0.0, 0.0, 0.5 });
-            text_shadowed(0, pos.x, pos.y + half.y * 0.25, str(b.key), TextStyle.Heading, gold(1.0), Align.Center);
-            text_shadowed(0, pos.x, pos.y + half.y * 0.25 + 24.0, "empty", TextStyle.Tiny, gold(0.9), Align.Center);
-        }
+            if b.soft > 0 { badge(out, neck + v2(half.x * 0.9, 0.0), r * 0.7, float4 { 0.9, 0.4, 0.1, 1.0 }, "~"); }
+        },
+        Vine => {
+            out.push(inst(Shape.Cloth, pos + v2(0.0, half.x * 0.15), half + v2(half.x * 0.2, half.x * 0.15),
+                          float4 { 0.16, 0.42, 0.18, 0.9 }));
+            badge(out, pos, r, float4 { 0.2, 0.55, 0.25, 1.0 }, "V");
+        },
+        None => {},
+    }
+    // The fixture, on the shelf at the flask's foot.
+    match b.fixture {
+        Brazier => badge(out, foot, r * 0.8, float4 { 0.9, 0.35, 0.1, 1.0 }, "B"),
+        Lantern => {
+            if b.lit { glow(out, pos, v2(half.x * 2.2, half.y * 1.2), 0.9, float4 { 1.0, 0.85, 0.4, 0.25 }); }
+            badge(out, foot, r * 0.8, if b.lit { float4 { 1.0, 0.82, 0.3, 1.0 } } else { float4 { 0.4, 0.36, 0.3, 1.0 } }, "L");
+        },
+        Catalyst => badge(out, foot, r * 0.8,
+                          if b.spent { float4 { 0.3, 0.25, 0.35, 1.0 } } else { float4 { 0.7, 0.3, 0.85, 1.0 } }, "C"),
+        VineRoot => badge(out, foot, r * 0.8, float4 { 0.2, 0.55, 0.25, 1.0 }, str(b.spread_every - b.spread_count)),
+        None => {},
+    }
+    // A twin's tube, drawn once, from the left flask.
+    if b.twin > i && b.twin < board.count {
+        let other = slots[b.twin].pos;
+        let y = pos.y + half.y * 0.55;
+        rect(out, v2((pos.x + other.x) * 0.5, y), v2((other.x - pos.x) * 0.5 - half.x * 0.9, half.x * 0.14),
+             half.x * 0.12, float4 { 0.75, 0.85, 0.95, 0.6 });
+    }
+    if i == board.salamander {
+        badge(out, neck - v2(0.0, half.x * 0.9), r * 0.85, float4 { 0.95, 0.3, 0.1, 1.0 }, "S");
     }
     if b.done {
-        let c = palette_color(b.seg[0], save.color_safe);
+        let c = palette_color(flask_color(b), save.color_safe);
         out.push(inst(Shape.Seal, neck - v2(0.0, half.x * 0.1), v2(half.x * 0.55, half.x * 0.55), c));
     }
 }
@@ -824,7 +838,7 @@ fn draw_board(out: Inst[>..]&) {
                 b = a.dst_after;
                 let p = ease((t - T_LIFT) / T_POUR);
                 fill = a.dst_before.n + (a.dst_after.n - a.dst_before.n) * p;
-                if a.dst_before.active { fill = if a.amount == 0 { b.n } else { fill }; }
+                if covered(a.dst_before) { fill = if a.amount == 0 { b.n } else { fill }; }
                 wave = 1.0 - p * 0.7;
             }
         }
@@ -839,7 +853,7 @@ fn draw_board(out: Inst[>..]&) {
         let since = now - complete_at[i];
         if since >= 0.0 && since < 1.2 {
             g = max(g, (1.0 - since / 1.2) as f32 * 1.4);
-            gc = palette_color(b.seg[0], save.color_safe);
+            gc = palette_color(flask_color(b), save.color_safe);
         }
         draw_flask(out, i, b, pos, slots[i].half, 0.0, fill, wave, g, gc, true);
         if (i == hint_from || i == hint_to) && now < hint_until {
@@ -973,7 +987,7 @@ fn draw_play(out: Inst[>..]&) {
     text_shadowed(0, VW * 0.5, 40.0, level_title(), TextStyle.Heading, gold(1.0), Align.Center);
     let d = info.difficulty;
     badge_pill(out, 0, v2(VW * 0.5, 78.0), difficulty_name(d), difficulty_color(d));
-    if mode == PlayMode.File && info.name.len > 0 {
+    if mode == PlayMode.Hand && info.name.len > 0 {
         text(0, VW * 0.5, 100.0, "hand-made", TextStyle.Tiny, white(0.6), Align.Center);
     }
     text(0, VW - 44.0, 40.0, str(board.pours), TextStyle.Heading, white(0.95), Align.Center);
@@ -1161,7 +1175,6 @@ fn draw_home(out: Inst[>..]&) {
 
     let y: f32 = 800.0;
     if round_button(out, 0, v2(VW * 0.5 - 120.0, y), 32.0, Icon.Seed, "Seed", 0, true) { screen_id = Screen.Seed; }
-    if round_button(out, 0, v2(VW * 0.5, y), 32.0, Icon.Book, "My Levels", 0, true) { open_files(); }
     if round_button(out, 0, v2(VW * 0.5 + 120.0, y), 32.0, Icon.Gear, "Settings", 0, true) { screen_id = Screen.Settings; }
     if now < message_until { text(0, VW * 0.5, 900.0, message, TextStyle.Small, white(0.85), Align.Center); }
 }
@@ -1207,7 +1220,7 @@ fn draw_settings(out: Inst[>..]&) {
     text(0, VW * 0.5, 580.0, str("Next level: ", save.level), TextStyle.Small, white(0.7), Align.Center);
     text(0, VW * 0.5, 610.0, str("Saved in ", save_dir), TextStyle.Tiny, white(0.45), Align.Center);
     text_wrapped(0, VW * 0.5, 660.0, 440.0,
-                 "Keys: U undo, R restart, S shuffle, F extra flask, H hint, E export board, Esc back.",
+                 "Keys: U undo, R restart, S shuffle, F extra flask, H hint, Esc back.",
                  TextStyle.Tiny, white(0.55));
     if button(out, 0, v2(VW * 0.5, 850.0), v2(90.0, 26.0), "Back", float4 { 0.35, 0.25, 0.5, 1.0 }, true) {
         screen_id = Screen.Home;
@@ -1270,69 +1283,7 @@ fn draw_seed(out: Inst[>..]&) {
     }
 }
 
-fn open_files() {
-    file_list.clear();
-    file_scroll = 0;
-    let mine = user_levels_dir();
-    let examples = str(data_dir, "/levels/examples");
-    for which in 2 {
-        let dir = if which == 0 { mine[..] } else { examples[..] };
-        var names: u8[>..] = [];
-        if !list_dir(dir, names) { continue; }
-        each_split(names, '\n') {
-            if ends_with(it, ".json") { format(file_list, dir, "/", it, "\n"); }
-        };
-    }
-    screen_id = Screen.Files;
-}
 
-fn draw_files(out: Inst[>..]&) {
-    text_shadowed(0, VW * 0.5, 90.0, "My Levels", TextStyle.Heading, gold(1.0), Align.Center);
-    text_wrapped(0, VW * 0.5, 135.0, 460.0, str("Add .json level files to ", save_dir, "/levels"),
-                 TextStyle.Tiny, white(0.6));
-    var row = 0;
-    var shown = 0;
-    each_split(file_list, '\n') {
-        if it.len > 0 && row >= file_scroll && shown < 11 {
-            let y = 210.0 + shown * 52.0;
-            let slash = rfind(it, "/");
-            let name = if slash >= 0 { it[slash + 1..] } else { it };
-            let is_example = find(it, "/levels/examples/") >= 0;
-            if button(out, 0, v2(VW * 0.5, y), v2(210.0, 21.0), name,
-                      if is_example { float4 { 0.28, 0.22, 0.38, 1.0 } } else { float4 { 0.25, 0.4, 0.45, 1.0 } }, true) {
-                start_file(it);
-            }
-            shown++;
-        }
-        if it.len > 0 { row++; }
-    };
-    if row == 0 { text(0, VW * 0.5, 300.0, "No level files yet.", TextStyle.Small, white(0.7), Align.Center); }
-    if file_scroll > 0 && button(out, 0, v2(VW * 0.5 - 70.0, 790.0), v2(50.0, 20.0), "Up", float4 { 0.3, 0.22, 0.4, 1.0 }, true) {
-        file_scroll = max(0, file_scroll - 10);
-    }
-    if row > file_scroll + 11 && button(out, 0, v2(VW * 0.5 + 70.0, 790.0), v2(50.0, 20.0), "Down", float4 { 0.3, 0.22, 0.4, 1.0 }, true) {
-        file_scroll += 10;
-    }
-    if now < message_until { text(0, VW * 0.5, 750.0, message, TextStyle.Small, white(0.85), Align.Center); }
-    if button(out, 0, v2(VW * 0.5, 850.0), v2(90.0, 26.0), "Back", float4 { 0.35, 0.25, 0.5, 1.0 }, true) {
-        screen_id = Screen.Home;
-    }
-}
-
-// Saves the board as first dealt to the player's level folder.
-fn export_board() {
-    var out: u8[>..] = [];
-    var meta = info;
-    if meta.name.len == 0 {
-        meta.name.clear();
-        format(meta.name, level_title());
-    }
-    write_level(start_board, meta, out);
-    let name = if mode == PlayMode.Seed { str("seed_", play_seed, "_like_", play_like, ".json") }
-               else { str("level_", level_number, ".json") };
-    let path = str(user_levels_dir(), "/", name);
-    if write_file(path, out) { say(str("Saved ", name), 3.0); } else { say("Could not save the board.", 3.0); }
-}
 
 fn handle_keys() {
     if gfx::key_pressed("Escape") {
@@ -1351,7 +1302,6 @@ fn handle_keys() {
     if gfx::key_pressed("S") { do_shuffle(); }
     if gfx::key_pressed("F") { do_extra_bottle(); }
     if gfx::key_pressed("H") { do_hint(); }
-    if gfx::key_pressed("E") { export_board(); }
 }
 
 // --- the frame -------------------------------------------------------------------------
@@ -1407,7 +1357,6 @@ fn draw_frame(dt: f32) {
     else if screen_id == Screen.Play { draw_play(base); }
     else if screen_id == Screen.Settings { draw_settings(base); }
     else if screen_id == Screen.Seed { draw_seed(base); }
-    else if screen_id == Screen.Files { draw_files(base); }
     if screen_id != Screen.Play { draw_overlay(top); }
     draw_particles(top);
     to_screen(base);
@@ -1448,7 +1397,7 @@ fn main() {
     var start_level = -1;
     var start_seed_value: i64 = -1;
     var like = 20;
-    var start_path: u8[>..] = [];
+    var start_hand_level = -1;
     var clicks_script: float2[>..] = [];
     let argv = args();
     var a = 1;
@@ -1460,7 +1409,7 @@ fn main() {
         else if opt == "--level" && has_value { let n, ok = parse_int(argv[a + 1]); if ok { start_level = n; } a++; }
         else if opt == "--seed" && has_value { let n, ok = parse_int(argv[a + 1]); if ok { start_seed_value = n; } a++; }
         else if opt == "--like" && has_value { let n, ok = parse_int(argv[a + 1]); if ok { like = n; } a++; }
-        else if opt == "--file" && has_value { start_path.append(argv[a + 1]); a++; }
+        else if opt == "--hand" && has_value { let n, ok = parse_int(argv[a + 1]); if ok { start_hand_level = n; } a++; }
         else if opt == "--autoplay" { autoplay = true; }
         else if opt == "--click" && a + 2 < argv.len {
             let x, okx = parse_int(argv[a + 1]);
@@ -1470,10 +1419,10 @@ fn main() {
         }
         else if opt == "--help" {
             print("""
-                alchemists-sort [--level N] [--seed S [--like L]] [--file level.json] [--autoplay]
+                alchemists-sort [--level N] [--seed S [--like L]] [--hand K] [--autoplay]
                   --level N      play campaign level N
                   --seed S       play the board brewed from seed S, shaped like level L (default 20)
-                  --file F       play a hand-made level file
+                  --hand K       play built-in hand-made level K (0 to 9; levels.goose)
                   --autoplay     let the hint solver play
                 """);
             return;
@@ -1495,7 +1444,7 @@ fn main() {
     if frames < 0 { init_sounds(); }
     rand = rng { random_seed() };
     fit_canvas();
-    if start_path.len > 0 { start_file(start_path); }
+    if start_hand_level >= 0 { start_hand(start_hand_level); }
     else if start_seed_value >= 0 { start_seed(start_seed_value as! u64, like); }
     else if start_level > 0 { start_campaign(start_level); }
 
