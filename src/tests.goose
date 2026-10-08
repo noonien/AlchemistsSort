@@ -1,12 +1,13 @@
-// Unit tests for the rules, the obstacles, the solver, the generator and the
-// level format. Run with `nix flake check`, or `goose src/tests.goose`.
+// Unit tests for the rules, every modifier and how they meet, the solver,
+// the generator and the shipped levels. Run with `nix flake check`, or
+// `goose src/tests.goose`.
 
 import std;
 import os;
 import core.board;
 import core.solver;
 import core.generator;
-import core.level_io;
+import core.levels;
 import core.tools;
 import core.campaign;
 import app.shaders;
@@ -28,27 +29,36 @@ fn test(name: const u8[:]) {
     current.append(name[..min(64, name.len)]);
 }
 
-// A board from bottles written as level-file letters, bottom to top.
+// A board from bottles written as level letters, bottom to top.
 fn board_of(rows: const u8[:][:]) -> Board {
     var board = Board { .. };
-    for row in rows {
-        var b = Bottle { seg: [0; 8], .. };
-        for ch in row {
-            let c = color_of_letter(ch);
-            assert(c > 0);
-            b.seg[b.n] = c as u8;
-            b.n++;
-        }
-        push_bottle(board, b);
-    }
+    for row in rows { push_bottle(board, flask(row)); }
     board.colors = color_count(board);
     board
 }
 
-fn letters(b: Bottle) -> u8[..4] {
-    var s: u8[..4] = [];
+// The same, all on one shelf row, so flask i's neighbors are i - 1 and i + 1.
+fn row_of(rows: const u8[:][:]) -> Board {
+    var board = board_of(rows);
+    board.per_row = MAX_BOTTLES;
+    board
+}
+
+fn letters(b: Bottle) -> u8[..8] {
+    var s: u8[..8] = [];
     for k in b.n as i64 { s.push(letter_of_color(b.seg[k])); }
     s
+}
+
+fn has_event(r: PourResult, kind: EventKind, bottle: i64) -> bool {
+    for e in r.events { if e.kind == kind && e.bottle == bottle { return true; } }
+    false
+}
+
+// Where the first event of a kind is in the list, or -1.
+fn event_at(r: PourResult, kind: EventKind) -> i64 {
+    for e, i in r.events { if e.kind == kind { return i; } }
+    -1
 }
 
 // --- pour rules ------------------------------------------------------------------
@@ -91,6 +101,7 @@ fn test_pour_rules() {
     b = board_of(["RRR", "GR", "GGG"]);
     r = pour(b, 1, 0);
     check(r.ok && r.completed && b.bottles[0].done, "four reds seal");
+    check(has_event(r, EventKind.Completed, 0), "with an event");
     check(!pour(b, 0, 1).ok, "a sealed bottle cannot be poured from");
 
     test("win and loss");
@@ -110,20 +121,37 @@ fn test_pour_rules() {
     check(b.pours == 1, "a rejected pour does not");
 }
 
-// --- obstacles --------------------------------------------------------------------
+fn test_shelves() {
+    test("shelves and neighbors");
+    check(shelf_per_row(6, CAP) == 3 && shelf_per_row(9, CAP) == 5, "the layout's rows");
+    var b = board_of(["RRRR", "GGGG", "", "", "", "", "", "", "", ""]);
+    settle(b);
+    let per = b.per_row;
+    check(per == shelf_per_row(10, CAP), "settle fixes the row length");
+    let l, r = neighbors(b, per - 1);
+    check(l == per - 2 && r == -1, "the end of a row has no right neighbor");
+    let l2, r2 = neighbors(b, per);
+    check(l2 == -1 && r2 == per + 1, "the start of the next row has no left one");
+    let l3, r3 = neighbors(b, 0);
+    check(l3 == -1 && r3 == 1, "the first flask");
+    for k in 6 { add_empty_bottle(b); }
+    check(b.per_row == per, "extra flasks never change the rows");
+}
 
-fn test_hidden() {
-    test("hidden layers");
+// --- the chapter 1 modifiers --------------------------------------------------------
+
+fn test_murk() {
+    test("murk");
     var b = board_of(["RGBB", "B", "", "RGRG"]);
-    b.bottles[0].hidden = 3;
+    b.bottles[0].murk = murk_below(3);
     check(top_run(b.bottles[0]) == 1, "only the visible top moves");
     var r = pour(b, 0, 1);
     check(r.ok && r.amount == 1, "one blue moves although two are blue");
-    check(b.bottles[0].hidden == 2, "the next segment is exposed");
+    check(b.bottles[0].murk == 3 && has_event(r, EventKind.MurkCleared, 0), "the next segment clears");
     r = pour(b, 0, 1);
-    check(r.ok && r.amount == 1 && b.bottles[0].hidden == 1, "the second blue, then the green shows");
+    check(r.ok && r.amount == 1 && b.bottles[0].murk == 1, "the second blue, then the green shows");
     r = pour(b, 0, 2);
-    check(b.bottles[0].hidden == 0, "the last segment is visible");
+    check(b.bottles[0].murk == 0, "the last segment is visible");
 }
 
 fn test_split() {
@@ -136,179 +164,400 @@ fn test_split() {
     check(is_won(b), "all reunited");
 }
 
-fn test_mystery() {
-    test("mystery bottle");
+fn test_vow() {
+    test("vow flask");
     var b = board_of(["RRGG", "GGRR", "", ""]);
-    b.bottles[2].kind = Kind.Mystery;
+    b.bottles[2].body = Body.Vow;
     settle(b);
     var r = pour(b, 0, 2);
-    check(r.ok && b.bottles[2].key == color_of_letter('G'), "takes the first color");
+    check(r.ok && b.bottles[2].vow == color_of_letter('G'), "takes the first color");
     check(!pour(b, 1, 2).ok, "rejects another color");
     check(pour(b, 0, 3).ok, "reds into the spare");
-    check(pour(b, 1, 3).ok && pour(b, 1, 2).ok, "red, then green into the mystery bottle");
-    check(is_won(b) && b.bottles[2].done, "won once the mystery bottle is full");
+    check(pour(b, 1, 3).ok && pour(b, 1, 2).ok, "red, then green into the vow flask");
+    check(is_won(b) && b.bottles[2].done, "won once the vow flask is full");
 
-    test("mystery must end full");
+    test("vow must end full");
     b = board_of(["RRRR", "GGGG", ""]);
-    b.bottles[2].kind = Kind.Mystery;
+    b.bottles[2].body = Body.Vow;
     settle(b);
-    check(!is_won(b), "an empty mystery bottle blocks the win");
+    check(!is_won(b), "an empty vow flask blocks the win");
     check(!can_pour(b, 0, 2), "sealed bottles cannot fill it");
+
+    test("the Drop does not set a vow");
+    b = board_of(["G*", "", "GGG"]);
+    b.bottles[1].body = Body.Vow;
+    settle(b);
+    check(pour(b, 0, 1).ok && b.bottles[1].vow == 0, "the Drop goes in, no vow yet");
+    check(pour(b, 0, 1).ok && b.bottles[1].vow == color_of_letter('G'), "then green sets it");
 }
 
-fn test_cloak() {
-    test("cloaked bottle");
-    var b = board_of(["RRRB", "BBBR", "GGGG", "", ""]);
-    b.bottles[2].kind = Kind.Cloak;
-    b.bottles[2].key = color_of_letter('R') as u8;
-    b.bottles[2].active = true;
-    settle(b);
-    check(contents_hidden(b.bottles[2]) && !b.bottles[2].done, "hidden, not sealed");
-    check(!can_pour(b, 2, 3) && !can_pour(b, 0, 2), "inert while cloaked");
-    pour(b, 0, 3);
-    let r = pour(b, 1, 0);
-    check(r.ok && r.completed && r.revealed == 1, "completing red lifts the cloth");
-    check(!b.bottles[2].active && b.bottles[2].done, "revealed, and already complete");
-
-    test("cloth waits for its own color");
-    b = board_of(["GGGB", "BBB", "RRRR", "", ""]);
-    b.bottles[2].kind = Kind.Cloak;
-    b.bottles[2].key = color_of_letter('R') as u8;
-    b.bottles[2].active = true;
-    settle(b);
-    pour(b, 0, 1);
-    check(b.bottles[1].done && b.bottles[2].active, "completing blue leaves a red cloth");
-}
-
-fn test_frozen() {
-    test("frozen bottle");
-    var b = board_of(["RG", "", "GR", "", "RRGG"]);
-    b.bottles[2].kind = Kind.Frozen;
-    b.bottles[2].timer = 2;
-    b.bottles[2].active = true;
-    settle(b);
-    check(b.bottles[2].active, "starts frozen");
-    check(!can_pour(b, 2, 1) && !can_pour(b, 0, 2), "inert while frozen");
-    var r = pour(b, 0, 1);
-    check(r.ok && b.bottles[2].timer == 1 && b.bottles[2].active, "one pour off the count");
-    r = pour(b, 0, 3);
-    check(r.thawed == 1 && !b.bottles[2].active, "thaws on the last pour");
-    check(can_pour(b, 2, 3), "pours once thawed");
-}
-
-fn test_cork(kind: Kind, name: const u8[:]) {
-    test(name);
+fn test_seal() {
+    test("seal");
     var b = board_of(["RRGG", "YY", "BY", "BBYY", "R", "GB"]);
-    b.bottles[1].kind = kind;
+    b.bottles[1].cover = Cover.Seal;
     b.bottles[1].key = color_of_letter('Y') as u8;
-    b.bottles[1].active = true;
     settle(b);
     check(contents_hidden(b.bottles[1]), "contents hidden under it");
     check(!can_pour(b, 1, 4), "cannot pour out of it");
     check(!can_pour(b, 0, 1), "the wrong color is rejected");
     let r = pour(b, 2, 1);
-    check(r.ok && r.popped && r.amount == 1, "the key color pops it and lands");
-    check(letters(b.bottles[1]) == "YYY" && !b.bottles[1].active, "contents after");
-    check(can_pour(b, 1, 3) || can_pour(b, 3, 1), "an ordinary bottle now");
+    check(r.ok && r.popped && r.amount == 1 && has_event(r, EventKind.SealBroken, 1), "the key breaks it and lands");
+    check(letters(b.bottles[1]) == "YYY" && !covered(b.bottles[1]), "contents after");
 
-    test(str(name, " pops even without room"));
+    test("seal breaks even without room");
     b = board_of(["RRYY", "GGBB", "Y", "BGRG", ""]);
-    b.bottles[1].kind = kind;
+    b.bottles[1].cover = Cover.Seal;
     b.bottles[1].key = color_of_letter('Y') as u8;
-    b.bottles[1].active = true;
     settle(b);
     let r2 = pour(b, 2, 1);
-    check(r2.ok && r2.popped && r2.amount == 0, "pops, nothing lands");
+    check(r2.ok && r2.popped && r2.amount == 0, "breaks, nothing lands");
     check(letters(b.bottles[2]) == "Y", "the yellow stays where it was");
+
+    test("the Drop breaks any seal");
+    b = board_of(["RR*", "GGB", ""]);
+    b.bottles[1].cover = Cover.Seal;
+    b.bottles[1].key = color_of_letter('Y') as u8;
+    let r3 = pour(b, 0, 1);
+    check(r3.ok && r3.popped && r3.amount == 1 && letters(b.bottles[1]) == "GGB*", "and lands on anything");
 }
 
-fn test_vault_chain() {
-    test("chained vaults");
-    // The second vault's key, violet, is locked inside the first.
-    var b = board_of(["RVV", "RRV", "VYYY", "", "RY"]);
-    b.bottles[0].kind = Kind.Vault;
-    b.bottles[0].key = color_of_letter('Y') as u8;
-    b.bottles[0].active = true;
-    b.bottles[1].kind = Kind.Vault;
-    b.bottles[1].key = color_of_letter('V') as u8;
-    b.bottles[1].active = true;
-    settle(b);
-    check(validate(b).len == 0, "well formed");
-    check(!can_pour(b, 2, 1), "yellow does not open the violet padlock");
-    let r = pour(b, 2, 0);
-    check(r.popped && r.amount == 0, "yellow opens the first vault, but cannot land on violet");
-    check(!b.bottles[0].active && b.bottles[1].active, "first vault open, second still locked");
-    let r2 = pour(b, 0, 1);
-    check(r2.popped && r2.amount == 1, "violet from the first vault opens the second");
-    var path: Move[>..] = [];
-    check(solve(b, 20000, path).solved, "the chain can be finished");
-}
-
-fn test_curtain() {
-    test("curtain");
-    var b = board_of(["RRG", "GGRR", "BBBB", "G"]);
-    b.bottles[2].kind = Kind.Curtain;
-    b.bottles[2].key = 1;
-    b.bottles[2].active = true;
-    settle(b);
-    check(b.bottles[2].active && !on_board(b.bottles[2]), "closed while no bottle is empty");
-    check(!can_pour(b, 0, 2), "nothing goes behind a curtain");
-    let r = pour(b, 3, 0);
-    check(r.ok && r.opened == 1 && !b.bottles[2].active, "an empty bottle opens it");
-    check(b.bottles[2].done, "the bottle behind it was complete");
-    check(pour(b, 0, 3).ok && pour(b, 1, 0).ok && pour(b, 1, 3).ok, "sort the rest");
-    check(is_won(b), "won");
-}
-
-fn test_gift() {
-    test("gift box");
-    var b = board_of(["RRGB", "BG", "", "GRBR"]);
-    b.bottles[1].kind = Kind.Gift;
-    b.bottles[1].active = true;
-    settle(b);
-    check(contents_hidden(b.bottles[1]) && !can_pour(b, 1, 2), "wrapped and inert");
-    let r = pour(b, 0, 1);
-    check(r.ok && r.popped && r.amount == 1, "any color pops it");
-    check(letters(b.bottles[1]) == "BGB", "the pour lands on a different top");
-    check(!b.bottles[1].active, "unwrapped");
-}
-
-fn test_long() {
-    test("long flask");
+fn test_tall() {
+    test("tall flask");
     var b = board_of(["RRGG", "GGRR", "RR", ""]);
     b.bottles[2].cap = 6;
-    check(validate(b).len == 0, "a color as tall as a long flask is valid");
+    check(validate(b).len == 0, "a color as tall as a tall flask is valid");
     b.bottles[2].cap = 5;
     check(validate(b).len > 0, "but must match its height");
     b.bottles[2].cap = 6;
     settle(b);
     check(is_complete(board_of(["RRRR"]).bottles[0]), "an ordinary flask is complete at four");
     var r = pour(b, 1, 2);
-    check(r.ok && r.amount == 2 && b.bottles[2].n == 4 && !b.bottles[2].done, "four is not full in a long flask");
+    check(r.ok && r.amount == 2 && b.bottles[2].n == 4 && !b.bottles[2].done, "four is not full in a tall flask");
     check(can_pour(b, 2, 3), "it pours like any flask");
     r = pour(b, 0, 1);
     r = pour(b, 0, 2);
     check(r.amount == 2 && b.bottles[2].done && is_won(b), "complete at its height");
-    var text: u8[>..] = [];
-    write_level(b, LevelInfo { name: [], hint: [] }, text);
-    var back = Board { .. };
-    var info = LevelInfo { name: [], hint: [] };
-    check(parse_level(text, back, info).len == 0 && back.bottles[2].cap == 6, "its height is saved");
     var path: Move[>..] = [];
     var c = board_of(["RRGG", "GGRR", "RR", ""]);
     c.bottles[2].cap = 6;
     settle(c);
     check(solve(c, 20000, path).solved, "the solver fills it");
-    c.bottles[2].kind = Kind.Cork;
+    c.bottles[2].cover = Cover.Seal;
     c.bottles[2].key = 1;
-    c.bottles[2].active = true;
-    check(validate(c).len == 0, "and it can carry an obstacle");
+    check(validate(c).len == 0, "and it can carry a cover");
+}
 
-    var p = GenParams { colors: 5, long: 1, long_height: 7, cork: 1 };
-    let g = generate(p, 7);
-    var tall = 0;
-    for i in g.board.count { if g.board.bottles[i].cap == 7 { tall++; } }
-    check(g.stats.solved && tall == 1 && validate(g.board).len == 0, "generated with a long flask");
+// --- chapter 2: rime, braziers, quicksilver -------------------------------------------
+
+fn test_rime() {
+    test("rime");
+    var b = board_of(["RG", "", "GR", "", "RRGG"]);
+    b.bottles[2].cover = Cover.Rime;
+    b.bottles[2].thaw = 2;
+    settle(b);
+    check(covered(b.bottles[2]), "starts frozen");
+    check(!can_pour(b, 2, 1) && !can_pour(b, 0, 2), "inert while frozen");
+    var r = pour(b, 0, 1);
+    check(r.ok && b.bottles[2].thaw == 1 && covered(b.bottles[2]), "one pour off the count");
+    r = pour(b, 0, 3);
+    check(r.thawed == 1 && !covered(b.bottles[2]) && has_event(r, EventKind.Thawed, 2), "thaws on the last pour");
+    check(can_pour(b, 2, 3), "pours once thawed");
+}
+
+fn test_heat() {
+    test("brazier heat");
+    // A seal, the brazier, then ice, all neighbors.
+    var b = row_of(["BB", "", "GG", "", "RR"]);
+    b.bottles[0].cover = Cover.Seal;
+    b.bottles[0].key = color_of_letter('Y') as u8;
+    b.bottles[1].fixture = Fixture.Brazier;
+    b.bottles[2].cover = Cover.Rime;
+    b.bottles[2].thaw = 6;
+    var r = pour(b, 4, 1);
+    check(r.ok && b.bottles[2].thaw == 4, "the pour and the heat both melt the ice");
+    check(b.bottles[0].cover == Cover.Seal && b.bottles[0].soft == 1, "the seal softens");
+    check(has_event(r, EventKind.HeatPulse, 0) && has_event(r, EventKind.SealSoftened, 0), "events");
+    r = pour(b, 1, 3);
+    check(b.bottles[2].thaw == 3 && b.bottles[0].soft == 1, "pouring out of a brazier sends no heat");
+    r = pour(b, 3, 1);
+    check(!covered(b.bottles[0]) && b.bottles[0].soft == 0 && has_event(r, EventKind.SealBroken, 0),
+          "the second pulse breaks the seal");
+    check(letters(b.bottles[0]) == "BB", "with nothing landing in it");
+    check(b.bottles[2].thaw == 1, "ice: one per pour and one per pulse");
+    r = pour(b, 1, 3);
+    check(!covered(b.bottles[2]) && r.thawed == 1, "and gone at zero");
+
+    test("heat burns vine tendrils, not the root");
+    b = row_of(["R", "", "B", "RR"]);
+    b.bottles[0].cover = Cover.Vine;
+    b.bottles[1].fixture = Fixture.Brazier;
+    b.bottles[2].fixture = Fixture.VineRoot;
+    b.bottles[2].spread_every = 9;
+    r = pour(b, 3, 1);
+    check(!covered(b.bottles[0]) && has_event(r, EventKind.TendrilBurned, 0), "the tendril burns");
+    check(b.bottles[2].fixture == Fixture.VineRoot, "the root stands");
+}
+
+fn test_quicksilver() {
+    test("quicksilver sinks");
+    var b = board_of(["Q", "RG", "", "QQ", "R"]);
+    b.bottles[1].murk = 1;
+    check(can_pour(b, 0, 1), "goes onto any top");
+    var r = pour(b, 0, 1);
+    check(r.ok && letters(b.bottles[1]) == "QRG", "below everything");
+    check(b.bottles[1].murk == 2, "the murk moves up with the red, the silver is in view");
+    r = pour(b, 3, 1);
+    check(r.amount == 1 && letters(b.bottles[1]) == "QQRG", "above other quicksilver");
+    check(!can_pour(b, 4, 3), "other liquid still needs a matching top");
+    check(is_complete(flask("QQQQ")), "a flask of quicksilver is complete");
+
+    test("siphon");
+    b = board_of(["RRGB", "", "QRR", "B"]);
+    b.bottles[0].body = Body.Siphon;
+    check(pour_color(b.bottles[0]) == color_of_letter('R') && pour_run(b.bottles[0]) == 2, "pours its bottom run");
+    r = pour(b, 0, 1);
+    check(r.amount == 2 && letters(b.bottles[0]) == "GB" && letters(b.bottles[1]) == "RR", "from the tap");
+    check(pour(b, 3, 0).ok && letters(b.bottles[0]) == "GBB", "and takes in on top");
+
+    test("quicksilver into a siphon comes out first");
+    b = board_of(["Q", "RRG", ""]);
+    b.bottles[1].body = Body.Siphon;
+    pour(b, 0, 1);
+    check(letters(b.bottles[1]) == "QRRG", "sinks to the tap");
+    r = pour(b, 1, 2);
+    check(r.color == QUICKSILVER && letters(b.bottles[2]) == "Q" && letters(b.bottles[1]) == "RRG", "out first");
+
+    test("athanor");
+    b = board_of(["QQ", "", "UU", "R", "Q"]);
+    b.bottles[1].body = Body.Athanor;
+    r = pour(b, 0, 1);
+    check(r.amount == 2 && letters(b.bottles[1]) == "UU" && has_event(r, EventKind.Transmuted, 1), "turns into gold");
+    check(pour(b, 2, 1).ok && b.bottles[1].done, "gold on gold completes it");
+    b = board_of(["Q", "R", "QQUU"]);
+    b.bottles[1].body = Body.Athanor;
+    check(!can_pour(b, 0, 1), "no quicksilver on another color");
+    check(validate(b).len > 0, "an athanor level's quicksilver and gold make one set");
+    var w = board_of(["QQQQ", "UUUU", ""]);
+    w.bottles[2].body = Body.Athanor;
+    settle(w);
+    check(!w.bottles[0].done && !is_won(w), "unturned quicksilver never wins with an athanor");
+}
+
+// --- chapter 3: siphons and twins --------------------------------------------------------
+
+fn test_twins() {
+    test("twin overflow");
+    var b = row_of(["RRR", "BRR", "", "G"]);
+    b.bottles[1].twin = 2;
+    b.bottles[2].twin = 1;
+    var r = pour(b, 0, 1);
+    check(r.amount == 1 && r.overflow == 2 && letters(b.bottles[2]) == "RR", "the rest goes through the tube");
+    check(has_event(r, EventKind.Overflowed, 2), "with an event");
+    check(b.bottles[0].n == 0, "all of it moved");
+
+    test("rime blocks the overflow");
+    b = row_of(["RRR", "BRR", "", "G"]);
+    b.bottles[1].twin = 2;
+    b.bottles[2].twin = 1;
+    b.bottles[2].cover = Cover.Rime;
+    b.bottles[2].thaw = 5;
+    r = pour(b, 0, 1);
+    check(r.amount == 1 && r.overflow == 0 && letters(b.bottles[0]) == "RR", "no overflow into ice");
+
+    test("twins must be neighbors");
+    var v = board_of(["RRRR", "GGGG", "", ""]);
+    v.per_row = 2;
+    v.bottles[1].twin = 2;
+    v.bottles[2].twin = 1;
+    check(validate(v).len > 0, "not across rows");
+    v.bottles[1].twin = 0;
+    v.bottles[2].twin = -1;
+    v.bottles[0].twin = 1;
+    check(validate(v).len == 0, "side by side");
+}
+
+// --- chapter 4: lanterns, shrouds, hourglasses -------------------------------------------
+
+fn test_light() {
+    test("lantern lights, shroud lifts, murk clears");
+    var b = row_of(["RRRB", "BBB", "GGGG", "R", ""]);
+    b.bottles[0].murk = murk_below(2);
+    b.bottles[1].fixture = Fixture.Lantern;
+    b.bottles[2].cover = Cover.Shroud;
+    settle(b);
+    check(validate(b).len == 0, "a shroud next to a lantern");
+    check(contents_hidden(b.bottles[2]) && !b.bottles[2].done, "hidden, not sealed");
+    check(!can_pour(b, 2, 3) && !can_pour(b, 0, 2), "inert while shrouded");
+    let r = pour(b, 0, 1);
+    check(r.completed && b.bottles[1].lit && has_event(r, EventKind.Lit, 1), "completing it lights the lantern");
+    check(r.revealed == 1 && !covered(b.bottles[2]) && b.bottles[2].done, "the shroud lifts on a complete flask");
+    check(b.bottles[0].murk == 0, "the murk next door clears");
+    check(event_at(r, EventKind.Lit) < event_at(r, EventKind.ShroudLifted), "light first, then what it reaches");
+
+    test("a shroud needs a lantern");
+    var v = row_of(["RRRR", "GGGG", "", ""]);
+    v.bottles[2].cover = Cover.Shroud;
+    check(validate(v).len > 0, "none next to it");
+
+    test("moonpetal");
+    b = row_of(["RRR", "R", "BBB", "B", ""]);
+    b.bottles[1].body = Body.Moonpetal;
+    b.bottles[2].fixture = Fixture.Lantern;
+    settle(b);
+    check(!can_pour(b, 0, 1) && !can_pour(b, 4, 1), "takes nothing in the dark");
+    check(can_pour(b, 1, 0), "but pours out");
+    pour(b, 3, 2);
+    check(b.bottles[2].lit && can_pour(b, 0, 1), "takes liquid once a lantern is lit");
+}
+
+fn test_hourglass() {
+    test("hourglass flips with its murk");
+    var b = board_of(["RRGB", "Y", "", "YY"]);
+    b.bottles[0].body = Body.Hourglass;
+    b.bottles[0].flip_every = 2;
+    b.bottles[0].murk = murk_below(3);
+    settle(b);
+    var r = pour(b, 1, 2);
+    check(letters(b.bottles[0]) == "RRGB" && b.bottles[0].flip_count == 1, "counts a pour");
+    r = pour(b, 3, 2);
+    check(has_event(r, EventKind.Flipped, 0) && letters(b.bottles[0]) == "BGRR", "turns over");
+    check(b.bottles[0].murk == 6 && b.bottles[0].flip_count == 0, "murk turns with it; the new top clears");
+
+    test("hourglass with quicksilver");
+    b = board_of(["QRGB", "Y", "", "YY"]);
+    b.bottles[0].body = Body.Hourglass;
+    b.bottles[0].flip_every = 1;
+    pour(b, 1, 2);
+    check(letters(b.bottles[0]) == "QBGR", "the silver runs back down");
+
+    test("a covered hourglass waits");
+    b = board_of(["RRGB", "Y", "", "YY"]);
+    b.bottles[0].body = Body.Hourglass;
+    b.bottles[0].flip_every = 1;
+    b.bottles[0].cover = Cover.Rime;
+    b.bottles[0].thaw = 5;
+    pour(b, 1, 2);
+    check(letters(b.bottles[0]) == "RRGB" && b.bottles[0].flip_count == 0, "no count, no flip");
+}
+
+// --- chapter 5: vines, the salamander -------------------------------------------------------
+
+fn test_vine() {
+    test("vine spreads in order");
+    var b = row_of(["RR", "BB", "", "YY", "", "GG"]);
+    b.bottles[2].fixture = Fixture.VineRoot;
+    b.bottles[2].spread_every = 2;
+    pour(b, 0, 4);
+    var r = pour(b, 4, 0);
+    check(b.bottles[1].cover == Cover.Vine && has_event(r, EventKind.VineSpread, 1), "the lowest neighbor first");
+    check(!covered(b.bottles[3]), "one tendril at a time");
+    pour(b, 3, 4);
+    r = pour(b, 4, 3);
+    check(b.bottles[0].cover == Cover.Vine, "then on from the tendril, lowest first");
+    check(!can_pour(b, 0, 4) && !can_pour(b, 3, 1), "tendrils cover their flasks");
+
+    test("emerald withers the vine");
+    r = pour(b, 5, 2);
+    check(r.ok && has_event(r, EventKind.VineWithered, 2), "emerald into the root");
+    check(!covered(b.bottles[0]) && !covered(b.bottles[1]) && b.bottles[2].fixture == Fixture.None, "all gone");
+}
+
+fn test_salamander() {
+    test("salamander");
+    var b = row_of(["RG", "R", "R", ""]);
+    b.bottles[0].cover = Cover.Rime;
+    b.bottles[0].thaw = 9;
+    b.salamander = 2;
+    check(!can_pour(b, 1, 2), "nothing goes in under it");
+    check(can_pour(b, 2, 3), "pouring out is fine");
+    let r = pour(b, 1, 3);
+    check(b.salamander == 1 && has_event(r, EventKind.SalamanderHop, 1), "it hops to the source");
+    check(b.bottles[0].thaw == 7, "and its heat reaches the neighbors");
+    check(event_at(r, EventKind.SalamanderHop) < event_at(r, EventKind.HeatPulse), "hop, then heat");
+    check(!can_pour(b, 2, 1), "the new perch takes nothing in");
+}
+
+// --- chapter 6: the athanor's level, the Drop, catalysts -----------------------------------
+
+fn test_drop() {
+    test("Philosopher's Drop");
+    check(is_complete(flask("RRR*")) && is_complete(flask("R*RR")) && !is_complete(flask("RR*G")),
+          "counts as any color");
+    check(top_run(flask("RR*")) == 1 && top_run(flask("R*RR")) == 2, "never joins a run");
+    var b = board_of(["G*", "GG", ""]);
+    check(can_pour(b, 1, 0), "anything goes onto it");
+    let r = pour(b, 1, 0);
+    check(r.amount == 2 && b.bottles[0].done, "and it completes a flask");
+    check(validate(board_of(["RRR*", "GGGG", ""])).len == 0, "one color a segment short");
+    check(validate(board_of(["RRRR", "GGGG", "*"])).len > 0, "but only then");
+    check(validate(board_of(["RRR*", "GGG*", ""])).len > 0, "and one Drop at most");
+    var t = board_of(["RRRR", "GG*", "GG"]);
+    t.bottles[1].cap = 5;
+    check(validate(t).len == 0, "a tall color can be the short one");
+}
+
+fn test_catalyst() {
+    test("catalyst fires everything");
+    var b = row_of(["BBB", "B", "", "GG", "RYG", "Y", ""]);
+    b.bottles[0].fixture = Fixture.Catalyst;
+    b.bottles[2].fixture = Fixture.Brazier;
+    b.bottles[3].cover = Cover.Rime;
+    b.bottles[3].thaw = 9;
+    b.bottles[4].body = Body.Hourglass;
+    b.bottles[4].flip_every = 9;
+    b.bottles[6].fixture = Fixture.Lantern;
+    let r = pour(b, 1, 0);
+    check(b.bottles[0].spent && has_event(r, EventKind.CatalystFired, 0), "fires on completion");
+    check(event_at(r, EventKind.Completed) < event_at(r, EventKind.CatalystFired), "after completing");
+    check(b.bottles[3].thaw == 7, "braziers heat their neighbors");
+    check(letters(b.bottles[4]) == "GYR", "hourglasses flip");
+    check(b.bottles[6].lit, "lanterns light");
+}
+
+fn test_validate() {
+    test("validate");
+    var b = board_of(["RRRR", "GGGG", "", ""]);
+    b.bottles[0].body = Body.Siphon;
+    b.bottles[0].murk = 1;
+    check(validate(b).len > 0, "no murk on a siphon");
+    b = board_of(["RRRR", "UUUU", ""]);
+    b.bottles[2].body = Body.Athanor;
+    check(validate(b).len > 0, "an athanor needs quicksilver");
+    b = board_of(["RRRR", "QUUU", ""]);
+    b.bottles[2].body = Body.Athanor;
+    check(validate(b).len == 0, "quicksilver and gold, one set");
+    b = board_of(["RRRR", "GGGG", ""]);
+    b.bottles[2].cover = Cover.Vine;
+    check(validate(b).len > 0, "tendrils need a root");
+    b = board_of(["RRRR", "GGGG", ""]);
+    b.bottles[0].body = Body.Hourglass;
+    check(validate(b).len > 0, "an hourglass needs its flip count");
+    b = board_of(["RRRR", "GGGG", ""]);
+    b.salamander = 5;
+    check(validate(b).len > 0, "the salamander on the board");
+}
+
+fn test_hash() {
+    test("board hash");
+    let a = board_of(["RRGG", "GGRR", ""]);
+    let s = board_of(["GGRR", "RRGG", ""]);
+    check(board_hash(a) == board_hash(s), "places don't matter on a plain board");
+    var x = a;
+    var y = s;
+    x.bottles[2].fixture = Fixture.Brazier;
+    y.bottles[2].fixture = Fixture.Brazier;
+    check(board_hash(x) != board_hash(y), "but do next to a brazier");
+    var t = a;
+    t.bottles[0].cover = Cover.Rime;
+    t.bottles[0].thaw = 3;
+    var u = t;
+    u.bottles[0].thaw = 2;
+    check(board_hash(t) != board_hash(u), "timers count");
+    var m = a;
+    m.salamander = 0;
+    var n = a;
+    n.salamander = 1;
+    check(board_hash(m) != board_hash(n), "and the salamander's perch");
 }
 
 fn test_undo_snapshot() {
@@ -336,16 +585,20 @@ fn test_solver() {
     check(!dead_end(b, 50000), "a board that can be won is no dead end");
     let pointless = board_of(["RGRG", "GRG"]);
     check(has_move(pointless) && dead_end(pointless, 1000), "a dead end can still have pours");
-    check(cornered(pointless) && !cornered(b), "the game only searches when cornered");
+    check(cornered(pointless) && !cornered(b), "cornered: few pours and no empty flask");
     let big = generate(level_spec(60).params, level_spec(60).seed).board;
     check(!dead_end(big, 10), "running out of budget proves nothing");
     // The only way on is a pour that just moves a bottle, to melt the ice.
     var ice = board_of(["RR", "", "RR"]);
-    ice.bottles[2].kind = Kind.Frozen;
-    ice.bottles[2].timer = 1;
-    ice.bottles[2].active = true;
+    ice.bottles[2].cover = Cover.Rime;
+    ice.bottles[2].thaw = 1;
     settle(ice);
     check(solve(ice, 1000, path).solved, "pours that only count down the ice are tried");
+    // Or to move the salamander off the flask that needs filling.
+    var hot = board_of(["RR", "", "RR"]);
+    hot.salamander = 0;
+    settle(hot);
+    check(solve(hot, 1000, path).solved, "pours that only move the salamander are tried");
 }
 
 // The game runs the solver, the generator and shuffle a slice a frame; they
@@ -405,17 +658,71 @@ fn test_generator() {
     let b = generate(GenParams { colors: 6, empties: 2 }, 99);
     check(board_hash(a.board) == board_hash(b.board), "the same seed gives the same board");
     var path: Move[>..] = [];
-    let p = GenParams { colors: 6, empties: 2, hidden: 2, frozen: 1, cork: 1, gift: 1 };
+    let p = GenParams { colors: 6, empties: 2, murk: 2, rime: 1, seal: 1, vow: 1 };
     let o = generate(p, 7);
-    check(o.stats.solved && solve(o.board, 100000, path).solved, "obstacles stay solvable");
-    var kinds: bool[8] = [false; 8];
-    for i in o.board.count { kinds[kind_index(o.board.bottles[i].kind)] = true; }
-    check(kinds[kind_index(Kind.Frozen)] && kinds[kind_index(Kind.Cork)] && kinds[kind_index(Kind.Gift)],
-          "the obstacles asked for are there");
-    let c = generate(GenParams { colors: 6, empties: 2, curtain: 1 }, 5);
-    var has_curtain = false;
-    for i in c.board.count { if c.board.bottles[i].kind == Kind.Curtain && c.board.bottles[i].active { has_curtain = true; } }
-    check(c.stats.solved && has_curtain, "a curtain level that can be won");
+    check(o.stats.solved && solve(o.board, 100000, path).solved, "modifiers stay solvable");
+
+    // Each modifier, alone or with what it needs, for a few seeds.
+    for which in 15 {
+        var q = GenParams { colors: 5, empties: 2 };
+        var name = "";
+        match which {
+            0 => { q.murk = 3; name = "murk"; },
+            1 => { q.seal = 2; name = "seal"; },
+            2 => { q.vow = 1; name = "vow"; },
+            3 => { q.tall = 1; q.tall_height = 6; name = "tall"; },
+            4 => { q.rime = 1; q.brazier = 1; name = "brazier"; },
+            5 => { q.quicksilver = true; name = "quicksilver"; },
+            6 => { q.siphon = 1; name = "siphon"; },
+            7 => { q.twins = 1; name = "twins"; },
+            8 => { q.shroud = 1; q.murk = 2; name = "shroud"; },
+            9 => { q.hourglass = 1; q.murk = 2; name = "hourglass"; },
+            10 => { q.vine = true; q.brazier = 1; name = "vine"; },
+            11 => { q.salamander = true; q.rime = 1; name = "salamander"; },
+            12 => { q.moonpetal = 1; name = "moonpetal"; },
+            13 => { q.athanor = true; name = "athanor"; },
+            _ => { q.drop = true; q.catalyst = 1; q.lantern = 1; name = "drop and catalyst"; },
+        }
+        for seed in 1..4 {
+            let g = generate(q, seed as u64 * 31);
+            check(g.stats.solved && g.attempts <= 400 && validate(g.board).len == 0, str(name, " is generated"));
+            check(has_modifier(g.board, which), str(name, " is on the board, seed ", seed));
+            check(solve(g.board, 100000, path).solved, str(name, " can be won"));
+        }
+        let x = generate(q, 5);
+        let y = generate(q, 5);
+        check(board_hash(x.board) == board_hash(y.board), str(name, ": the same seed gives the same board"));
+    }
+}
+
+// Whether the generator's test case `which` put its modifier on the board.
+fn has_modifier(board: Board, which: i64) -> bool {
+    var tally: i64[MAX_LIQUID + 1] = [0; MAX_LIQUID + 1];
+    for i in board.count { for k in board.bottles[i].n as i64 { tally[board.bottles[i].seg[k]]++; } }
+    for i in board.count {
+        let b = board.bottles[i];
+        let l, r = neighbors(board, i);
+        let ok = match which {
+            0 => b.murk != 0,
+            1 => b.cover == Cover.Seal,
+            2 => b.body == Body.Vow,
+            3 => b.cap > CAP,
+            4 => b.fixture == Fixture.Brazier && ((l >= 0 && board.bottles[l].cover == Cover.Rime) ||
+                                                  (r >= 0 && board.bottles[r].cover == Cover.Rime)),
+            5 => tally[QUICKSILVER] == CAP,
+            6 => b.body == Body.Siphon,
+            7 => b.twin >= 0 && are_neighbors(board, i, b.twin),
+            8 => b.cover == Cover.Shroud,
+            9 => b.body == Body.Hourglass,
+            10 => b.fixture == Fixture.VineRoot && tally[EMERALD] > 0,
+            11 => board.salamander >= 0,
+            12 => b.body == Body.Moonpetal,
+            13 => b.body == Body.Athanor && tally[QUICKSILVER] > 0,
+            _ => tally[DROP] == 1 && b.fixture == Fixture.Catalyst,
+        };
+        if ok { return true; }
+    }
+    false
 }
 
 // --- tools ------------------------------------------------------------------------
@@ -423,17 +730,16 @@ fn test_generator() {
 fn test_tools() {
     test("shuffle");
     var b = board_of(["RGBY", "GBYR", "BYRG", "YRGB", "", ""]);
-    b.bottles[0].hidden = 2;
-    b.bottles[3].kind = Kind.Frozen;
-    b.bottles[3].timer = 5;
-    b.bottles[3].active = true;
+    b.bottles[0].murk = murk_below(2);
+    b.bottles[3].cover = Cover.Rime;
+    b.bottles[3].thaw = 5;
     settle(b);
     let before = b;
     var r = rng { 42 };
     check(shuffle_board(b, r, 30, 20000), "finds a solvable deal");
     check(validate(b).len == 0 && color_count(b) == 4, "the same liquid");
     check(b.bottles[0].seg[0] == before.bottles[0].seg[0] &&
-          b.bottles[0].seg[1] == before.bottles[0].seg[1], "hidden layers stay put");
+          b.bottles[0].seg[1] == before.bottles[0].seg[1], "murky layers stay put");
     check(letters(b.bottles[3]) == letters(before.bottles[3]), "a frozen bottle is left alone");
     for i in b.count { check(b.bottles[i].n == before.bottles[i].n, "every height kept"); }
     var path: Move[>..] = [];
@@ -452,10 +758,10 @@ fn test_tools() {
 
 fn test_campaign() {
     test("campaign");
-    check(level_spec(1).file == "01_first_pour", "level one is the first tutorial");
+    check(level_spec(1).hand_made, "level one is hand-made");
     for f in ALL_FEATURES {
         let s = level_spec(tutorial_level(f));
-        check(s.is_tutorial && s.tutorial == f && s.file.len > 0 && s.difficulty == Difficulty.Normal,
+        check(s.is_tutorial && s.tutorial == f && s.hand_made && s.difficulty == Difficulty.Normal,
               "tutorial levels");
         check(!introduced(f, tutorial_level(f) - 1), "nothing used before its tutorial");
     }
@@ -464,15 +770,14 @@ fn test_campaign() {
     check(level_spec(23).params.colors <= level_spec(70).params.colors, "colors ramp up");
     for n in 2..13 {
         let p = level_spec(n).params;
-        check(p.cork + p.vault + p.gift + p.frozen + p.cloak + p.curtain == 0 || n >= 13,
-              "no mechanical obstacle before the mystery tutorial");
+        check(p.seal + p.rime + p.shroud + p.vow == 0, "no mechanical modifier before the vow tutorial");
     }
     let t0 = clock();
     var worst = 0.0;
     var worst_level = 0;
     for n in 2..61 {
         let spec = level_spec(n);
-        if spec.file.len > 0 { continue; }
+        if spec.hand_made { continue; }
         let t = clock();
         let g = generate(spec.params, spec.seed);
         let dt = clock() - t;
@@ -488,7 +793,9 @@ fn test_campaign() {
 
 fn test_tables() {
     test("enum tables");
-    for k, i in ALL_KINDS { check(kind_index(k) == i, "ALL_KINDS is in index order"); }
+    for x, i in ALL_BODIES { check(body_index(x) == i, "ALL_BODIES is in index order"); }
+    for x, i in ALL_COVERS { check(cover_index(x) == i, "ALL_COVERS is in index order"); }
+    for x, i in ALL_FIXTURES { check(fixture_index(x) == i, "ALL_FIXTURES is in index order"); }
     for s, i in ALL_SHAPES {
         check(shape_index(s) == i, "ALL_SHAPES is in index order");
         check(find(FRAGMENT_SHADER, str("#define ", shape_define(s), " ", i, "\n")) >= 0,
@@ -499,102 +806,56 @@ fn test_tables() {
         check(find(FRAGMENT_SHADER, str("#define ", icon_define(c), " ", i, "\n")) >= 0,
               str("the shader numbers ", icon_define(c), " ", i));
     }
+    check(color_of_letter('Q') == QUICKSILVER && color_of_letter('U') == GOLD && color_of_letter('*') == DROP,
+          "the special liquids' letters");
 }
 
-// --- level format -------------------------------------------------------------------
+// --- shipped levels -------------------------------------------------------------------
 
-fn test_level_io() {
-    test("level format");
-    let text = """
-        {
-          "name": "Sample",
-          "difficulty": "hard",
-          "hint": "Try it.",
-          "future": { "nested": [1, 2, {"x": "y"}] },
-          "bottles": [
-            "RRGB",
-            { "liquid": "GGBR", "hidden": 3 },
-            { "kind": "cork", "liquid": "BB", "key": "B" },
-            { "kind": "frozen", "liquid": "RG", "thaw": 4 },
-            { "kind": "mystery", "liquid": "" },
-            ""
-          ]
+// Every hand-made level is well formed and can be won.
+fn test_levels() {
+    test("shipped levels");
+    for k in HAND_MADE_COUNT {
+        let h = hand_made(k);
+        let name = h.info.name;
+        let err = validate(h.board);
+        check(err.len == 0, str(name, ": ", err));
+        check(h.info.hint.len > 0, str(name, " has a hint"));
+        check(h.board.per_row > 0 && !is_won(h.board), str(name, " is settled and not yet won"));
+        var moves: Move[>..] = [];
+        check(solve(h.board, 200000, moves).solved, str(name, " can be won"));
+        if h.number > 0 {
+            let back, found = campaign_hand_made(h.number);
+            check(found && back.info.name == name, str(name, " is found by its number"));
         }
-        """;
-    var board = Board { .. };
-    var info = LevelInfo { name: [], hint: [] };
-    let err = parse_level(text, board, info);
-    check(err.len == 0, str("parses: ", err));
-    check(info.name == "Sample" && info.difficulty == Difficulty.Hard && info.hint == "Try it.", "header fields");
-    check(board.count == 6 && board.colors == 3, "six bottles, three colors");
-    check(board.bottles[1].hidden == 3 && board.bottles[2].kind == Kind.Cork, "bottle fields");
-    check(board.bottles[3].timer == 4 && board.bottles[3].active, "frozen with its count");
-    var out: u8[>..] = [];
-    write_level(board, info, out);
-    var again = Board { .. };
-    var info2 = LevelInfo { name: [], hint: [] };
-    check(parse_level(out, again, info2).len == 0, "what it writes reads back");
-    check(board_hash(again) == board_hash(board), "the same board");
-
-    test("level format errors");
-    check(parse_level("{ \"bottles\": [\"RRRRR\"] }", board, info).len > 0, "five segments");
-    check(parse_level("{ \"bottles\": [\"RRG\", \"GGR\"] }", board, info).len > 0, "uneven colors");
-    check(parse_level("{ \"bottles\": [\"QQQQ\"] }", board, info).len > 0, "unknown color");
-    check(parse_level("{ \"bottles\": [", board, info).len > 0, "truncated");
-}
-
-fn check_level_file(path: const u8[:], name: const u8[:]) {
-    var text: u8[>..] = [];
-    check(read_file(path, text), str("reads ", path));
-    var b = Board { .. };
-    var info = LevelInfo { name: [], hint: [] };
-    let err = parse_level(text, b, info);
-    check(err.len == 0, str(name, ": ", err));
-    if err.len > 0 { return; }
-    check(info.hint.len > 0, str(name, " has a hint"));
-    var moves: Move[>..] = [];
-    check(solve(b, 200000, moves).solved, str(name, " can be won"));
-}
-
-// Every level file shipped in data/levels is well formed and can be won.
-fn test_level_files() {
-    test("shipped level files");
-    var dir: u8[>..] = [];
-    if !env("ALCHEMIST_SORT_DATA", dir) || dir.len == 0 { dir.clear(); dir.append("data"); }
-    var found = 0;
-    for sub in ["tutorial", "examples"] {
-        let d = str(dir, "/levels/", sub);
-        var names: u8[>..] = [];
-        if !list_dir(d, names) { continue; }
-        each_split(names, '\n') {
-            if ends_with(it, ".json") {
-                found++;
-                check_level_file(str(d, "/", it), it);
-            }
-        };
     }
-    check(found >= 11, str("found the level files (", found, ") in ", dir));
 }
 
 fn main() {
-    test_level_files();
+    test_levels();
     test_pour_rules();
-    test_hidden();
+    test_shelves();
+    test_murk();
     test_split();
-    test_mystery();
-    test_cloak();
-    test_frozen();
-    test_cork(Kind.Cork, "corked bottle");
-    test_cork(Kind.Vault, "locked vault");
-    test_vault_chain();
-    test_curtain();
-    test_gift();
-    test_long();
+    test_vow();
+    test_seal();
+    test_tall();
+    test_rime();
+    test_heat();
+    test_quicksilver();
+    test_twins();
+    test_light();
+    test_hourglass();
+    test_vine();
+    test_salamander();
+    test_drop();
+    test_catalyst();
+    test_validate();
+    test_hash();
     test_undo_snapshot();
     test_solver();
     test_resumable();
     test_generator();
-    test_level_io();
     test_tools();
     test_campaign();
     test_tables();

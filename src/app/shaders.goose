@@ -9,7 +9,7 @@ enum Shape {
     Rect,       // rounded rectangle; p0: radius, border, gradient on; p1: second color
     Glow,       // soft ellipse; p0.x: softness 0..1
     FlaskBack,  // the inside of a flask
-    Liquid,     // p0: colors of layers k and k + 4, as k + 16 (k + 4); p1: fill, hidden, ripple, height;
+    Liquid,     // p0: colors of layers k and k + 4, as k + 32 (k + 4); p1: fill, murk bits, ripple, height;
                 // color: slosh slope, seed, ripple center (in half widths), alpha
     Glass,      // glass and rim; p0.x: glow
     Stream,     // a falling stream along a curve; p0: start, control; p1: end, width, phase
@@ -183,7 +183,7 @@ let FRAGMENT_SHADER = """
     layout(location = 5) in vec4 v_misc;
     layout(location = 0) out vec4 result;
     // light: the room's candlelight, its color and flicker 0..1.
-    layout(set = 3, binding = 0) uniform Look { vec4 palette[16]; vec4 screen; vec4 light; };
+    layout(set = 3, binding = 0) uniform Look { vec4 palette[20]; vec4 screen; vec4 light; };
 
     float hash12(vec2 p) {
         vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -567,6 +567,15 @@ let FRAGMENT_SHADER = """
                                   sd_box(p + vec2(0.0, -r * 0.4), vec2(r * 0.85, r * 0.2)));
         else if (s == 13) d = sd_triangle(p, vec2(0.0, r * 0.9), vec2(-r * 0.9, -r * 0.7), vec2(r * 0.9,
         -r * 0.7));
+        // Quicksilver, gold and the Drop: the alchemists' marks for mercury
+        // (a ring over a cross) and the sun (a ring with a dot), and a star.
+        else if (s == 15) d = min(abs(sd_circle(p - vec2(0.0, -r * 0.25), r * 0.42)) - r * 0.14,
+                                  min(sd_box(p - vec2(0.0, r * 0.55), vec2(r * 0.12, r * 0.4)),
+                                      sd_box(p - vec2(0.0, r * 0.62), vec2(r * 0.4, r * 0.12))));
+        else if (s == 16) d = min(abs(sd_circle(p, r * 0.75)) - r * 0.16, sd_circle(p, r * 0.22));
+        else if (s == 17) d = min(sd_box(p, vec2(r * 0.9, r * 0.16)),
+                                  min(sd_box(mat2(0.5, -0.866, 0.866, 0.5) * p, vec2(r * 0.9, r * 0.16)),
+                                      sd_box(mat2(0.5, 0.866, -0.866, 0.5) * p, vec2(r * 0.9, r * 0.16))));
         else d = min(sd_circle(p - vec2(-r * 0.45, 0.0), r * 0.36), sd_circle(p - vec2(r * 0.45, 0.0), r *
         0.36));
         float a = fill_aa(d);
@@ -703,9 +712,9 @@ let FRAGMENT_SHADER = """
                     float fi = clamp(floor(max(lvl, 0.0) / seg), 0.0, min(cap, ceil(v_p1.x - 0.001)) - 1.0);
                     int idx = int(fi) % 4;
                     float pair = idx == 0 ? v_p0.x : idx == 1 ? v_p0.y : idx == 2 ? v_p0.z : v_p0.w;
-                    float ci = fi < 3.5 ? mod(pair, 16.0) : floor(pair / 16.0);
+                    float ci = fi < 3.5 ? mod(pair, 32.0) : floor(pair / 32.0);
                     vec3 c = palette[int(ci + 0.5)].rgb;
-                    bool hidden = fi < v_p1.y - 0.5;
+                    bool hidden = ((int(v_p1.y + 0.5) >> int(fi)) & 1) != 0;
                     if (hidden) {
                         float n = noise(p * 0.12 + vec2(t * 0.3, fi * 7.0));
                         c = mix(vec3(0.20, 0.17, 0.28), vec3(0.33, 0.29, 0.42), n);

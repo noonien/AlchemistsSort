@@ -1,6 +1,0 @@
-{
-  "name": "Cloaked Flask",
-  "difficulty": "normal",
-  "hint": "A cloth hides a flask until you complete a flask of the color on its badge. Here, finish a Ruby flask.",
-  "bottles": ["RRGB", "BRYR", "YBGY", { "kind": "cloak", "liquid": "GBYG", "key": "R" }, "", ""]
-}

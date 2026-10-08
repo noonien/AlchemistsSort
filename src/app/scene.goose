@@ -144,7 +144,7 @@ fn reset_back_shelf(b: Board) {
 fn update_back_shelf(b: Board) {
     for c, k in shelf_colors {
         var done = false;
-        for i in b.count { if b.bottles[i].done && b.bottles[i].seg[0] == c { done = true; } }
+        for i in b.count { if b.bottles[i].done && flask_color(b.bottles[i]) == c { done = true; } }
         if done && shelf_lit_at[k] < 0.0 { shelf_lit_at[k] = now; }
         if !done { shelf_lit_at[k] = -1.0; }
     }

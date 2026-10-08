@@ -162,7 +162,7 @@ fn play_pitched(id: Sfx, pitch: f64, volume: f64) {
 // the chord of the level's colors.
 
 let NOTE_BASE: f64 = 261.63;
-let PENTATONIC: const i64[14] = [0, 2, 4, 7, 9, 12, 14, 16, 19, 21, 24, 26, 28, 31];
+let PENTATONIC: const i64[17] = [0, 2, 4, 7, 9, 12, 14, 16, 19, 21, 24, 26, 28, 31, 33, 36, 38];
 
 // A glassy bell: a few partials, the higher ones dying first.
 fn bell(pcm: f32[>..]&, freq: f64) {
@@ -178,7 +178,7 @@ fn bell(pcm: f32[>..]&, freq: f64) {
     }
 }
 
-fn note_pitch(color: i64) -> f64 { pow(2.0, PENTATONIC[clamp(color - 1, 0, 13)] / 12.0) }
+fn note_pitch(color: i64) -> f64 { pow(2.0, PENTATONIC[clamp(color - 1, 0, PENTATONIC.len - 1)] / 12.0) }
 
 fn play_note(color: i64, volume: f64) { play_pitched(Sfx.Bell, note_pitch(color), volume); }
 

@@ -6,10 +6,11 @@ import std;
 import vec;
 import .draw;
 
-let COLOR_NAMES: const u8[:][15] = ["", "Ruby", "Amber", "Sun", "Lime", "Emerald", "Sky", "Sapphire",
-                                    "Violet", "Rose", "Umber", "Pearl", "Slate", "Teal", "Olive"];
+let COLOR_NAMES: const u8[:][18] = ["", "Ruby", "Amber", "Sun", "Lime", "Emerald", "Sky", "Sapphire",
+                                    "Violet", "Rose", "Umber", "Pearl", "Slate", "Teal", "Olive",
+                                    "Quicksilver", "Gold", "Philosopher's Drop"];
 
-let NORMAL_PALETTE: const f32[3][15] = [
+let NORMAL_PALETTE: const f32[3][18] = [
     [0.0, 0.0, 0.0],
     [0.88, 0.17, 0.22],     // ruby
     [0.98, 0.56, 0.13],     // amber
@@ -25,10 +26,13 @@ let NORMAL_PALETTE: const f32[3][15] = [
     [0.45, 0.49, 0.56],     // slate
     [0.05, 0.53, 0.56],     // teal
     [0.52, 0.52, 0.12],     // olive
+    [0.80, 0.84, 0.90],     // quicksilver: bright liquid silver
+    [0.83, 0.66, 0.24],     // gold: deeper and less orange than amber, darker than sun
+    [0.80, 1.00, 0.95],     // the Drop: a pale glow
 ];
 
 // Built from the Okabe-Ito set and spread out in lightness; with symbols.
-let SAFE_PALETTE: const f32[3][15] = [
+let SAFE_PALETTE: const f32[3][18] = [
     [0.0, 0.0, 0.0],
     [0.84, 0.37, 0.0],      // vermillion
     [0.90, 0.62, 0.0],      // orange
@@ -44,15 +48,18 @@ let SAFE_PALETTE: const f32[3][15] = [
     [0.30, 0.30, 0.30],     // dark gray
     [0.10, 0.20, 0.45],     // navy
     [0.70, 0.70, 0.70],     // light gray
+    [0.62, 0.68, 0.82],     // blue gray
+    [0.78, 0.62, 0.22],     // dark gold
+    [0.95, 0.80, 0.95],     // pale pink
 ];
 
 fn palette_color(c: i64, safe: bool) -> float4 {
-    let k = clamp(c, 0, 14);
+    let k = clamp(c, 0, 17);
     let v = if safe { SAFE_PALETTE[k] } else { NORMAL_PALETTE[k] };
     float4 { v[0], v[1], v[2], 1.0 }
 }
 
 fn fill_palette(look: Look&, safe: bool) {
-    for c in 15 { look.palette[c] = palette_color(c, safe); }
-    look.palette[15] = float4 { 0.3, 0.27, 0.4, 1.0 };
+    for c in 18 { look.palette[c] = palette_color(c, safe); }
+    look.palette[19] = float4 { 0.3, 0.27, 0.4, 1.0 };
 }

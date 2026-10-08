@@ -1,6 +1,0 @@
-{
-  "name": "Curtain",
-  "difficulty": "normal",
-  "hint": "A flask waits behind the curtain. The curtain opens as soon as at least one flask stands empty.",
-  "bottles": ["RGBR", "YBGY", "GR", { "kind": "curtain", "liquid": "BYGR", "empties": 1 }, "B", "Y"]
-}

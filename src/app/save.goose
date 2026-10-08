@@ -77,10 +77,3 @@ fn write_save(s: Save) -> bool {
     write_file_atomic(save_path(), text)
 }
 
-// Where the player's own level files go.
-fn user_levels_dir() -> u8[>..] {
-    ensure_save_dir();
-    let d = str(save_dir, "/levels");
-    if !is_dir(d) { make_dir(d); }
-    d
-}

@@ -113,7 +113,7 @@ fn drops_alive() -> bool {
 
 fn draw_completion(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: float2) {
     if i >= 0 && busy(i) { return; }        // still being poured into
-    let c = palette_color(b.seg[0], save.color_safe);
+    let c = palette_color(flask_color(b), save.color_safe);
     let since = if i >= 0 { now - complete_at[i] } else { 10.0 };
     let neck = pos - float2 { 0.0, half.y - half.x * 0.35 };
     let fall = (1.0 - bounce_in(since / 0.4)) * half.x * 3.0;
@@ -131,7 +131,7 @@ fn draw_completion(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: float2
     }
     if k <= 0.0 { return; }
     let e = (1.0 - (1.0 - k) * (1.0 - k)) as f32;
-    let name = COLOR_NAMES[clamp(b.seg[0] as i64, 0, 14)];
+    let name = COLOR_NAMES[clamp(flask_color(b), 0, COLOR_NAMES.len - 1)];
     let w = max(text_width(TextStyle.Tiny, name) * 0.5 + 6.0, half.x * 0.8);
     let lp = float2 { pos.x + (1.0 - e) * half.x * 2.0, pos.y + half.y * 0.3 };
     var label = inst(Shape.Label, lp, float2 { w, 10.0 }, float4 { 1.0, 1.0, 1.0, e });
@@ -270,7 +270,7 @@ fn update_finale() {
     var src: i64[..24] = [];
     finale_sources(src);
     while finale_rung < src.len && t >= beam_start(finale_rung, src.len) + BEAM_TIME {
-        let c: i64 = board.bottles[src[finale_rung]].seg[0];
+        let c = flask_color(board.bottles[src[finale_rung]]);
         play_note(c, 0.35);
         finale_rung++;
     }
@@ -278,7 +278,7 @@ fn update_finale() {
         finale_chimed = true;
         var colors: i64[..16] = [];
         for i in src {
-            let c: i64 = board.bottles[i].seg[0];
+            let c = flask_color(board.bottles[i]);
             if !contains(colors, c) && colors.len < 16 { colors.push(c); }
         }
         play_chord(colors);
@@ -307,7 +307,7 @@ fn draw_finale(out: Inst[>..]&) {
         if head <= 0.0 || fade <= 0.0 { continue; }
         let a = neck_of(i);
         let ctrl = float2 { (a.x + GLYPH_AT.x) * 0.5, min(a.y, GLYPH_AT.y) - 140.0 };
-        let c = palette_color(board.bottles[i].seg[0], save.color_safe);
+        let c = palette_color(flask_color(board.bottles[i]), save.color_safe);
         curve(out, Shape.Beam, a, ctrl, GLYPH_AT, 4.0, head, with_alpha(c, fade));
         glow(out, a, float2 { 14.0, 14.0 }, 1.0, with_alpha(c, 0.6 * fade));
     }

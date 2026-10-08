@@ -1,6 +1,0 @@
-{
-  "name": "First Pour",
-  "difficulty": "normal",
-  "hint": "Tap a flask, then tap another to pour. Liquid only lands on the same color or in an empty flask. Fill every flask with a single color.",
-  "bottles": ["RRGB", "GGBR", "BBRG", "", ""]
-}
