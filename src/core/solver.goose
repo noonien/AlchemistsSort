@@ -9,8 +9,9 @@ import .board;
 
 struct Move { from: i64, to: i64 }
 
+// A position the search reached, in 32 bytes. Its board isn't kept: it is
+// the parent's with one more pour, and is replayed when needed (board_at).
 struct SolveNode {
-    board: Board,
     hash: u64,
     heap: i64 = 0,      // the open queue's entry in this slot (see Search)
     parent: i32,
@@ -18,8 +19,16 @@ struct SolveNode {
     bucket: i32 = -1,   // the first node of the seen set's chain for this slot
     from: i8,
     to: i8,
-    g: i32,
 }
+
+// Boards of recently expanded positions, kept for replaying their children.
+let BOARD_CACHE = 128;
+
+// The most positions one search stores: a few per position it may expand,
+// and never more than fit (at 32 bytes each, with room to spare) in one of
+// the browser build's 16 MB data stacks.
+let NODES_PER_BUDGET = 4;
+let MAX_NODES = 400000;
 
 struct SolveStats {
     solved: bool = false,
@@ -33,10 +42,15 @@ struct SolveStats {
 struct Search {
     stats: SolveStats = SolveStats {},
     budget: i64 = 0,
+    room: i64 = 0,          // the most nodes it may store; when full, it gives up
     done: bool = true,
     goal: i64 = -1,         // the winning node, once found
     queued: i64 = 0,        // the open queue's entries, in nodes[..queued].heap
     buckets: i64 = 0,       // the seen set's chains, headed in nodes[..buckets].bucket
+    root: Board = Board { .. },
+    cached: i32[BOARD_CACHE] = [-1; BOARD_CACHE],   // node k's board is in slot k % BOARD_CACHE
+    depth: i32[BOARD_CACHE] = [0; BOARD_CACHE],     //   and its pours from the root
+    cache: Board[BOARD_CACHE] = [Board { .. }; BOARD_CACHE],
     nodes: SolveNode[>..<] = [],    // grow-shrink, so a job can start a new search in place
 }
 
@@ -125,6 +139,11 @@ fn useful_moves(board: Board, out: Move[>..]&) {
 // the open queue (which never holds more entries than there are nodes), and
 // slot k's `bucket` heads the k-th chain of the set of positions seen (which
 // keeps no more chains than nodes).
+//
+// A node holds no board, which would be twenty times its size: most nodes
+// are never expanded. A node's board is its parent's after one pour, and
+// every parent was expanded, so expanding one replays the pours from the
+// nearest ancestor whose board is still cached, usually just its parent.
 
 // Queue entries are `priority << 32 | node`, all distinct, so the order the
 // positions come off depends only on what was pushed.
@@ -180,9 +199,8 @@ fn link(s: Search&, id: i64) {
 
 // Adds a position to the tree and to the set seen. When there are twice as
 // many nodes as chains, the chains double and every node is linked anew.
-fn add_node(s: Search&, board: Board, h: u64, parent: i64, m: Move, g: i64) -> i64 {
-    s.nodes.push(SolveNode { board: board, hash: h, parent: parent as i32,
-                             from: m.from as i8, to: m.to as i8, g: g as i32, .. });
+fn add_node(s: Search&, h: u64, parent: i64, m: Move) -> i64 {
+    s.nodes.push(SolveNode { hash: h, parent: parent as i32, from: m.from as i8, to: m.to as i8, .. });
     let id = s.nodes.len - 1;
     if s.nodes.len < 2 * s.buckets {
         link(s, id);
@@ -194,33 +212,60 @@ fn add_node(s: Search&, board: Board, h: u64, parent: i64, m: Move, g: i64) -> i
     id
 }
 
+// Node `n`'s board and its pours from the root: the nearest ancestor's
+// board that is at hand, and the pours from there, each board on the way
+// cached for its other children.
+fn board_at(s: Search&, n: i64, trail: i64[>..<]&) -> Board, i64 {
+    trail.clear();
+    var at = n;
+    while at > 0 && s.cached[at % BOARD_CACHE] != at {
+        trail.push(at);
+        at = s.nodes[at].parent;
+    }
+    var b = if at == 0 { s.root } else { s.cache[at % BOARD_CACHE] };
+    var g: i64 = if at == 0 { 0 } else { s.depth[at % BOARD_CACHE] };
+    while trail.len > 0 {
+        let k = trail.pop();
+        let r = pour(b, s.nodes[k].from, s.nodes[k].to);
+        g++;
+        let slot = k % BOARD_CACHE;
+        s.cached[slot] = k as i32;
+        s.depth[slot] = g as i32;
+        s.cache[slot] = b;
+    }
+    return b, g;
+}
+
 // A search for a way to win from `start` that gives up after `budget`
 // positions. Nothing is searched until search_step.
 fn search_begin(start: Board, budget: i64) -> Search {
-    var s = Search { budget: budget, done: false, .. };
+    var s = Search { budget: budget, room: min(MAX_NODES, budget * NODES_PER_BUDGET + 4096), done: false,
+                     root: start, .. };
     if is_won(start) {
         s.stats.solved = true;
         s.done = true;
         return s;
     }
     s.buckets = 1;
-    let root = add_node(s, start, board_hash(start), -1, Move { -1, -1 }, 0);
+    let root = add_node(s, board_hash(start), -1, Move { -1, -1 });
     queue_push(s, (heuristic(start) << 32) | root);
     s
 }
 
 // Takes up to `nodes` more positions off the queue (at least one). True once
-// the search is over: solved, every position tried, or the budget spent.
+// the search is over: solved, every position tried, or the budget (or the
+// room for positions) spent.
 fn search_step(s: Search&, nodes: i64) -> bool {
     var moves: Move[>..] = [];
+    var trail: i64[>..<] = [];
     var left = max(1, nodes);
     while !s.done && left > 0 && s.queued > 0 {
         left--;
         let at = queue_pop(s) & 0xffffffff;
         s.stats.expanded++;
         if s.stats.expanded > s.budget { break; }
-        let here = s.nodes[at].board;
-        let g: i64 = s.nodes[at].g + 1;
+        let here, depth = board_at(s, at, trail);
+        let g = depth + 1;
         moves.clear();
         useful_moves(here, moves);
         for m in moves {
@@ -229,7 +274,12 @@ fn search_step(s: Search&, nodes: i64) -> bool {
             if !r.ok { continue; }
             let h = board_hash(next);
             if seen(s, h) { continue; }
-            let id = add_node(s, next, h, at, m, g);
+            if s.nodes.len >= s.room {
+                // As good as out of budget: nothing is proven.
+                s.done = true;
+                break;
+            }
+            let id = add_node(s, h, at, m);
             if is_won(next) {
                 s.goal = id;
                 s.stats.solved = true;

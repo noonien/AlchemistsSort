@@ -646,6 +646,19 @@ fn test_resumable() {
           "shuffle in slices deals the same board");
 }
 
+// A board that can never be won, with a salamander so that no two empty
+// flasks are alike: positions multiply faster than the search can expand
+// them. Its stored positions stay bounded, and nothing is proven.
+fn test_search_memory() {
+    test("search memory");
+    var b = board_of(["RGYO", "GYOL", "YOLK", "OLKC", "LKCG", "KCGY", "CRRL", "BBGR", "BKY", "", "", "", "", "", ""]);
+    b.salamander = 3;
+    var s = search_begin(b, 200000);
+    while !search_step(s, 1000) {}
+    check(!s.stats.solved && !s.stats.exhausted, "a board that can't be won isn't won, nor proven lost when cut short");
+    check(s.nodes.len <= s.room && s.room <= MAX_NODES, "the positions stored stay within the room");
+}
+
 fn test_generator() {
     test("generator");
     for seed in 1..6 {
@@ -855,6 +868,7 @@ fn main() {
     test_undo_snapshot();
     test_solver();
     test_resumable();
+    test_search_memory();
     test_generator();
     test_tools();
     test_campaign();
