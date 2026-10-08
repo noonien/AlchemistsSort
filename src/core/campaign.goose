@@ -42,7 +42,7 @@ fn tutorial_level(f: Feature) -> i64 { TUTORIAL_LEVELS[feature_index(f)] }
 
 fn feature_name(f: Feature) -> const u8[:] {
     match f {
-        Murk => "Murk", Seal => "Seal", Tall => "Tall Flask", Vow => "Vow Flask", Rime => "Rime",
+        Murk => "Smoke", Seal => "Seal", Tall => "Tall Flask", Vow => "Vow Flask", Rime => "Rime",
         Brazier => "Brazier", Quicksilver => "Quicksilver", Siphon => "Siphon", Twins => "Twin Flasks",
         Lantern => "Lantern", Shroud => "Shroud", Hourglass => "Hourglass", Vine => "Creeping Vine",
         Salamander => "Salamander", Moonpetal => "Moonpetal", Athanor => "Athanor",

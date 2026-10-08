@@ -86,7 +86,7 @@ In each chapter, levels 5 and 10 are **Hard** and 15 is a hand-made **Super
 Hard** finale that combines the chapter's modifiers with earlier ones. Each
 modifier is taught in its own hand-made tutorial, then shows up in every
 level until the next tutorial, alongside one or two from earlier chapters.
-Murk is the background of every level from 3 on, and from level 12 every
+Smoke is the background of every level from 3 on, and from level 12 every
 fourth level has a Tall Flask, spanning two rows of the grid the flasks
 stand in (three on Hard levels). The rules of every modifier, and how they meet
 through heat, light, flow, flip, growth and transmutation, are in
@@ -94,7 +94,7 @@ through heat, light, flow, flip, growth and transmutation, are in
 
 | Chapter | Levels | New (tutorial level) |
 |---|---|---|
-| The Apothecary | 1–15 | Murk (3), Seal (6), Tall Flask (8), Vow Flask (11) |
+| The Apothecary | 1–15 | Smoke (3), Seal (6), Tall Flask (8), Vow Flask (11) |
 | The Frost Cellar | 16–30 | Rime (18), Brazier (21), Quicksilver (26) |
 | The Glassworks | 31–45 | Siphon (33), Twin Flasks (36) |
 | The Observatory | 46–60 | Lantern (48), Shroud (51), Hourglass (56) |

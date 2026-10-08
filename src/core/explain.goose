@@ -308,7 +308,7 @@ fn explain_flask(board_in: Board, i: i64) -> Card {
     }
     if b.twin >= 0 { name("Twin"); }
     if i == board.salamander { name("Salamander"); }
-    if b.murk != 0 && b.cover != Cover.Seal && b.cover != Cover.Shroud { name("Murk"); }
+    if b.murk != 0 && b.cover != Cover.Seal && b.cover != Cover.Shroud { name("Smoke"); }
     if card.title.len == 0 { name(if b.done { "Complete" } else { "Flask" }); }
 
     if b.done { line(LineKind.State, "Complete and sealed: nothing more to do here."); }
@@ -469,9 +469,14 @@ fn explain_flask(board_in: Board, i: i64) -> Card {
     if !hidden && !b.done {
         let m = murk_count(b);
         if m > 0 {
+            var lantern = false;
+            for j in beside_with(board, i, Fixture.Lantern) {
+                if !board.bottles[j].lit { relate(j, Tie.Light, false); lantern = true; }
+            }
+            if b.fixture == Fixture.Lantern && !b.lit { lantern = true; }
             line(LineKind.State, str(m, if m == 1 { " layer is" } else { " layers are" },
-                                     " hidden in smoke; each clears when it reaches the top."));
-            for j in beside_with(board, i, Fixture.Lantern) { if !board.bottles[j].lit { relate(j, Tie.Light, false); } }
+                                     " hidden in smoke; each clears when it reaches the top",
+                                     if lantern { ", and all of it clears when the lantern lights." } else { "." }));
         }
         if has_liquid(b, QUICKSILVER) {
             if has_body(board, Body.Athanor) { line(LineKind.State, "Quicksilver: it sinks, and must all become gold in the Athanor."); }
@@ -514,7 +519,7 @@ fn explain_flask(board_in: Board, i: i64) -> Card {
 
 fn rule_of(f: Feature) -> const u8[:] {
     match f {
-        Murk => "Smoke hides layers; each clears when it reaches the top.",
+        Murk => "Smoke hides layers. Each clears when it reaches the top, or when a lit lantern's light reaches its flask.",
         Seal => "Wax hides what's inside. Pour its color onto it to break it; two warmings break it too.",
         Tall => "Holds more than four. All of one color has to end up in it.",
         Vow => "Takes the first color poured in, then only that, and must end full.",

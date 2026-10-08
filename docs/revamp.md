@@ -66,7 +66,7 @@ Special liquids (letters in the level format):
 
 ## Rules, modifier by modifier
 
-**Murk** (smoke over segments). A murky segment shows as smoke. It clears
+**Smoke** (`murk` in the code). A smoky segment hides its color. It clears
 when it becomes the top segment of its flask, or when light reaches its
 flask. (This is today's hidden layers rule.)
 
@@ -255,7 +255,7 @@ combos). Tutorials are hand-made and never land on a multiple of 5.
 
 | Ch | Name | Levels | New (tutorial level) | Scene theme |
 |---|---|---|---|---|
-| 1 | The Apothecary | 1–15 | Murk (3), Seal (6), Tall Flask (8), Vow (11) | warm wood, jars, candles |
+| 1 | The Apothecary | 1–15 | Smoke (3), Seal (6), Tall Flask (8), Vow (11) | warm wood, jars, candles |
 | 2 | The Frost Cellar | 16–30 | Rime (18), Brazier (21), Quicksilver (26) | cold stone, icicles, embers |
 | 3 | The Glassworks | 31–45 | Siphon (33), Twin Flasks (36) | furnace glow, glass tubes |
 | 4 | The Observatory | 46–60 | Lantern (48), Shroud (51), Hourglass (56) | night sky, brass, stars |
