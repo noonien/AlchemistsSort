@@ -6,21 +6,26 @@ import math;
 import os;
 import audio;
 
-enum Sfx { Select, Deselect, Pour, Denied, Complete, Win, Pop, Ice, Reveal, Tool, Lose, Bell, Swish }
+enum Sfx {
+    Select, Deselect, Pour, Denied, Complete, Win, Pop, Ice, Reveal, Tool, Lose, Bell, Swish,
+    Sizzle, Crack, Chime, Whoosh, Rustle, Chirp, Gong,      // the forces
+}
 
-let ALL_SFX: const Sfx[13] = [Sfx.Select, Sfx.Deselect, Sfx.Pour, Sfx.Denied, Sfx.Complete, Sfx.Win,
-                              Sfx.Pop, Sfx.Ice, Sfx.Reveal, Sfx.Tool, Sfx.Lose, Sfx.Bell, Sfx.Swish];
+let ALL_SFX: const Sfx[20] = [Sfx.Select, Sfx.Deselect, Sfx.Pour, Sfx.Denied, Sfx.Complete, Sfx.Win,
+                              Sfx.Pop, Sfx.Ice, Sfx.Reveal, Sfx.Tool, Sfx.Lose, Sfx.Bell, Sfx.Swish,
+                              Sfx.Sizzle, Sfx.Crack, Sfx.Chime, Sfx.Whoosh, Sfx.Rustle, Sfx.Chirp, Sfx.Gong];
 
 fn sfx_index(s: Sfx) -> i64 {
     match s {
         Select => 0, Deselect => 1, Pour => 2, Denied => 3, Complete => 4, Win => 5, Pop => 6,
-        Ice => 7, Reveal => 8, Tool => 9, Lose => 10, Bell => 11, Swish => 12,
+        Ice => 7, Reveal => 8, Tool => 9, Lose => 10, Bell => 11, Swish => 12, Sizzle => 13, Crack => 14,
+        Chime => 15, Whoosh => 16, Rustle => 17, Chirp => 18, Gong => 19,
     }
 }
 
 let RATE = 44100;
 
-var sounds: audio::Sound[13];
+var sounds: audio::Sound[20];
 var sound_ready = false;
 var sound_on = true;
 
@@ -138,6 +143,66 @@ fn init_sounds() {
                     let t = i as f64 / RATE;
                     low = low + (r.rand_flt() * 2.0 - 1.0 - low) * 0.03;
                     pcm.push((low * sin(PI * t / 0.45) * 0.5) as f32);
+                }
+            },
+            Sizzle => {
+                // Heat: hissing high noise, crackling.
+                noise_burst(pcm, 0.0, 0.5, 0.3, 5.0, 0.85, 51);
+                var r = rng { 52 };
+                for k in 7 { noise_burst(pcm, r.rand_flt() * 0.35, 0.02, 0.35, 120.0, 0.9, (60 + k) as u64); }
+            },
+            Crack => {
+                // Ice or wax giving way: a sharp snap and a short splinter.
+                noise_burst(pcm, 0.0, 0.06, 0.8, 70.0, 0.95, 71);
+                noise_burst(pcm, 0.03, 0.15, 0.35, 30.0, 0.6, 72);
+                tone(pcm, 0.0, 1900.0, 0.08, 0.1, 50.0);
+            },
+            Chime => {
+                // Light: two glassy notes, a fifth apart.
+                tone(pcm, 0.0, 1567.98, 0.9, 0.18, 4.5);
+                tone(pcm, 0.06, 2349.3, 0.9, 0.14, 4.0);
+                tone(pcm, 0.12, 3136.0, 0.7, 0.06, 5.0);
+            },
+            Whoosh => {
+                // A flask turning over: noise swelling and falling, rising in pitch.
+                let n = (0.6 * RATE) as! i64;
+                var r = rng { 81 };
+                var low = 0.0;
+                for i in n {
+                    let t = i as f64 / RATE;
+                    let k = 0.02 + 0.12 * t / 0.6;
+                    low = low + (r.rand_flt() * 2.0 - 1.0 - low) * k;
+                    pcm.push((low * sin(PI * t / 0.6) * 0.9) as f32);
+                }
+            },
+            Rustle => {
+                // Leaves: soft bursts of noise.
+                var r = rng { 91 };
+                for k in 9 { noise_burst(pcm, k * 0.045 + r.rand_flt() * 0.02, 0.06, 0.22, 40.0, 0.35, (92 + k) as u64); }
+            },
+            Chirp => {
+                // The salamander: a quick rising squeak, twice.
+                for k in 2 {
+                    let start = (k * 0.09 * RATE) as! i64;
+                    let n = (0.06 * RATE) as! i64;
+                    while pcm.len < start + n { pcm.push(0.0); }
+                    for i in n {
+                        let t = i as f64 / RATE;
+                        let f = 1800.0 + 2600.0 * t / 0.06;
+                        pcm[start + i] = pcm[start + i] + (sin(TAU * f * t) * sin(PI * t / 0.06) * 0.22) as f32;
+                    }
+                }
+            },
+            Gong => {
+                // The catalyst: a low bronze ring with inharmonic partials.
+                let n = (2.2 * RATE) as! i64;
+                let partials: f64[5] = [1.0, 1.48, 2.03, 2.74, 3.6];
+                let amps: f64[5] = [0.5, 0.3, 0.2, 0.12, 0.08];
+                for i in n {
+                    let t = i as f64 / RATE;
+                    var v = 0.0;
+                    for k in 5 { v += sin(TAU * 110.0 * partials[k] * t) * amps[k] * exp(-t * (1.6 + k * 0.9)); }
+                    pcm.push((v * min(1.0, t * 200.0) * 0.6) as f32);
                 }
             },
         }

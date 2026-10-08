@@ -1,0 +1,313 @@
+// What a flask can have, drawn: its body (a vow band, a siphon's tap, an
+// hourglass's stand, an athanor's hearth, a moonpetal's bloom), its cover
+// (wax, rime, a shroud, a vine), what stands by it (a brazier, a lantern, a
+// catalyst's runes, a vine's roots), the twins' tube and the salamander.
+//
+// Every part hangs off a few points of the flask worked out in one place,
+// flask_anchors, so a new way of drawing flasks only has to move those.
+//
+// Part of the game in main.goose: it reads the game's state as main.goose's
+// other parts do, and the forces' animations (forces.goose) for how far
+// each change has got.
+
+import std;
+import vec;
+import math;
+import core.board;
+import .draw;
+import .palette;
+import .text;
+
+// Where a flask's parts go, in the flask's own frame: offsets from its
+// middle before it is turned or squashed. `at` places them on the screen.
+struct Anchors {
+    center: float2,     // the flask's middle, on the screen
+    half: float2,       // its half size
+    hx: f32,            // its half width, the unit parts are sized in
+    angle: f32,         // turned by (radians)
+    squash: f32,        // squashed upright, 1 when not
+    rim: float2,        // the top of the lip
+    neck: float2,       // the middle of the neck
+    shoulder: float2,   // where the neck meets the body
+    body: float2,       // the middle of the liquid
+    base: float2,       // the middle of the bottom, where it stands
+    side: float2,       // the right of the body, low down (left is its mirror)
+    joint: float2,      // the right shoulder, where a twin's tube joins
+}
+
+fn flask_anchors(pos: float2, half: float2, angle: f32, squash: f32) -> Anchors {
+    let hx = half.x;
+    Anchors { center: pos, half: half, hx: hx, angle: angle, squash: squash,
+              rim: float2 { 0.0, -half.y },
+              neck: float2 { 0.0, -half.y + hx * 0.5 },
+              shoulder: float2 { 0.0, -half.y + hx * 0.95 },
+              body: float2 { 0.0, (half.y - hx * 0.16 - half.y + hx * 1.2) * 0.5 },
+              base: float2 { 0.0, half.y },
+              side: float2 { hx * 0.84, half.y - hx * 0.4 },
+              joint: float2 { hx * 0.92, -half.y + hx * 1.45 } }
+}
+
+// A point in the flask's frame (an anchor plus an offset), on the screen.
+fn at(a: Anchors, local: float2) -> float2 {
+    let y = local.y * a.squash;
+    let c = cos(a.angle);
+    let s = sin(a.angle);
+    float2 { a.center.x + c * local.x - s * y, a.center.y + s * local.x + c * y }
+}
+
+fn mirror(p: float2) -> float2 { float2 { -p.x, p.y } }
+
+// An instance of a part that turns with the flask.
+fn part(shape: Shape, a: Anchors, local: float2, half: float2, color: float4) -> Inst {
+    var i = inst(shape, at(a, local), half, color);
+    i.misc.y = a.angle;
+    i
+}
+
+// The text layer numbers on flasks go in: 1 when drawn over an overlay.
+var parts_layer = 0;
+
+let PARCHMENT_INK = float4 { 0.24, 0.15, 0.07, 1.0 };
+
+// --- the body ---------------------------------------------------------------------------
+
+// What of the body is behind the glass: the moonpetal's lotus.
+fn draw_body_back(out: Inst[>..]&, b: Bottle, a: Anchors, open: f32) {
+    if b.body != Body.Moonpetal { return; }
+    let h = float2 { a.hx * 1.9, a.hx * 2.4 };
+    var i = part(Shape.Bloom, a, a.base - float2 { 0.0, h.y - a.hx * 0.1 }, h, rgba(1.0, 1.0, 1.0, 0.9));
+    i.p0 = float4 { open, 0.0, 0.0, 0.0 };
+    out.push(i);
+}
+
+// What of the body is on the glass: the vow's band, the tap, the bud.
+fn draw_body(out: Inst[>..]&, i: i64, b: Bottle, a: Anchors, open: f32, safe: bool) {
+    let hx = a.hx;
+    match b.body {
+        Vow => {
+            var r = part(Shape.Ribbon, a, a.shoulder + float2 { 0.0, hx * 0.22 }, float2 { hx * 1.2, hx * 0.8 }, rgba(1.0, 1.0, 1.0, 1.0));
+            let vowed = b.vow != 0;
+            r.p0 = float4 { if vowed { 1.0 } else { 0.0 }, 0.0, i * 0.37, 0.0 };
+            r.p1 = if vowed { palette_color(b.vow, safe) } else { float4_0 };
+            out.push(r);
+            if vowed && safe && a.angle == 0.0 {
+                var s = part(Shape.Symbol, a, a.shoulder + float2 { 0.0, hx * 0.12 }, float2 { hx * 0.13, hx * 0.13 }, rgba(1.0, 1.0, 1.0, 0.9));
+                s.p0 = float4 { b.vow, 0.0, 0.0, 0.0 };
+                out.push(s);
+            }
+        },
+        Siphon => out.push(part(Shape.Tap, a, a.side + float2 { hx * 0.58, hx * 0.0 }, float2 { hx * 0.75, hx * 0.56 },
+                                rgba(1.0, 1.0, 1.0, 1.0))),
+        Moonpetal => {
+            var bud = part(Shape.Bloom, a, a.rim - float2 { 0.0, hx * 0.45 }, float2 { hx * 0.9, hx * 0.9 }, rgba(1.0, 1.0, 1.0, 1.0));
+            bud.p0 = float4 { open, 1.0, 0.0, 0.0 };
+            out.push(bud);
+        },
+        Plain, Hourglass, Athanor => {},
+    }
+}
+
+// --- the cover --------------------------------------------------------------------------
+
+// How a cover looks this moment: the forces' animations set these.
+struct CoverLook {
+    soft: f32 = 0.0,        // a seal softened, 0..1
+    crack: f32 = 0.0,       // a seal cracking, 0..1
+    shatter: f32 = 0.0,     // ice shattering, 0..1
+    grow: f32 = 1.0,        // a tendril grown, 0..1
+    wither: f32 = 0.0,      // a vine withered, 0..1
+    burn: f32 = 0.0,        // a tendril burnt, 0..1
+}
+
+fn draw_cover(out: Inst[>..]&, i: i64, b: Bottle, a: Anchors, look: CoverLook, safe: bool) {
+    let hx = a.hx;
+    let pos = a.center;
+    match b.cover {
+        Rime => {
+            var ice = inst(Shape.Ice, pos, a.half + float2 { hx * 0.12, hx * 0.12 }, rgba(1.0, 1.0, 1.0, 1.0));
+            let thaw: i64 = b.thaw;
+            let thick = clamp((thaw - 1) / 5.0, 0.0, 1.0) as f32;
+            ice.p0 = float4 { thick, look.shatter, (i * 0.37) % 1.0, 0.0 };
+            out.push(ice);
+            if look.shatter < 0.3 {
+                // How many pours it has left, on a dark frosted disc.
+                let c = at(a, a.body);
+                glow(out, c, float2 { hx * 0.58, hx * 0.58 }, 0.6, float4 { 0.06, 0.16, 0.3, 0.6 });
+                text_shadowed(parts_layer, c.x, c.y, str(b.thaw), TextStyle.Heading, rgba(0.95, 0.99, 1.0, 1.0), Align.Center);
+            }
+        },
+        Shroud => out.push(inst(Shape.Cloth, pos + float2 { 0.0, hx * 0.15 }, a.half + float2 { hx * 0.2, hx * 0.15 },
+                                float4 { 0.17, 0.13, 0.32, 1.0 })),
+        Seal => draw_wax(out, b.key, a, look.soft, look.crack, (i * 0.618) % 1.0, 1.0, safe),
+        Vine => draw_vines(out, a, look.grow, look.wither, look.burn, (i * 0.414) % 1.0, 1.0),
+        None => {},
+    }
+}
+
+fn draw_wax(out: Inst[>..]&, key: i64, a: Anchors, soft: f32, crack: f32, seed: f32, alpha: f32, safe: bool) {
+    let hx = a.hx;
+    let c = at(a, a.rim + float2 { 0.0, hx * 0.61 });
+    var w = inst(Shape.Wax, c, float2 { hx * 0.85, hx * 1.1 }, with_alpha(palette_color(key, safe), alpha));
+    w.p0 = float4 { soft, crack, seed, 0.0 };
+    w.misc.y = a.angle;
+    out.push(w);
+    if safe {
+        let m = at(a, a.rim + float2 { 0.0, hx * (0.69 + 0.2 * soft) });
+        var s = inst(Shape.Symbol, m, float2 { hx * 0.2, hx * 0.2 }, rgba(1.0, 1.0, 1.0, alpha));
+        s.p0 = float4 { key, 0.0, 0.0, 0.0 };
+        out.push(s);
+    }
+}
+
+fn draw_vines(out: Inst[>..]&, a: Anchors, grow: f32, wither: f32, burn: f32, seed: f32, alpha: f32) {
+    let hx = a.hx;
+    var v = inst(Shape.Vines, a.center, a.half + float2 { hx * 0.25, hx * 0.12 }, rgba(1.0, 1.0, 1.0, alpha));
+    v.p0 = float4 { grow, wither, burn, seed };
+    out.push(v);
+}
+
+// --- what stands by it --------------------------------------------------------------------
+//
+// These stay where the flask stands when it is lifted: `a` is its place.
+
+struct StandLook {
+    flare: f32 = 0.0,       // a brazier's or hearth's sudden heat, a lantern's flash
+    wither: f32 = 0.0,      // a vine root dying
+    lit: f32 = -1.0,        // a lantern's light, -1 for the flask's own state
+}
+
+// Behind the flask: a brazier's flames, an athanor's hearth, the hourglass's
+// stand, a catalyst's runes.
+fn draw_stand_back(out: Inst[>..]&, i: i64, b: Bottle, a: Anchors, look: StandLook) {
+    let hx = a.hx;
+    let base = at(a, a.base);
+    match b.body {
+        Hourglass => out.push(inst(Shape.Frame, a.center, float2 { hx * 1.42, a.half.y + hx * 0.06 }, rgba(1.0, 1.0, 1.0, 1.0))),
+        Athanor => {
+            var f = inst(Shape.Furnace, base - float2 { 0.0, hx * 1.0 }, float2 { hx * 1.45, hx * 1.0 }, rgba(1.0, 1.0, 1.0, 1.0));
+            f.p0 = float4 { 0.0, look.flare, 0.0, 0.0 };
+            out.push(f);
+            glow(out, base - float2 { 0.0, hx * 0.5 }, float2 { hx * 1.6, hx * 0.9 }, 1.0,
+                 float4 { 1.0, 0.45, 0.12, 0.18 + 0.3 * look.flare });
+        },
+        Plain, Vow, Siphon, Moonpetal => {},
+    }
+    match b.fixture {
+        Brazier => {
+            var f = inst(Shape.Brazier, base - float2 { 0.0, hx * 0.75 }, float2 { hx * 1.4, hx * 0.75 }, rgba(1.0, 1.0, 1.0, 1.0));
+            f.p0 = float4 { 0.0, look.flare, 0.0, 0.0 };
+            f.misc.z = hx * 0.5;
+            out.push(f);
+        },
+        Catalyst => {
+            let pulse = (0.5 + 0.5 * sin(now * 2.2 + i)) as f32;
+            let c = if b.spent { float4 { 0.45, 0.42, 0.5, 0.4 } } else { float4 { 0.85, 0.6, 1.0, 1.0 } };
+            if !b.spent { glow(out, base, float2 { hx * 1.7, hx * 0.6 }, 1.0, float4 { 0.6, 0.3, 0.9, 0.3 + 0.15 * pulse }); }
+            rune_circle(out, base + float2 { 0.0, hx * 0.04 }, hx * 1.3, c);
+        },
+        None, Lantern, VineRoot => {},
+    }
+}
+
+// A catalyst's circle of runes, lying flat round a flask's foot.
+fn rune_circle(out: Inst[>..]&, center: float2, r: f32, color: float4) {
+    var g = inst(Shape.Glyph, center, float2 { r, r }, color);
+    g.p0 = float4 { 1.0, 0.0, 0.0, 0.0 };
+    g.misc.w = 0.3;
+    out.push(g);
+}
+
+// In front: a brazier's bowl, the hearth's coals, the dial, a vine's roots,
+// a lantern overhead.
+fn draw_stand_front(out: Inst[>..]&, i: i64, b: Bottle, a: Anchors, look: StandLook) {
+    let hx = a.hx;
+    let base = at(a, a.base);
+    match b.body {
+        Hourglass => {
+            let c = at(a, float2 { hx * 1.2, 0.0 });
+            let every: i64 = b.flip_every;
+            let left = max(0, every - b.flip_count);
+            var d = inst(Shape.Dial, c, float2 { hx * 0.46, hx * 0.46 }, rgba(1.0, 1.0, 1.0, 1.0));
+            d.p0 = float4 { b.flip_every, left, 0.0, 0.0 };
+            d.misc.z = hx * 0.3;
+            out.push(d);
+            text(parts_layer, c.x, c.y + 0.5, str(left), TextStyle.Tiny, PARCHMENT_INK, Align.Center);
+        },
+        Athanor => {
+            var f = inst(Shape.Furnace, base + float2 { 0.0, hx * 0.02 }, float2 { hx * 1.2, hx * 0.3 }, rgba(1.0, 1.0, 1.0, 1.0));
+            f.p0 = float4 { 1.0, look.flare, 0.0, 0.0 };
+            out.push(f);
+        },
+        Plain, Vow, Siphon, Moonpetal => {},
+    }
+    match b.fixture {
+        Brazier => {
+            var f = inst(Shape.Brazier, base + float2 { 0.0, hx * 0.12 }, float2 { hx * 1.25, hx * 0.42 }, rgba(1.0, 1.0, 1.0, 1.0));
+            f.p0 = float4 { 1.0, look.flare, 0.0, 0.0 };
+            out.push(f);
+        },
+        Lantern => {
+            let lit = if look.lit >= 0.0 { look.lit } else if b.lit { 1.0 } else { 0.0 };
+            draw_lantern(out, a, lit, look.flare, i);
+        },
+        VineRoot => draw_roots(out, b, a, look.wither, 1.0),
+        None, Catalyst => {},
+    }
+}
+
+fn lantern_pos(a: Anchors) -> float2 { at(a, a.rim - float2 { 0.0, a.hx * 1.12 }) }
+
+fn draw_lantern(out: Inst[>..]&, a: Anchors, lit: f32, flare: f32, seed: i64) {
+    let hx = a.hx;
+    let c = lantern_pos(a);
+    // A short chain up to a hook.
+    let top = c.y - hx * 1.02;
+    rect(out, float2 { c.x, top - hx * 0.35 }, float2 { 0.9, hx * 0.35 }, 0.5, float4 { 0.55, 0.42, 0.22, 0.9 });
+    for k in 3 { ring(out, float2 { c.x, top - hx * (0.12 + 0.22 * k) }, hx * 0.07, 1.2, float4 { 0.7, 0.55, 0.3, 1.0 }); }
+    if lit > 0.0 {
+        glow(out, c + float2 { 0.0, hx * 0.1 }, float2 { hx * 1.6, hx * 1.6 }, 1.0, float4 { 1.0, 0.75, 0.4, 0.2 * lit + 0.3 * flare });
+    }
+    var l = inst(Shape.Lantern, c, float2 { hx * 0.68, hx * 1.05 }, rgba(1.0, 1.0, 1.0, 1.0));
+    l.p0 = float4 { lit, flare, seed * 1.7, 0.0 };
+    l.misc.z = hx * 0.5;
+    out.push(l);
+}
+
+fn draw_roots(out: Inst[>..]&, b: Bottle, a: Anchors, wither: f32, alpha: f32) {
+    let hx = a.hx;
+    let base = at(a, a.base);
+    let every: i64 = b.spread_every;
+    let left = max(0, every - b.spread_count);
+    let ripe: f32 = if left <= 1 { 1.0 } else { clamp(b.spread_count / max(1.0, every - 1.0), 0.0, 0.9) as f32 };
+    var r = inst(Shape.Roots, base, float2 { hx * 1.45, hx * 1.0 }, rgba(1.0, 1.0, 1.0, alpha));
+    r.p0 = float4 { wither, ripe, 0.3, 0.0 };
+    out.push(r);
+    if b.fixture == Fixture.VineRoot && alpha >= 1.0 {
+        text(parts_layer, base.x, base.y + hx * 0.03, str(left), TextStyle.Tiny, float4 { 0.1, 0.16, 0.05, 1.0 }, Align.Center);
+    }
+}
+
+// --- between flasks, and on them ------------------------------------------------------------
+
+// The glass tube joining twins, from a's shoulder to b's; liquid runs
+// through it from a's end as head goes 0..1.6, in `color`.
+fn draw_tube(out: Inst[>..]&, a: Anchors, b: Anchors, head: f32, color: float4) {
+    let a_left = a.center.x <= b.center.x;
+    let p = at(a, if a_left { a.joint } else { mirror(a.joint) });
+    let q = at(b, if a_left { mirror(b.joint) } else { b.joint });
+    let mid = float2 { (p.x + q.x) * 0.5, min(p.y, q.y) - a.hx * 0.9 };
+    let w = a.hx * 0.19;
+    for e in [p, q] { rect(out, e, float2 { w * 1.1, w * 1.5 }, w * 0.6, float4 { 0.78, 0.6, 0.3, 0.9 }); }
+    curve(out, Shape.Tube, p, mid, q, w, head, color);
+}
+
+// The salamander at `at` (its feet), facing 1 right or -1 left; leap 0..1
+// stretches it out.
+fn draw_salamander(out: Inst[>..]&, feet: float2, hx: f32, angle: f32, facing: f32, leap: f32, heat: f32) {
+    let u = max(hx * 1.25, 16.0);
+    var s = inst(Shape.Salamander, feet - float2 { 0.0, u * 0.25 }, float2 { u * 1.05, u * 0.7 }, rgba(1.0, 1.0, 1.0, 1.0));
+    s.p0 = float4 { 0.37, facing, leap, heat };
+    s.misc.y = angle;
+    s.misc.z = u * 0.3;
+    out.push(s);
+}

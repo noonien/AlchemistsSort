@@ -30,6 +30,8 @@ import app.save;
 import app.scene;
 import app.fx;
 import app.menus;
+import app.parts;
+import app.forces;
 
 // The canvas everything is laid out on, scaled to fit the window.
 let VW: f32 = 540.0;
@@ -303,6 +305,7 @@ fn reset_play_state() {
     hint_to = -1;
     message_until = 0.0;
     board_changed();
+    settle_beats();
     reset_back_shelf(board);
 }
 
@@ -407,6 +410,7 @@ fn any_pouring() -> bool {
 fn finish_animations() {
     for &a in pours { a.active = false; }
     taps.clear();
+    settle_beats();
 }
 
 fn refuse(i: i64, why: const u8[:]) {
@@ -449,17 +453,22 @@ fn why_refused(i: i64, color: i64) -> u8[>..] {
 }
 
 fn start_pour(from: i64, to: i64) {
+    settle_beats();
     let before = board;
     var after = board;
     let r = pour(after, from, to);
     if !r.ok { return; }
     history.push(before);
     board = after;
+    // What the pour set off plays once the liquid lands (forces.goose);
+    // until then the flasks show the liquid moved and nothing more.
+    schedule_pour(before, from, to, r, now);
+    let mid = shown;
     for &a in pours {
         if a.active { continue; }
         a = PourAnim { active: true, from: from, to: to, t0: now, color: r.color, amount: r.amount,
-                       src_before: before.bottles[from], src_after: after.bottles[from],
-                       dst_before: before.bottles[to], dst_after: after.bottles[to],
+                       src_before: before.bottles[from], src_after: mid.bottles[from],
+                       dst_before: before.bottles[to], dst_after: mid.bottles[to],
                        popped: r.popped, effects_done: false };
         break;
     }
@@ -467,28 +476,6 @@ fn start_pour(from: i64, to: i64) {
     let full = after.bottles[to].n as f64 / max(1, after.bottles[to].cap as i64);
     play_pitched(Sfx.Pour, 0.85 + 0.45 * full, 0.8);
     ripple_x[to] = if slots[from].pos.x <= slots[to].pos.x { 0.2 } else { -0.2 };
-    if r.thawed > 0 { play(Sfx.Ice); }
-    if r.revealed > 0 { play(Sfx.Reveal); }
-    // Effects for bottles that changed without being poured into. (Placeholder
-    // bursts, one per event; the events carry what each force did.)
-    for e in r.events {
-        let i: i64 = e.bottle;
-        if i < 0 || i >= board.count { continue; }
-        let c = match e.kind {
-            Thawed => float4 { 0.8, 0.95, 1.0, 1.0 },
-            HeatPulse => float4 { 1.0, 0.5, 0.15, 1.0 },
-            Lit, ShroudLifted, MurkCleared => float4 { 1.0, 0.95, 0.7, 1.0 },
-            VineSpread, VineWithered, TendrilBurned => float4 { 0.3, 0.8, 0.35, 1.0 },
-            Transmuted => float4 { 1.0, 0.8, 0.25, 1.0 },
-            _ => gold(1.0),
-        };
-        let small = e.kind == EventKind.HeatPulse || e.kind == EventKind.MurkCleared;
-        if i != to || e.kind != EventKind.SealBroken { burst(slots[i].pos, if small { 8 } else { 24 }, c, 160.0); }
-    }
-    for i in board.count {
-        if i == to { continue; }
-        if !before.bottles[i].done && after.bottles[i].done { complete_at[i] = now; }
-    }
     hint_from = -1;
     lost_checked = false;
     restart_search();
@@ -695,15 +682,6 @@ fn update_pours() {
         if !a.effects_done && t >= T_LIFT {
             a.effects_done = true;
             slosh(a.to, ripple_x[a.to] * 0.5);
-            if a.popped {
-                play(Sfx.Pop);
-                burst(slots[a.to].pos - v2(0.0, slots[a.to].half.y * 0.6), 18, gold(1.0), 150.0);
-            }
-        }
-        if t >= T_LIFT + T_POUR && a.dst_after.done && complete_at[a.to] < a.t0 {
-            complete_at[a.to] = now;
-            play_note(a.color, 0.6);
-            burst(slots[a.to].pos, 30, palette_color(a.color, save.color_safe), 180.0);
         }
         if t >= T_LIFT + T_POUR + T_BACK {
             a.active = false;
@@ -716,7 +694,8 @@ fn update_play(dt: f32) {
     finish_hint();
     process_taps();
     update_pours();
-    if any_pouring() { return; }
+    update_beats();
+    if any_pouring() || beats_running() { return; }
     if won_at < 0.0 && is_won(board) {
         won_at = now;
         selected = -1;
@@ -779,129 +758,64 @@ fn liquid_inst(n: i64, b: Bottle, pos: float2, half: float2, angle: f32, fill: f
     i
 }
 
-// A placeholder marker: a colored disc with a letter or number on it.
-fn badge(out: Inst[>..]&, at: float2, r: f32, color: float4, label: const u8[:]) {
-    glow(out, at, v2(r * 1.25, r * 1.25), 0.3, float4 { 0.0, 0.0, 0.0, 0.5 });
-    glow(out, at, v2(r, r), 0.12, color);
-    ring(out, at, r, 2.0, white(0.85));
-    text_shadowed(0, at.x, at.y, label, TextStyle.Small, white(1.0), Align.Center);
-}
-
-// One flask with its contents and whatever stands on or over it.
+// One flask with its contents and whatever is on or over it.
 fn draw_flask(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: float2, angle: f32, fill: f32,
               wave: f32, glow_amount: f32, glow_color: float4, overlays: bool) {
+    draw_flask_squashed(out, i, b, pos, half, angle, 1.0, fill, wave, glow_amount, glow_color, overlays);
+}
+
+// The same, squashed upright by `squash` (an hourglass turning over). Its
+// parts are drawn in parts.goose, the forces' moments in forces.goose.
+fn draw_flask_squashed(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: float2, angle: f32, squash: f32,
+                       fill: f32, wave: f32, glow_amount: f32, glow_color: float4, overlays: bool) {
+    let a = flask_anchors(pos, half, angle, squash);
     if angle == 0.0 {
-        glow(out, pos + v2(0.0, half.y * 0.98), v2(half.x * 1.3, half.x * 0.3), 0.9,
+        glow(out, at(a, a.base) - v2(0.0, half.y * 0.02), v2(half.x * 1.3, half.x * 0.3), 0.9,
              float4 { 0.0, 0.0, 0.0, 0.45 });
     }
+    let open: f32 = if i >= 0 && any_lantern_lit(shown) { 1.0 } else { 0.0 };
+    draw_body_back(out, b, a, open);
     var back = inst(Shape.FlaskBack, pos, half, float4 { 0.10, 0.08, 0.16, 0.6 });
     back.misc.y = angle;
+    back.misc.w = squash;
     out.push(back);
     // A shroud hides the flask entirely; a seal hides what is in it.
     let shrouded = overlays && b.cover == Cover.Shroud;
     let sealed = overlays && b.cover == Cover.Seal;
-    if !shrouded {
+    if !shrouded && fill > 0.0 {
         let murk: f32 = if sealed { (1 << b.cap) - 1 } else { b.murk };
-        if fill > 0.0 { out.push(liquid_inst(i, b, pos, half, angle, fill, murk, wave)); }
+        var l = liquid_inst(i, b, pos, half, angle, fill, murk, wave);
+        l.misc.w = squash;
+        out.push(l);
     }
-    var glass = inst(Shape.Glass, pos, half, float4 { 0.86, 0.92, 1.0, 1.0 });
+    // An athanor's glass is warmed by its hearth.
+    let tint = if b.body == Body.Athanor { float4 { 1.0, 0.8, 0.6, 1.0 } } else { float4 { 0.86, 0.92, 1.0, 1.0 } };
+    var glass = inst(Shape.Glass, pos, half, tint);
     glass.misc.y = angle;
     glass.misc.z = 18.0;
+    glass.misc.w = squash;
     glass.p0 = float4 { glow_amount, 0.0, 0.0, 0.0 };
     glass.p1 = glow_color;
     out.push(glass);
+    if squash == 1.0 { draw_body(out, i, b, a, open, save.color_safe); }
     if !overlays || angle != 0.0 { return; }
 
-    // Color-blind symbols on visible segments, "?" on murky ones.
-    if !shrouded && !sealed {
+    // Color-blind symbols on what is in view, and "?" on murk in that mode.
+    if !shrouded && !sealed && save.color_safe && squash == 1.0 {
         for k in b.n as i64 {
-            let c = pos + segment_center(half, k);
+            let c = at(a, segment_center(half, k));
             if murky(b, k) {
-                text(0, c.x, c.y, "?", TextStyle.Label, white(0.8), Align.Center);
-            } else if save.color_safe {
+                text(parts_layer, c.x, c.y, "?", TextStyle.Small, white(0.55), Align.Center);
+            } else {
                 var s = inst(Shape.Symbol, c, v2(half.x * 0.42, half.x * 0.42), white(0.95));
                 s.p0 = float4 { b.seg[k], 0.0, 0.0, 0.0 };
                 out.push(s);
             }
         }
     }
-    let neck = pos - v2(0.0, half.y - half.x * 0.35);
-    let foot = pos + v2(0.0, half.y + half.x * 0.55);
-    let r = max(half.x * 0.42, 9.0);
-    // The body. (Placeholders: a badge on the glass, except the vow's.)
-    match b.body {
-        Vow => {
-            let mark = pos - v2(0.0, half.y * 0.35);
-            if b.vow == 0 {
-                text_shadowed(0, mark.x, mark.y, "?", TextStyle.Heading, gold(0.95), Align.Center);
-            } else {
-                ring(out, neck + v2(0.0, half.x * 0.9), half.x * 0.42, 3.0, gold(0.9));
-                glow(out, neck + v2(0.0, half.x * 0.9), v2(half.x * 0.32, half.x * 0.32), 0.3,
-                     palette_color(b.vow, save.color_safe));
-            }
-        },
-        Siphon => badge(out, pos + v2(half.x * 0.95, half.y * 0.8), r * 0.8, float4 { 0.35, 0.55, 0.75, 1.0 }, "S"),
-        Hourglass => badge(out, pos - v2(0.0, half.y * 0.45), r, float4 { 0.7, 0.55, 0.3, 1.0 },
-                           str(b.flip_every - b.flip_count)),
-        Athanor => badge(out, pos - v2(0.0, half.y * 0.45), r, float4 { 0.85, 0.35, 0.1, 1.0 }, "A"),
-        Moonpetal => badge(out, pos - v2(0.0, half.y * 0.45), r,
-                           if any_lantern_lit(board) { float4 { 0.6, 0.75, 1.0, 1.0 } } else { float4 { 0.3, 0.32, 0.45, 1.0 } },
-                           "M"),
-        Plain => {},
-    }
-    // The cover: the old cork, ice and cloth where they fit.
-    match b.cover {
-        Rime => {
-            var ice = inst(Shape.Ice, pos + v2(0.0, half.x * 0.1), half + v2(half.x * 0.25, half.x * 0.2),
-                           white(1.0));
-            ice.p0 = float4 { i * 3.7, 0.0, 0.0, 0.0 };
-            out.push(ice);
-            glow(out, pos, v2(half.x * 0.62, half.x * 0.62), 0.5, float4 { 0.1, 0.3, 0.5, 0.55 });
-            text_shadowed(0, pos.x, pos.y, str(b.thaw), TextStyle.Heading, white(1.0), Align.Center);
-        },
-        Shroud => {
-            out.push(inst(Shape.Cloth, pos + v2(0.0, half.x * 0.15), half + v2(half.x * 0.2, half.x * 0.15),
-                          float4 { 0.30, 0.22, 0.42, 1.0 }));
-        },
-        Seal => {
-            var cork = inst(Shape.Cork, neck, v2(half.x * 0.62, half.x * 0.5), white(1.0));
-            cork.p1 = palette_color(b.key, save.color_safe);
-            out.push(cork);
-            if save.color_safe {
-                var s = inst(Shape.Symbol, neck, v2(half.x * 0.26, half.x * 0.26), white(1.0));
-                s.p0 = float4 { b.key, 0.0, 0.0, 0.0 };
-                out.push(s);
-            }
-            if b.soft > 0 { badge(out, neck + v2(half.x * 0.9, 0.0), r * 0.7, float4 { 0.9, 0.4, 0.1, 1.0 }, "~"); }
-        },
-        Vine => {
-            out.push(inst(Shape.Cloth, pos + v2(0.0, half.x * 0.15), half + v2(half.x * 0.2, half.x * 0.15),
-                          float4 { 0.16, 0.42, 0.18, 0.9 }));
-            badge(out, pos, r, float4 { 0.2, 0.55, 0.25, 1.0 }, "V");
-        },
-        None => {},
-    }
-    // The fixture, on the shelf at the flask's foot.
-    match b.fixture {
-        Brazier => badge(out, foot, r * 0.8, float4 { 0.9, 0.35, 0.1, 1.0 }, "B"),
-        Lantern => {
-            if b.lit { glow(out, pos, v2(half.x * 2.2, half.y * 1.2), 0.9, float4 { 1.0, 0.85, 0.4, 0.25 }); }
-            badge(out, foot, r * 0.8, if b.lit { float4 { 1.0, 0.82, 0.3, 1.0 } } else { float4 { 0.4, 0.36, 0.3, 1.0 } }, "L");
-        },
-        Catalyst => badge(out, foot, r * 0.8,
-                          if b.spent { float4 { 0.3, 0.25, 0.35, 1.0 } } else { float4 { 0.7, 0.3, 0.85, 1.0 } }, "C"),
-        VineRoot => badge(out, foot, r * 0.8, float4 { 0.2, 0.55, 0.25, 1.0 }, str(b.spread_every - b.spread_count)),
-        None => {},
-    }
-    // A twin's tube, drawn once, from the left flask.
-    if b.twin > i && b.twin < board.count {
-        let other = slots[b.twin].pos;
-        let y = pos.y + half.y * 0.55;
-        rect(out, v2((pos.x + other.x) * 0.5, y), v2((other.x - pos.x) * 0.5 - half.x * 0.9, half.x * 0.14),
-             half.x * 0.12, float4 { 0.75, 0.85, 0.95, 0.6 });
-    }
-    if i == board.salamander {
-        badge(out, neck - v2(0.0, half.x * 0.9), r * 0.85, float4 { 0.95, 0.3, 0.1, 1.0 }, "S");
+    draw_cover(out, i, b, a, if i >= 0 { cover_look(i) } else { CoverLook {} }, save.color_safe);
+    if i >= 0 && i == shown.salamander && !hop_flying() {
+        draw_salamander(out, at(a, a.rim), half.x, 0.0, salamander_facing, 0.0, 0.0);
     }
     if b.done { draw_completion(out, i, b, pos, half); }
 }
@@ -914,12 +828,34 @@ fn draw_board(out: Inst[>..]&) {
         plank.p0 = float4 { 3.0, 0.0, 0.0, 0.0 };
         out.push(plank);
     }
-    // Flasks at rest first, then the ones moving, so those pass in front.
     var moving: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
     for a in pours { if a.active { moving[a.from] = true; } }
-    for i in board.count {
+    fn place(i: i64) -> Anchors { if moving[i] { stand_anchors(i) } else { slot_anchors(i) } }
+    // Twins' tubes, behind the flasks; liquid runs through on an overflow.
+    for i in shown.count {
+        let tw: i64 = shown.bottles[i].twin;
+        if tw <= i || tw >= shown.count { continue; }
+        let head, c, src = tube_flow(i, tw);
+        if src == tw { draw_tube(out, place(tw), place(i), head, c); }
+        else { draw_tube(out, place(i), place(tw), head, c); }
+    }
+    // A lit lantern's light on its flask and neighbors.
+    for i in shown.count {
+        let b = shown.bottles[i];
+        if b.fixture != Fixture.Lantern || !b.lit { continue; }
+        let l, r = neighbors(shown, i);
+        let lo = slots[if l >= 0 { l } else { i }].pos;
+        let hi = slots[if r >= 0 { r } else { i }].pos;
+        let h = slots[i].half;
+        glow(out, v2((lo.x + hi.x) * 0.5, slots[i].pos.y - h.y * 0.3), v2(abs(hi.x - lo.x) * 0.5 + h.x * 2.0, h.y * 1.4),
+             1.0, float4 { 1.0, 0.8, 0.45, 0.09 + 0.03 * look.light.w });
+    }
+    // What stands behind each flask.
+    for i in shown.count { draw_stand_back(out, i, shown.bottles[i], stand_anchors(i), stand_look(i)); }
+    // Flasks at rest, then what stands in front of them, then the ones moving.
+    for i in shown.count {
         if moving[i] { continue; }
-        var b = board.bottles[i];
+        var b = shown.bottles[i];
         var fill: f32 = b.n;
         var wave: f32 = 0.0;
         // A bottle being poured into shows its new contents rising.
@@ -930,13 +866,15 @@ fn draw_board(out: Inst[>..]&) {
                 b = a.dst_before;
                 fill = b.n;
             } else {
-                b = a.dst_after;
                 let p = ease((t - T_LIFT) / T_POUR);
-                fill = a.dst_before.n + (a.dst_after.n - a.dst_before.n) * p;
-                if covered(a.dst_before) { fill = if a.amount == 0 { b.n } else { fill }; }
+                fill = a.dst_before.n + (b.n - a.dst_before.n) * p;
+                if covered(a.dst_before) && a.amount == 0 { fill = b.n; }
                 wave = 1.0 - p * 0.7;
             }
         }
+        fill = overflow_fill(i, fill);
+        let squash, view = flip_view(i, b);
+        b = view;
         let pos = rest_pos(i);
         var g: f32 = 0.0;
         var gc = gold(1.0);
@@ -950,16 +888,19 @@ fn draw_board(out: Inst[>..]&) {
             g = max(g, (1.0 - since / 1.2) as f32 * 1.4);
             gc = palette_color(flask_color(b), save.color_safe);
         }
-        draw_flask(out, i, b, pos, slots[i].half, 0.0, fill, wave, g, gc, true);
+        draw_flask_squashed(out, i, b, pos, slots[i].half, 0.0, squash, fill, wave, g, gc, true);
         if (i == hint_from || i == hint_to) && now < hint_until {
             let label = if i == hint_from { "from" } else { "to" };
-            text_shadowed(0, pos.x, pos.y - slots[i].half.y - 18.0, label, TextStyle.Small, white(0.95), Align.Center);
+            let above = if b.fixture == Fixture.Lantern { slots[i].half.x * 2.0 } else { 0.0 };
+            text_shadowed(0, pos.x, pos.y - slots[i].half.y - 18.0 - above, label, TextStyle.Small, white(0.95), Align.Center);
         }
     }
+    for i in shown.count { draw_stand_front(out, i, shown.bottles[i], stand_anchors(i), stand_look(i)); }
     for a in pours {
         if !a.active { continue; }
         draw_pouring(out, a);
     }
+    draw_beats(out);
 }
 
 // The source of a pour: lifted over the target, tipped, emptied, put back.
@@ -981,7 +922,7 @@ fn draw_pouring(out: Inst[>..]&, a: PourAnim) {
     var pos = home;
     var angle: f32 = 0.0;
     var fill: f32 = a.src_before.n;
-    var shown = a.src_before;
+    var shown_src = a.src_before;
     var stream = false;
     var stream_a: f32 = 0.0;
     if t < T_LIFT {
@@ -999,8 +940,8 @@ fn draw_pouring(out: Inst[>..]&, a: PourAnim) {
         let k = ease((t - T_LIFT - T_POUR) / T_BACK);
         angle = side * tilt_full * (1.0 - k);
         pos = lerp2(center_for(side * tilt_full), home, k);
-        shown = a.src_after;
-        fill = shown.n;
+        shown_src = shown.bottles[a.from];
+        fill = shown_src.n;
     }
     if stream {
         // The stream leaves the lip moving forward and arcs down under
@@ -1017,7 +958,85 @@ fn draw_pouring(out: Inst[>..]&, a: PourAnim) {
         glow(out, end, v2(half.x * 0.5, half.x * 0.2), 0.8, with_alpha(color, 0.5 * stream_a));
         if reach >= 1.0 && rand.rand_int(3) != 0 { splash(end, color, side); }
     }
-    draw_flask(out, a.from, shown, pos, half, angle, fill, if stream { 0.6 } else { 0.0 }, 0.0, gold(1.0), false);
+    draw_flask(out, a.from, shown_src, pos, half, angle, fill, if stream { 0.6 } else { 0.0 }, 0.0, gold(1.0), false);
+    // The salamander rides along on its rim.
+    if a.from == shown.salamander && !hop_flying() {
+        let an = flask_anchors(pos, half, angle, 1.0);
+        draw_salamander(out, at(an, an.rim), half.x, angle, salamander_facing, 0.0, 0.0);
+    }
+}
+
+// --- the intro's picture ----------------------------------------------------------------
+
+// How new a flask's newest feature is, in the order the campaign brings
+// them in; 0 for a plain flask.
+fn feature_rank(bd: Board, i: i64) -> i64 {
+    let b = bd.bottles[i];
+    var has_q = false;
+    var has_drop = false;
+    for k in b.n as i64 {
+        if b.seg[k] == QUICKSILVER { has_q = true; }
+        if b.seg[k] == DROP { has_drop = true; }
+    }
+    var r = 0;
+    fn up(x: bool, rank: i64) { if x { r = max(r, rank); } }
+    up(b.murk != 0, 1);
+    up(b.cover == Cover.Seal, 2);
+    up(b.cap > CAP, 3);
+    up(b.body == Body.Vow, 4);
+    up(b.cover == Cover.Rime, 5);
+    up(b.fixture == Fixture.Brazier, 6);
+    up(has_q, 7);
+    up(b.body == Body.Siphon, 8);
+    up(b.twin >= 0, 9);
+    up(b.fixture == Fixture.Lantern, 10);
+    up(b.cover == Cover.Shroud, 11);
+    up(b.body == Body.Hourglass, 12);
+    up(b.fixture == Fixture.VineRoot || b.cover == Cover.Vine, 13);
+    up(i == bd.salamander, 14);
+    up(b.body == Body.Moonpetal, 15);
+    up(b.body == Body.Athanor, 16);
+    up(has_drop, 17);
+    up(b.fixture == Fixture.Catalyst, 18);
+    r
+}
+
+// The level's newest feature, drawn on its flask (and its twin) standing
+// on the intro panel's top edge at `foot`.
+fn draw_intro_picture(out: Inst[>..]&, foot: float2) {
+    var best = -1;
+    var rank = 0;
+    for i in shown.count {
+        let r = feature_rank(shown, i);
+        if r > rank { rank = r; best = i; }
+    }
+    if best < 0 { return; }
+    let b = shown.bottles[best];
+    let twin: i64 = if rank == 9 { b.twin } else { -1 };
+    let hx: f32 = 20.0;
+    glow(out, foot - v2(0.0, 50.0), v2(110.0, 90.0), 1.0, float4 { 1.0, 0.8, 0.45, 0.18 });
+    parts_layer = 1;
+    var ids: i64[2] = [best, twin];
+    var anchors: Anchors[2];
+    for k in 2 {
+        let i = ids[k];
+        if i < 0 { continue; }
+        let half = bottle_half(hx, shown.bottles[i].cap);
+        let dx: f32 = if twin >= 0 { (k * 2 - 1) * hx * 1.7 } else { 0.0 };
+        let x = foot.x + dx;
+        anchors[k] = flask_anchors(v2(x, foot.y - half.y), half, 0.0, 1.0);
+    }
+    if twin >= 0 { draw_tube(out, anchors[0], anchors[1], -100.0, float4_0); }
+    for k in 2 {
+        let i = ids[k];
+        if i < 0 { continue; }
+        let bi = shown.bottles[i];
+        let a = anchors[k];
+        draw_stand_back(out, i, bi, a, StandLook {});
+        draw_flask(out, i, bi, a.center, a.half, 0.0, bi.n, 0.0, 0.0, gold(1.0), true);
+        draw_stand_front(out, i, bi, a, StandLook {});
+    }
+    parts_layer = 0;
 }
 
 // --- buttons ---------------------------------------------------------------------------
@@ -1237,6 +1256,7 @@ fn draw_overlay(out: Inst[>..]&) {
     } else if overlay == Overlay.Intro {
         let c = v2(VW * 0.5, VH * 0.42);
         panel(out, c, v2(220.0, 150.0));
+        draw_intro_picture(out, c - v2(0.0, 160.0));
         let title = if spec.is_tutorial { str("New: ", feature_name(spec.tutorial)) }
                     else if info.name.len > 0 { str(info.name) } else { str(level_title()) };
         text_shadowed(1, c.x, c.y - 100.0, title, TextStyle.Label, gold(1.0), Align.Center);
@@ -1429,7 +1449,7 @@ fn draw_frame(dt: f32) {
     // The room (scene.goose); no clicks while the ink moves between screens.
     draw_scene(base, theme);
     if screen_id == Screen.Play {
-        update_back_shelf(board);
+        update_back_shelf(shown);
         draw_back_shelf(base);
     }
     if transition_busy() { clicks.clear(); }
@@ -1470,7 +1490,7 @@ fn music_room_now() -> i64 {
 }
 
 fn lively() -> bool {
-    if pending_load || any_pouring() || taps.len > 0 || clicks.len > 0 { return true; }
+    if pending_load || any_pouring() || forces_lively() || taps.len > 0 || clicks.len > 0 { return true; }
     if screen_id == Screen.Play && (shuffling || !board_search.done) { return true; }
     let d = gfx::mouse_delta();
     if d.x != 0.0 || d.y != 0.0 || gfx::mouse_down(gfx::MOUSE_LEFT) { return true; }
