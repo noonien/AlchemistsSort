@@ -92,18 +92,18 @@ fn shape_define(s: Shape) -> const u8[:] {
 
 // The pictures Shape.Icon draws.
 enum Icon {
-    Undo, Restart, Shuffle, Bottle, Hint, Home, Gear, SoundOn, SoundOff, Play, Eye, Seed, Book, Back, Check,
+    Undo, Restart, Shuffle, Bottle, Hint, Home, Gear, SoundOn, SoundOff, Play, Eye, Seed, Book, Back, Check, Map,
 }
 
-let ALL_ICONS: const Icon[15] = [
+let ALL_ICONS: const Icon[16] = [
     Icon.Undo, Icon.Restart, Icon.Shuffle, Icon.Bottle, Icon.Hint, Icon.Home, Icon.Gear, Icon.SoundOn,
-    Icon.SoundOff, Icon.Play, Icon.Eye, Icon.Seed, Icon.Book, Icon.Back, Icon.Check,
+    Icon.SoundOff, Icon.Play, Icon.Eye, Icon.Seed, Icon.Book, Icon.Back, Icon.Check, Icon.Map,
 ];
 
 fn icon_index(i: Icon) -> i64 {
     match i {
         Undo => 0, Restart => 1, Shuffle => 2, Bottle => 3, Hint => 4, Home => 5, Gear => 6, SoundOn => 7,
-        SoundOff => 8, Play => 9, Eye => 10, Seed => 11, Book => 12, Back => 13, Check => 14,
+        SoundOff => 8, Play => 9, Eye => 10, Seed => 11, Book => 12, Back => 13, Check => 14, Map => 15,
     }
 }
 
@@ -113,7 +113,7 @@ fn icon_define(i: Icon) -> const u8[:] {
         Undo => "ICON_UNDO", Restart => "ICON_RESTART", Shuffle => "ICON_SHUFFLE", Bottle => "ICON_BOTTLE",
         Hint => "ICON_HINT", Home => "ICON_HOME", Gear => "ICON_GEAR", SoundOn => "ICON_SOUND_ON",
         SoundOff => "ICON_SOUND_OFF", Play => "ICON_PLAY", Eye => "ICON_EYE", Seed => "ICON_SEED",
-        Book => "ICON_BOOK", Back => "ICON_BACK", Check => "ICON_CHECK",
+        Book => "ICON_BOOK", Back => "ICON_BACK", Check => "ICON_CHECK", Map => "ICON_MAP",
     }
 }
 
@@ -208,6 +208,7 @@ let FRAGMENT_SHADER = """
     #define ICON_BOOK 12
     #define ICON_BACK 13
     #define ICON_CHECK 14
+    #define ICON_MAP 15
 
     layout(location = 0) in vec2 v_local;
     layout(location = 1) in vec2 v_half;
@@ -691,7 +692,8 @@ let FRAGMENT_SHADER = """
     // The flasks are glass cylinders on the table, seen from above at a
     // slant: the rim and the bottom are ellipses FLASK_E of their half width
     // deep, and the body is a little narrower than the lip. FLASK_EXTRA is
-    // what a flask has beyond its segments, in half widths (board.goose's).
+    // the glass beyond its segments, in half widths (parts.goose's
+    // SHADER_EXTRA; board.goose's FLASK_EXTRA leaves room for the rim too).
     const float FLASK_E = 0.36;
     const float FLASK_EXTRA = 1.25;
     const float FLASK_BODY = 0.92;
@@ -827,6 +829,27 @@ let FRAGMENT_SHADER = """
             float head = sd_triangle(p, vec2(-r * 0.85, 0.0), vec2(-r * 0.2, -r * 0.55), vec2(-r * 0.2, r
             * 0.55));
             return min(shaft, head);
+        } else if (which == ICON_MAP) {    // map: folded in three, a path to a mark
+            float d = 1e5;
+            for (int k = 0; k < 3; k++) {
+                float x0 = (float(k) - 1.5) * 0.53 * r;
+                float x1 = x0 + 0.53 * r;
+                float y0 = (k == 1 ? -0.5 : -0.65) * r;
+                float y1 = (k == 1 ? -0.65 : -0.5) * r;
+                d = min(d, sd_segment(p, vec2(x0, y0), vec2(x1, y1)));
+                d = min(d, sd_segment(p, vec2(x0, y0 + 1.15 * r), vec2(x1, y1 + 1.15 * r)));
+                d = min(d, sd_segment(p, vec2(x0, y0), vec2(x0, y0 + 1.15 * r)));
+            }
+            d = min(d, sd_segment(p, vec2(0.8 * r, -0.65 * r), vec2(0.8 * r, 0.5 * r)));
+            d -= r * 0.07;
+            // A dotted path across it to a cross.
+            for (int k = 0; k < 3; k++) {
+                d = min(d, sd_circle(p - vec2((-0.55 + 0.28 * float(k)) * r, (0.25 - 0.17 * float(k)) * r), r * 0.065));
+            }
+            vec2 x = p - vec2(0.42 * r, -0.2 * r);
+            d = min(d, min(sd_segment(x, vec2(-0.13 * r), vec2(0.13 * r)),
+                           sd_segment(x, vec2(-0.13 * r, 0.13 * r), vec2(0.13 * r, -0.13 * r))) - r * 0.06);
+            return d;
         }
         // check mark
         return min(sd_segment(p, vec2(-r * 0.6, 0.0), vec2(-r * 0.15, r * 0.45)),
@@ -964,7 +987,10 @@ let FRAGMENT_SHADER = """
             c = mix(c, v_color.rgb * 0.4, open);
             col = vec4(c, min(1.0, v_color.a * (1.0 + 0.4 * open)) * fill_aa(d + 1.0));
         } else if (kind == SHAPE_LIQUID) {                 // liquid
-            float cap = max(v_p1.w, 4.0);
+            // p1.w: the cap, plus a sixteenth of how many segments have
+            // drained out of the bottom (a siphon pouring from its tap).
+            float cap = max(floor(v_p1.w), 4.0);
+            float drain = fract(v_p1.w) * 16.0;
             float seg = (2.0 * h.y - FLASK_EXTRA * h.x) / cap;
             float w = liquid_w(h);
             float ry = w * FLASK_E;
@@ -989,8 +1015,8 @@ let FRAGMENT_SHADER = """
                 float top_d = sd_ellipse(vec2(p.x, p.y - (base - surface)), vec2(w, ry));
                 bool on_top = tilt == 0.0 && lvl >= surface && top_d < 0.5;
                 if (lvl > -0.5 && (lvl < surface || on_top)) {
-                    float n = ceil(v_p1.x - 0.001);
-                    float fi = on_top ? n - 1.0 : clamp(floor(max(lvl, 0.0) / seg), 0.0, n - 1.0);
+                    float n = ceil(v_p1.x + drain - 0.001);
+                    float fi = on_top ? n - 1.0 : clamp(floor(max(lvl, 0.0) / seg + drain), 0.0, n - 1.0);
                     float ci = layer_color(fi);
                     vec3 c = palette[int(ci + 0.5)].rgb;
                     bool hidden = layer_murky(fi);
@@ -1006,7 +1032,7 @@ let FRAGMENT_SHADER = """
                         c = personality(c, int(ci + 0.5), p / h.x + vec2(seed * 3.0, 0.0), t);
                         if (int(ci + 0.5) == 17 && !on_top) {
                             // The Drop: a pearl in its own glow.
-                            vec2 dq = vec2(p.x, (fi + 0.5) * seg - lvl) / (seg * 0.55);
+                            vec2 dq = vec2(p.x, (fi + 0.5 - drain) * seg - lvl) / (seg * 0.55);
                             float dd = length(vec2(dq.x * (1.0 + max(0.0, -dq.y) * 0.9), dq.y - 0.15)) - 0.5;
                             float a0 = dq.x * 2.0 + dq.y * 1.5 + t * 0.8;
                             vec3 iri = 0.5 + 0.5 * vec3(sin(a0), sin(a0 + 2.1), sin(a0 + 4.2));
@@ -1030,9 +1056,9 @@ let FRAGMENT_SHADER = """
                         // A darker line where one liquid meets another, curving
                         // round the column (smoke is all one); a run of one color
                         // reads as a single band.
-                        float edge = abs(lvl - (fi + 1.0) * seg);
+                        float edge = abs(lvl - (fi + 1.0 - drain) * seg);
                         bool next_same = (layer_murky(fi + 1.0) ? hidden : !hidden) && (hidden || layer_color(fi + 1.0) == ci);
-                        if (fi + 1.0 < v_p1.x - 0.01 && !next_same) c *= 1.0 - 0.22 * (1.0 - smoothstep(0.0, 1.6, edge));
+                        if (fi + 1.0 < v_p1.x + drain - 0.01 && !next_same) c *= 1.0 - 0.22 * (1.0 - smoothstep(0.0, 1.6, edge));
                         float surf = surface - lvl;
                         c += vec3(0.2) * (1.0 - smoothstep(0.0, 2.0, surf));
                         if (tilt != 0.0) a *= clamp(surf + 0.5, 0.0, 1.0);
@@ -1704,8 +1730,8 @@ let FRAGMENT_SHADER = """
             float seed = v_p0.z;
             vec2 q = p + (vec2(noise(p / u * 6.0 + seed), noise(p / u * 6.0 + 4.0)) - 0.5) * 0.08 * u;
             vec2 A[5] = vec2[5](vec2(-0.3, -0.12), vec2(0.3, -0.12), vec2(-0.15, -0.05), vec2(0.18, -0.05), vec2(-0.55, -0.25));
-            vec2 B[5] = vec2[5](vec2(-0.8, -0.18), vec2(0.85, -0.12), vec2(-0.45, 0.25), vec2(0.45, 0.22), vec2(-0.98, -0.6));
-            vec2 C[5] = vec2[5](vec2(-1.35, 0.04), vec2(1.38, 0.07), vec2(-0.65, 0.5), vec2(0.7, 0.48), vec2(-0.8, -0.98));
+            vec2 B[5] = vec2[5](vec2(-0.8, -0.18), vec2(0.85, -0.12), vec2(-0.45, 0.25), vec2(0.45, 0.22), vec2(-1.0, -0.4));
+            vec2 C[5] = vec2[5](vec2(-1.35, 0.04), vec2(1.38, 0.07), vec2(-0.65, 0.5), vec2(0.7, 0.48), vec2(-1.3, -0.62));
             float d = 1e5;
             float along = 0.0;
             float dc = 0.0;

@@ -204,9 +204,12 @@ fn test_vow() {
     settle(b);
     var r = pour(b, 0, 2);
     check(r.ok && b.bottles[2].vow == color_of_letter('G'), "takes the first color");
+    check(has_event(r, EventKind.Vowed, 2), "with an event");
     check(!pour(b, 1, 2).ok, "rejects another color");
     check(pour(b, 0, 3).ok, "reds into the spare");
-    check(pour(b, 1, 3).ok && pour(b, 1, 2).ok, "red, then green into the vow flask");
+    check(pour(b, 1, 3).ok, "red into the spare");
+    r = pour(b, 1, 2);
+    check(r.ok && !has_event(r, EventKind.Vowed, 2), "green into the vow flask, already vowed");
     check(is_won(b) && b.bottles[2].done, "won once the vow flask is full");
 
     test("vow must end full");
@@ -941,7 +944,7 @@ fn test_tables() {
 
 // What a solution set off, pour by pour.
 struct PathFacts {
-    seen: bool[16] = [false; 16],   // by event kind
+    seen: bool[17] = [false; 17],   // by event kind
     heat_ice: bool = false,         // heat reached a flask under ice
     heat_seal: bool = false,        // a seal broken by heat
     drop_key: bool = false,         // the Drop broke a seal
@@ -953,7 +956,7 @@ fn kind_index(k: EventKind) -> i64 {
     match k {
         SealBroken => 0, SealSoftened => 1, Thawed => 2, HeatPulse => 3, Lit => 4, ShroudLifted => 5,
         MurkCleared => 6, Flipped => 7, VineSpread => 8, VineWithered => 9, TendrilBurned => 10,
-        SalamanderHop => 11, Transmuted => 12, Overflowed => 13, CatalystFired => 14, Completed => 15,
+        SalamanderHop => 11, Transmuted => 12, Overflowed => 13, CatalystFired => 14, Completed => 15, Vowed => 16,
     }
 }
 

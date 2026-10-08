@@ -204,7 +204,8 @@ e.g. up to 32) of `Event { kind, bottle, from }`. The game animates the
 events in order. Kinds: `SealBroken`, `SealSoftened`, `Thawed`, `HeatPulse`,
 `Lit`, `ShroudLifted`, `MurkCleared`, `Flipped`, `VineSpread`,
 `VineWithered`, `TendrilBurned`, `SalamanderHop`, `Transmuted`,
-`Overflowed`, `CatalystFired`, `Completed`.
+`Overflowed`, `CatalystFired`, `Completed`, `Vowed` (a vow flask took its
+color).
 
 ## Built-in levels
 
@@ -302,10 +303,14 @@ functions.
   drawn as cylinders in that view (elliptical rim, liquid surface and color
   edges, cylinder shading, a soft shadow on the table). Grid columns are
   slightly staggered for depth (alternate columns stand a little nearer).
-  Whatever stands at a flask's foot (a brazier's bowl, roots, the hearth)
-  is drawn over the rims of the row in front, which would hide it. The
-  rules don't change, and taps hit the drawn flask (the front one where two
-  overlap).
+  Rows are drawn with a gap between one row's feet and the next row's rims,
+  and every part stays within its own column: what stands at a flask's foot
+  (a brazier's bowl, roots, the hearth) fits in that gap and is drawn over
+  the flasks, so every flask's rim and liquid stay in view. A tall flask
+  stands on the table with its last row. A lantern hangs on the side of its
+  rim that is free. A siphon isn't tipped to pour: it is held with its tap
+  over the target and its bottom run drains. The rules don't change, and
+  taps hit the drawn flask (the front one where two overlap).
 - **Continuous colors:** adjacent segments of the same color are one band
   with no line between them; only a change of color shows an edge.
 - **In levels:** flasks drop into place one after another at start;

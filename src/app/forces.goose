@@ -3,7 +3,7 @@
 // rippling across, ice shattering, wax softening and cracking off, lanterns
 // flaring, shrouds sliding away, smoke clearing, an hourglass turning over,
 // vines growing, withering and burning, the salamander's hop, the athanor's
-// gold, the twins' overflow, the catalyst's runes.
+// gold, the twins' overflow, the catalyst's runes, a vow's band taking its color.
 //
 // The board drawn, `shown`, trails the board in play while they play: it
 // starts as the pour left it before anything it set off, and each event's
@@ -129,6 +129,7 @@ fn beat_span(kind: EventKind) -> f64, f64 {
         Overflowed => { return 0.6, 0.0; },
         CatalystFired => { return 1.1, 0.0; },
         Completed => { return 0.0, 0.0; },
+        Vowed => { return 0.8, 0.0; },
     }
 }
 
@@ -147,6 +148,8 @@ fn liquid_moved(before: Board, from: i64, to: i64, r: PourResult) -> Board {
     for k in r.amount { move_one(m, from, to, scratch); }
     let tw: i64 = m.bottles[to].twin;
     if tw >= 0 { for k in r.overflow { move_one(m, from, tw, scratch); } }
+    // A vow takes its color when its own event plays.
+    for e in r.events { if e.kind == EventKind.Vowed { m.bottles[e.bottle].vow = 0; } }
     m
 }
 
@@ -184,6 +187,9 @@ fn schedule_pour(before: Board, from: i64, to: i64, r: PourResult, t0: f64) {
             b.quiet = transmuted;
             if transmuted { b.span = 0.0; }
             transmuted = true;
+        } else if e.kind == EventKind.Vowed {
+            // As the liquid lands.
+            b.at = land - T_POUR * 0.4;
         } else if e.kind == EventKind.Overflowed {
             b.at = t0 + T_LIFT + T_POUR * 0.5;
             b.n0 = before.bottles[e.bottle].n;
@@ -279,10 +285,16 @@ fn beat_waiting(kind: EventKind, i: i64) -> bool {
 
 // --- what each does as it starts, and to the board drawn ---------------------------------------
 
-fn slot_anchors(i: i64) -> Anchors { flask_anchors(rest_pos(i), slots[i].half, 0.0, 1.0) }
+fn slot_anchors(i: i64) -> Anchors {
+    var a = flask_anchors(rest_pos(i), slots[i].half, 0.0, 1.0);
+    a.hang = hang_side(i);
+    a
+}
 
 fn stand_anchors(i: i64) -> Anchors {
-    flask_anchors(slots[i].pos + v2(0.0, drop_offset(i)), slots[i].half, 0.0, 1.0)
+    var a = flask_anchors(slots[i].pos + v2(0.0, drop_offset(i)), slots[i].half, 0.0, 1.0);
+    a.hang = hang_side(i);
+    a
 }
 
 let ICE_COLOR = float4 { 0.82, 0.93, 1.0, 1.0 };
@@ -338,6 +350,7 @@ fn start_beat(b: Beat&) {
             play(Sfx.Gong);
             burst(at(a, a.base), 30, float4 { 0.8, 0.5, 1.0, 1.0 }, 220.0);
         },
+        Vowed => play_pitched(Sfx.Chime, 1.25, 0.5),
         MurkCleared, Completed => {},
     }
 }
@@ -398,6 +411,7 @@ fn apply_beat(b: Beat&, live: bool) {
         },
         SalamanderHop => { shown.salamander = i; },
         CatalystFired => { s.spent = true; },
+        Vowed => { s.vow = board.bottles[i].vow; },
         Completed => {
             s.done = true;
             s.murk = 0;
@@ -500,6 +514,12 @@ fn tube_flow(i: i64, j: i64) -> f32, float4, i64 {
         return (k * 1.7) as f32, palette_color(e.color, save.color_safe), e.from;
     }
     return -100.0, float4_0, -1;
+}
+
+// How bright a vow's band flashes as it takes its color, 0..1.
+fn vow_flash(i: i64) -> f32 {
+    let k = beat_k(EventKind.Vowed, i);
+    if k < 0.0 { 0.0 } else { (1.0 - k) * (1.0 - k) }
 }
 
 fn hop_flying() -> bool { beat_k(EventKind.SalamanderHop, shown.salamander) >= 0.0 }
@@ -610,6 +630,14 @@ fn draw_beats(out: Inst[>..]&) {
                 rg.misc.w = 0.3;
                 out.push(rg);
                 glow(out, base - v2(0.0, hx), v2(hx * 3.0, hx * 3.0), 1.0, float4 { 0.7, 0.4, 1.0, 0.35 * (1.0 - k) });
+            },
+            Vowed => {
+                // The band lights up in the color it took.
+                let c = palette_color(shown.bottles[i].vow, save.color_safe);
+                let f = (1.0 - k) * (1.0 - k);
+                let band = at(a, a.shoulder + v2(0.0, hx * 0.12));
+                glow(out, band, v2(hx * 1.7, hx * 0.8), 1.0, with_alpha(c, 0.8 * f));
+                spark(out, band, hx * (0.5 + 1.2 * k), with_alpha(c, f));
             },
             Completed => {},
         }

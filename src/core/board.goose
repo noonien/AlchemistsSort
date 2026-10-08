@@ -111,7 +111,7 @@ struct Board {
 // flask that overflowed, the salamander's last perch...) or -1.
 enum EventKind {
     SealBroken, SealSoftened, Thawed, HeatPulse, Lit, ShroudLifted, MurkCleared, Flipped, VineSpread,
-    VineWithered, TendrilBurned, SalamanderHop, Transmuted, Overflowed, CatalystFired, Completed,
+    VineWithered, TendrilBurned, SalamanderHop, Transmuted, Overflowed, CatalystFired, Completed, Vowed,
 }
 
 struct Event { kind: EventKind, bottle: i8 = -1, from: i8 = -1 }
@@ -584,7 +584,10 @@ fn move_one(board: Board&, from: i64, to: i64, r: PourResult&) {
         return;
     }
     put_one(dst, c);
-    if dst.body == Body.Vow && dst.vow == 0 && c != DROP { dst.vow = c as u8; }
+    if dst.body == Body.Vow && dst.vow == 0 && c != DROP {
+        dst.vow = c as u8;
+        note(r, EventKind.Vowed, to, from);
+    }
 }
 
 // The top segment of every flask is in plain view.

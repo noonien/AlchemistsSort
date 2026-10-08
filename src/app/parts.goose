@@ -42,6 +42,7 @@ struct Anchors {
     base: float2,       // the middle of the bottom, where it stands
     side: float2,       // the right of the body, low down (left is its mirror)
     joint: float2,      // the right of the body, high up, where a twin's tube joins
+    hang: f32 = 1.0,    // the side a lantern hangs on: 1 right, -1 left
 }
 
 fn flask_anchors(pos: float2, half: float2, angle: f32, squash: f32) -> Anchors {
@@ -61,11 +62,16 @@ fn flask_anchors(pos: float2, half: float2, angle: f32, squash: f32) -> Anchors 
 }
 
 // The middle of the near face of liquid segment k, relative to the flask's
-// middle: segments are SEGMENT half widths high, from the bottom up.
+// middle, from the bottom up. The shader shares the flask's height among
+// its cap's segments less SHADER_EXTRA half widths of glass.
+let SHADER_EXTRA: f32 = 1.25;
+
 fn segment_center(half: float2, k: i64) -> float2 {
     let hx = half.x;
+    let cap = max(CAP, ((half.y * 2.0 / hx - FLASK_EXTRA) / SEGMENT + 0.5) as! i64);
+    let seg = (half.y * 2.0 - hx * SHADER_EXTRA) / cap;
     let base = half.y - hx * FLASK_E * FLASK_BODY - hx * 0.05;
-    float2 { 0.0, base + hx * LIQUID_W * FLASK_E - (k + 0.5) * hx * SEGMENT }
+    float2 { 0.0, base + hx * LIQUID_W * FLASK_E - (k + 0.5) * seg }
 }
 
 // A point in the flask's frame (an anchor plus an offset), on the screen.
@@ -95,11 +101,16 @@ let PARCHMENT_INK = float4 { 0.24, 0.15, 0.07, 1.0 };
 // What of the body is behind the glass: the moonpetal's lotus.
 fn draw_body_back(out: Inst[>..]&, b: Bottle, a: Anchors, open: f32) {
     if b.body != Body.Moonpetal { return; }
-    let h = float2 { a.hx * 1.9, a.hx * 2.4 };
+    let h = float2 { a.hx * 1.5, a.hx * 1.9 };
     var i = part(Shape.Bloom, a, a.base - float2 { 0.0, h.y - a.hx * 0.1 }, h, rgba(1.0, 1.0, 1.0, 0.9));
     i.p0 = float4 { open, 0.0, 0.0, 0.0 };
     out.push(i);
 }
+
+// A siphon's tap, in the flask's frame: low on the right, its pipe through
+// the glass. Liquid leaves at tap_spout.
+fn tap_at(a: Anchors) -> float2 { a.side + float2 { a.hx * 0.3, 0.0 } }
+fn tap_spout(a: Anchors) -> float2 { at(a, tap_at(a) + float2 { a.hx * 0.25, a.hx * 0.33 }) }
 
 // What of the body is on the glass: the vow's band, the tap, the bud.
 fn draw_body(out: Inst[>..]&, i: i64, b: Bottle, a: Anchors, open: f32, safe: bool) {
@@ -108,7 +119,9 @@ fn draw_body(out: Inst[>..]&, i: i64, b: Bottle, a: Anchors, open: f32, safe: bo
         Vow => {
             var r = part(Shape.Ribbon, a, a.shoulder + float2 { 0.0, hx * 0.22 }, float2 { hx * 1.2, hx * 0.8 }, rgba(1.0, 1.0, 1.0, 1.0));
             let vowed = b.vow != 0;
-            r.p0 = float4 { if vowed { 1.0 } else { 0.0 }, 0.0, i * 0.37, 0.0 };
+            // It flashes in its color as it takes it (forces.goose).
+            let flash = if i >= 0 { vow_flash(i) } else { 0.0 };
+            r.p0 = float4 { if vowed { 1.0 } else { 0.0 }, flash, i * 0.37, 0.0 };
             r.p1 = if vowed { palette_color(b.vow, safe) } else { float4_0 };
             out.push(r);
             if vowed && safe && a.angle == 0.0 {
@@ -117,10 +130,9 @@ fn draw_body(out: Inst[>..]&, i: i64, b: Bottle, a: Anchors, open: f32, safe: bo
                 out.push(s);
             }
         },
-        Siphon => out.push(part(Shape.Tap, a, a.side + float2 { hx * 0.58, hx * 0.0 }, float2 { hx * 0.75, hx * 0.56 },
-                                rgba(1.0, 1.0, 1.0, 1.0))),
+        Siphon => out.push(part(Shape.Tap, a, tap_at(a), float2 { hx * 0.6, hx * 0.45 }, rgba(1.0, 1.0, 1.0, 1.0))),
         Moonpetal => {
-            var bud = part(Shape.Bloom, a, a.rim - float2 { 0.0, hx * 0.45 }, float2 { hx * 0.9, hx * 0.9 }, rgba(1.0, 1.0, 1.0, 1.0));
+            var bud = part(Shape.Bloom, a, a.rim - float2 { 0.0, hx * 0.36 }, float2 { hx * 0.75, hx * 0.75 }, rgba(1.0, 1.0, 1.0, 1.0));
             bud.p0 = float4 { open, 1.0, 0.0, 0.0 };
             out.push(bud);
         },
@@ -206,11 +218,12 @@ fn draw_stand_back(out: Inst[>..]&, i: i64, b: Bottle, a: Anchors, look: StandLo
     match b.body {
         Hourglass => out.push(inst(Shape.Frame, a.center, float2 { hx * 1.42, a.half.y + hx * 0.06 }, rgba(1.0, 1.0, 1.0, 1.0))),
         Athanor => {
-            var f = inst(Shape.Furnace, base - float2 { 0.0, hx * 1.0 }, float2 { hx * 1.45, hx * 1.0 }, rgba(1.0, 1.0, 1.0, 1.0));
+            // A low brick hearth the flask stands in, no higher than its foot.
+            var f = inst(Shape.Furnace, base - float2 { 0.0, hx * 0.42 }, float2 { hx * 1.3, hx * 0.62 }, rgba(1.0, 1.0, 1.0, 1.0));
             f.p0 = float4 { 0.0, look.flare, 0.0, 0.0 };
             out.push(f);
-            glow(out, base - float2 { 0.0, hx * 0.5 }, float2 { hx * 1.6, hx * 0.9 }, 1.0,
-                 float4 { 1.0, 0.45, 0.12, 0.18 + 0.3 * look.flare });
+            glow(out, base - float2 { 0.0, hx * 0.3 }, float2 { hx * 1.5, hx * 0.7 }, 1.0,
+                 float4 { 1.0, 0.45, 0.12, 0.15 + 0.3 * look.flare });
         },
         Plain, Vow, Siphon, Moonpetal => {},
     }
@@ -246,17 +259,18 @@ fn draw_stand_front(out: Inst[>..]&, i: i64, b: Bottle, a: Anchors, look: StandL
     let base = at(a, a.base);
     match b.body {
         Hourglass => {
+            // On the stand's post, clear of the glass and of the next column.
             let c = at(a, float2 { hx * 1.2, 0.0 });
             let every: i64 = b.flip_every;
             let left = max(0, every - b.flip_count);
-            var d = inst(Shape.Dial, c, float2 { hx * 0.46, hx * 0.46 }, rgba(1.0, 1.0, 1.0, 1.0));
+            var d = inst(Shape.Dial, c, float2 { hx * 0.36, hx * 0.36 }, rgba(1.0, 1.0, 1.0, 1.0));
             d.p0 = float4 { b.flip_every, left, 0.0, 0.0 };
             d.misc.z = hx * 0.3;
             out.push(d);
             text(parts_layer, c.x, c.y + 0.5, str(left), TextStyle.Tiny, PARCHMENT_INK, Align.Center);
         },
         Athanor => {
-            var f = inst(Shape.Furnace, base + float2 { 0.0, hx * 0.02 }, float2 { hx * 1.2, hx * 0.3 }, rgba(1.0, 1.0, 1.0, 1.0));
+            var f = inst(Shape.Furnace, base + float2 { 0.0, hx * 0.22 }, float2 { hx * 1.2, hx * 0.3 }, rgba(1.0, 1.0, 1.0, 1.0));
             f.p0 = float4 { 1.0, look.flare, 0.0, 0.0 };
             out.push(f);
         },
@@ -264,7 +278,7 @@ fn draw_stand_front(out: Inst[>..]&, i: i64, b: Bottle, a: Anchors, look: StandL
     }
     match b.fixture {
         Brazier => {
-            var f = inst(Shape.Brazier, base + float2 { 0.0, hx * 0.12 }, float2 { hx * 1.25, hx * 0.42 }, rgba(1.0, 1.0, 1.0, 1.0));
+            var f = inst(Shape.Brazier, base + float2 { 0.0, hx * 0.28 }, float2 { hx * 1.25, hx * 0.42 }, rgba(1.0, 1.0, 1.0, 1.0));
             f.p0 = float4 { 1.0, look.flare, 0.0, 0.0 };
             out.push(f);
         },
@@ -277,14 +291,15 @@ fn draw_stand_front(out: Inst[>..]&, i: i64, b: Bottle, a: Anchors, look: StandL
     }
 }
 
-// A lantern hangs off the right of the rim, on a short chain from a hook.
-fn lantern_pos(a: Anchors) -> float2 { at(a, a.rim + float2 { a.hx * 1.05, a.hx * 0.9 }) }
+// A lantern hangs off the rim on a short chain from a hook, on the side
+// a.hang says, small enough to stay clear of the next column's liquid.
+fn lantern_pos(a: Anchors) -> float2 { at(a, a.rim + float2 { a.hang * a.hx * 1.2, a.hx * 0.8 }) }
 
 fn draw_lantern(out: Inst[>..]&, a: Anchors, lit: f32, flare: f32, seed: i64) {
     let hx = a.hx;
     let c = lantern_pos(a);
-    let hook = at(a, a.rim + float2 { hx * 0.86, -hx * 0.04 });
-    let top = c - float2 { 0.0, hx * 0.62 };
+    let hook = at(a, a.rim + float2 { a.hang * hx * 0.88, -hx * 0.04 });
+    let top = c - float2 { 0.0, hx * 0.45 };
     for k in 3 {
         let f = (k + 0.5) / 3.0;
         ring(out, float2 { hook.x + (top.x - hook.x) * f, hook.y + (top.y - hook.y) * f }, hx * 0.06, 1.1, float4 { 0.7, 0.55, 0.3, 1.0 });
@@ -293,15 +308,16 @@ fn draw_lantern(out: Inst[>..]&, a: Anchors, lit: f32, flare: f32, seed: i64) {
     if lit > 0.0 {
         glow(out, c + float2 { 0.0, hx * 0.06 }, float2 { hx * 1.3, hx * 1.3 }, 1.0, float4 { 1.0, 0.75, 0.4, 0.2 * lit + 0.3 * flare });
     }
-    var l = inst(Shape.Lantern, c, float2 { hx * 0.5, hx * 0.77 }, rgba(1.0, 1.0, 1.0, 1.0));
+    var l = inst(Shape.Lantern, c, float2 { hx * 0.36, hx * 0.55 }, rgba(1.0, 1.0, 1.0, 1.0));
     l.p0 = float4 { lit, flare, seed * 1.7, 0.0 };
-    l.misc.z = hx * 0.5;
+    l.misc.z = hx * 0.36;
     out.push(l);
 }
 
 fn draw_roots(out: Inst[>..]&, b: Bottle, a: Anchors, wither: f32, alpha: f32) {
     let hx = a.hx;
-    let base = at(a, a.base);
+    // In front of the foot, on the table, clear of the liquid.
+    let base = at(a, a.base + float2 { 0.0, hx * 0.38 });
     let every: i64 = b.spread_every;
     let left = max(0, every - b.spread_count);
     let ripe: f32 = if left <= 1 { 1.0 } else { clamp(b.spread_count / max(1.0, every - 1.0), 0.0, 0.9) as f32 };
