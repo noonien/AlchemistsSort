@@ -289,6 +289,14 @@ functions.
   the current one pulses; finished chapters light their potion), buttons
   that squash and spring back and glow on hover, and ink-swirl transitions
   between screens.
+- **Perspective:** the play area is a tabletop seen from above at an angle,
+  themed per chapter, with the room visible beyond its back edge. Flasks are
+  drawn as cylinders in that view (elliptical rim, liquid surface and color
+  edges, cylinder shading, a soft shadow on the table). Grid columns are
+  slightly staggered for depth. The rules don't change, and taps hit the
+  drawn flask.
+- **Continuous colors:** adjacent segments of the same color are one band
+  with no line between them; only a change of color shows an edge.
 - **In levels:** flasks drop into place one after another at start;
   idle liquid drifts and bubbles now and then; slosh on lift, pour and
   refusal (A1); the stream arcs under gravity with a splash and a ripple
