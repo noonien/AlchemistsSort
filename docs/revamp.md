@@ -17,16 +17,21 @@ gift, long) with modifiers that touch one another through a few shared
 - Calm game: no timers in seconds, no lives. Pour-count effects are fine;
   undo is free.
 
-## Neighbors and shelves
+## The grid and neighbors
 
-Flasks stand on shelves in rows. **Neighbors** of flask `i` are `i - 1` and
-`i + 1` when they stand on the same shelf row.
+There are no shelves. Flasks stand in a **grid** of columns and rows on the
+room's background. A **Tall Flask** takes one column and spans **2 or 3
+rows**, with segments the same size as everywhere else, so it holds what
+fits: `tall_cap(2) = 9`, `tall_cap(3) = 14` (4 per row, plus the gap
+between rows). As before, one color comes in exactly that many segments to
+fill it.
 
-The core owns the row length: `Board.per_row` is set once when a board is
-settled (`settle()`), from a pure function `shelf_per_row(count, tallest)`
-that the layout code also uses (it is today's "best rows" search, moved into
-the core). Adding an extra flask never changes `per_row`; extra flasks fill
-the last row or start a new one. So neighbors never change mid-level.
+The core owns the grid: `settle()` places every flask in a cell (row,
+column, rows spanned) from a pure function of the board, which the layout
+code uses to draw. Adding an extra flask never moves the others; it takes
+the next free cell. **Neighbors** of a flask are the flasks directly left
+and right of it in the same row. A tall flask is a neighbor on every row it
+spans, so it can have up to 2 × rows neighbors.
 
 ## The bottle model
 
@@ -35,7 +40,7 @@ sealed twin, a tall flask on a brazier, ...):
 
 | Part | Values |
 |---|---|
-| `seg`, `n`, `cap` | the liquid, bottom first; `cap` 4, or 5..8 for a **Tall Flask** |
+| `seg`, `n`, `cap` | the liquid, bottom first; `cap` 4, or 9 or 14 for a **Tall Flask** spanning 2 or 3 rows |
 | `murk: u8` | bitmask, one bit per segment: hidden under smoke (was `hidden` count) |
 | **body** (one) | `Plain`, `Vow`, `Siphon`, `Hourglass`, `Athanor`, `Moonpetal` |
 | **cover** (at most one; blocks pours in and out unless said otherwise) | `None`, `Seal` (key color, heat count), `Rime` (timer), `Shroud`, `Vine` (a tendril) |
@@ -44,7 +49,7 @@ sealed twin, a tall flask on a brazier, ...):
 | body data | `key` for Vow; `flip_every` and a counter for Hourglass |
 | `done` | completed and sealed (unchanged) |
 
-Board-level state: `salamander` (flask index, -1 when none), `per_row`,
+Board-level state: `salamander` (flask index, -1 when none), the grid placement,
 `pours`.
 
 Special liquids (letters in the level format):
@@ -67,7 +72,7 @@ with no liquid landing.
 **Vow Flask** (was Mystery). Takes the first color poured in, then only that
 color. It must end full. The Drop is accepted and doesn't set the vow.
 
-**Tall Flask**. `cap` 5 to 8. The level has one color with `cap` segments to
+**Tall Flask**. Spans 2 or 3 grid rows; `cap` 9 or 14. The level has one color with `cap` segments to
 fill it. Recurring from level 8 onward (see the campaign).
 
 **Rime** (ice, was Frozen). Covered. Thaws after N pours made anywhere
@@ -284,7 +289,7 @@ functions.
   the current one pulses; finished chapters light their potion), buttons
   that squash and spring back and glow on hover, and ink-swirl transitions
   between screens.
-- **In levels:** flasks drop onto the shelf one after another at start;
+- **In levels:** flasks drop into place one after another at start;
   idle liquid drifts and bubbles now and then; slosh on lift, pour and
   refusal (A1); the stream arcs under gravity with a splash and a ripple
   (A2); completion drops a stopper in and slides a label on (A5); every
