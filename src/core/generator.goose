@@ -97,8 +97,8 @@ fn split_color(board: Board&, x: i64, a: i64, b: i64) {
 
 // Whether a neighbor of `i` is marked in `near`.
 fn next_to(board: Board, i: i64, near: const bool[:]) -> bool {
-    let l, r = neighbors(board, i);
-    (l >= 0 && near[l]) || (r >= 0 && near[r])
+    for j in neighbors(board, i) { if near[j] { return true; } }
+    false
 }
 
 // Puts a fixture on a random flask with `ok` set and no fixture yet.
@@ -177,7 +177,7 @@ fn deal(p: GenParams, r: rng&) -> Board {
     shuffle(segs, r);
     var at = 0;
     for i in bottles {
-        var b = Bottle { seg: [0; 8], .. };
+        var b = Bottle { .. };
         for k in heights[i] {
             b.seg[k] = segs[at];
             at++;
@@ -187,23 +187,23 @@ fn deal(p: GenParams, r: rng&) -> Board {
     }
     for c in 1..colors + 1 {
         if !tall_color[c] { continue; }
-        var b = Bottle { seg: [0; 8], cap: tall as u8, .. };
+        var b = Bottle { cap: tall as u8, .. };
         for s in tall - CAP { b.seg[s] = liquid[c] as u8; }
         b.n = (tall - CAP) as u8;
         push_bottle(board, b);
     }
     for k in p.vow {
-        var b = Bottle { seg: [0; 8], .. };
+        var b = Bottle { .. };
         b.body = Body.Vow;
         push_bottle(board, b);
     }
     if p.athanor {
-        var b = Bottle { seg: [0; 8], .. };
+        var b = Bottle { .. };
         b.body = Body.Athanor;
         push_bottle(board, b);
     }
-    // Every bottle is on the shelf now, so neighbors are known.
-    board.per_row = shelf_per_row(board.count, tallest_cap(board));
+    // Every bottle is in the grid now, so neighbors are known.
+    place_grid(board);
     let count = board.count;
 
     var ok: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
@@ -250,39 +250,42 @@ fn deal(p: GenParams, r: rng&) -> Board {
     for k in p.murk {
         for i in count {
             let b = board.bottles[i];
-            ok[i] = b.n > 1 && b.body != Body.Siphon && b.murk == 0;
+            ok[i] = b.n > 1 && b.body != Body.Siphon && b.murk == 0 && b.cap == CAP;
         }
         let i = pick(r, ok[..count]);
         if i < 0 { break; }
         let n: i64 = board.bottles[i].n;
-        board.bottles[i].murk = ((1 << (n - 1)) - 1) as u8;
+        board.bottles[i].murk = ((1 << (n - 1)) - 1) as u16;
     }
     // Twins: neighbors, at least one with room for an overflow to matter.
     for k in p.twins {
         for i in count {
             let a = board.bottles[i];
-            let l, right = neighbors(board, i);
+            let right = right_of(board, i);
             ok[i] = right >= 0 && a.twin < 0 && board.bottles[right].twin < 0 &&
                     (a.n < a.cap || board.bottles[right].n < board.bottles[right].cap);
         }
         let i = pick(r, ok[..count]);
         if i < 0 { break; }
-        board.bottles[i].twin = (i + 1) as i8;
-        board.bottles[i + 1].twin = i as i8;
+        let j = right_of(board, i);
+        board.bottles[i].twin = j as i8;
+        board.bottles[j].twin = i as i8;
     }
     // Shrouds, each next to a lantern on a flask with liquid to complete.
     for k in p.shroud {
+        // Not on a tall flask: the shroud might hide some of its color.
         for i in count { near[i] = board.bottles[i].fixture == Fixture.Lantern ||
                                    (board.bottles[i].fixture == Fixture.None && board.bottles[i].n > 0 &&
-                                    !covered(board.bottles[i])); }
+                                    !covered(board.bottles[i]) && board.bottles[i].cap == CAP); }
         for i in count { ok[i] = board.bottles[i].n > 0 && !covered(board.bottles[i]) && next_to(board, i, near); }
         let i = pick(r, ok[..count]);
         if i < 0 { break; }
         board.bottles[i].cover = Cover.Shroud;
-        let l, right = neighbors(board, i);
-        if (l >= 0 && board.bottles[l].fixture == Fixture.Lantern) ||
-           (right >= 0 && board.bottles[right].fixture == Fixture.Lantern) { continue; }
-        for j in count { ok[j] = (j == l || j == right) && near[j] && !covered(board.bottles[j]); }
+        let around = neighbors(board, i);
+        var lit = false;
+        for j in around { if board.bottles[j].fixture == Fixture.Lantern { lit = true; } }
+        if lit { continue; }
+        for j in count { ok[j] = contains(around, j) && near[j] && !covered(board.bottles[j]); }
         place_fixture(board, r, ok, Fixture.Lantern);
     }
     // Other lanterns, preferably where their light clears murk.
@@ -325,10 +328,7 @@ fn deal(p: GenParams, r: rng&) -> Board {
     }
     // A creeping vine, with neighbors to grow over.
     if p.vine {
-        for i in count {
-            let l, right = neighbors(board, i);
-            ok[i] = l >= 0 || right >= 0;
-        }
+        for i in count { ok[i] = neighbors(board, i).len > 0; }
         let i = place_fixture(board, r, ok, Fixture.VineRoot);
         if i >= 0 { board.bottles[i].spread_every = clamp(p.vine_every, 1, 9) as u8; }
     }
@@ -389,6 +389,11 @@ fn attempt_params(p: GenParams, attempt: i64) -> GenParams {
     plain
 }
 
+// The search attempt `attempt` may make: the first few give up early, since
+// a deal that is hard to search is more often one that cannot be won, and
+// dealing again is cheaper; later ones search fully.
+fn attempt_budget(budget: i64, attempt: i64) -> i64 { if attempt < 4 { budget / 6 } else { budget } }
+
 // Generation as a job that runs a slice at a time, so the game can keep
 // drawing while it brews. Each attempt deals a board and searches it.
 struct GenJob {
@@ -441,7 +446,7 @@ fn gen_step(job: GenJob&, nodes: i64) -> bool {
             job.attempt++;
             continue;
         }
-        job.search = search_begin(job.dealt, job.params.budget);
+        job.search = search_begin(job.dealt, attempt_budget(job.params.budget, job.attempt));
         job.searching = true;
     }
     job.done

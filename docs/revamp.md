@@ -28,8 +28,14 @@ fill it.
 
 The core owns the grid: `settle()` places every flask in a cell (row,
 column, rows spanned) from a pure function of the board, which the layout
-code uses to draw. Adding an extra flask never moves the others; it takes
-the next free cell. **Neighbors** of a flask are the flasks directly left
+code uses to draw. The column count is the one that shows the flasks
+largest on the board area (near ties go to the fewest empty cells, then the
+most columns). Tall flasks stand from the top row in the middle column (or
+the edges, with an even column count); the other flasks fill the rows in
+order, the last row's cells from the middle out. A hand-made level may hold
+the grid to a column count (`.columns(n)`) where its idea needs rows that
+long. Adding an extra flask never moves the others; it takes the free cell
+of the last row nearest the middle, or starts a new row. **Neighbors** of a flask are the flasks directly left
 and right of it in the same row. A tall flask is a neighbor on every row it
 spans, so it can have up to 2 × rows neighbors.
 
@@ -41,7 +47,7 @@ sealed twin, a tall flask on a brazier, ...):
 | Part | Values |
 |---|---|
 | `seg`, `n`, `cap` | the liquid, bottom first; `cap` 4, or 9 or 14 for a **Tall Flask** spanning 2 or 3 rows |
-| `murk: u8` | bitmask, one bit per segment: hidden under smoke (was `hidden` count) |
+| `murk: u16` | bitmask, one bit per segment: hidden under smoke (was `hidden` count) |
 | **body** (one) | `Plain`, `Vow`, `Siphon`, `Hourglass`, `Athanor`, `Moonpetal` |
 | **cover** (at most one; blocks pours in and out unless said otherwise) | `None`, `Seal` (key color, heat count), `Rime` (timer), `Shroud`, `Vine` (a tendril) |
 | **fixture** (at most one) | `None`, `Brazier`, `Lantern` (lit flag), `Catalyst` (spent flag), `VineRoot` (spread timer, every N) |
@@ -73,7 +79,9 @@ with no liquid landing.
 color. It must end full. The Drop is accepted and doesn't set the vow.
 
 **Tall Flask**. Spans 2 or 3 grid rows; `cap` 9 or 14. The level has one color with `cap` segments to
-fill it. Recurring from level 8 onward (see the campaign).
+fill it. Recurring from level 8 onward (see the campaign). Since that color
+can only end in the tall flask, an ordinary flask full of it is not
+complete (nor sealed) while more of it is elsewhere.
 
 **Rime** (ice, was Frozen). Covered. Thaws after N pours made anywhere
 (timer -1 per pour). **Heat** takes one more off per pulse. When it reaches 0
@@ -293,8 +301,11 @@ functions.
   themed per chapter, with the room visible beyond its back edge. Flasks are
   drawn as cylinders in that view (elliptical rim, liquid surface and color
   edges, cylinder shading, a soft shadow on the table). Grid columns are
-  slightly staggered for depth. The rules don't change, and taps hit the
-  drawn flask.
+  slightly staggered for depth (alternate columns stand a little nearer).
+  Whatever stands at a flask's foot (a brazier's bowl, roots, the hearth)
+  is drawn over the rims of the row in front, which would hide it. The
+  rules don't change, and taps hit the drawn flask (the front one where two
+  overlap).
 - **Continuous colors:** adjacent segments of the same color are one band
   with no line between them; only a change of color shows an edge.
 - **In levels:** flasks drop into place one after another at start;

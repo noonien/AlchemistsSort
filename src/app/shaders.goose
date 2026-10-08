@@ -9,8 +9,9 @@ enum Shape {
     Rect,       // rounded rectangle; p0: radius, border, gradient on; p1: second color
     Glow,       // soft ellipse; p0.x: softness 0..1
     FlaskBack,  // the inside of a flask
-    Liquid,     // p0: colors of layers k and k + 4, as k + 32 (k + 4); p1: fill, murk bits, ripple, height;
-                // color: slosh slope, seed, ripple center (in half widths), alpha
+    Liquid,     // p0: the layers' colors, four to a number at five bits each, bottom first;
+                // p1: fill, murk bits, ripple, height; color: slosh slope, seed, ripple center
+                // (in half widths), alpha
     Glass,      // glass and rim; p0.x: glow
     Stream,     // a falling stream along a curve; p0: start, control; p1: end, width, phase
     Symbol,     // color-blind symbol; p0.x: which
@@ -22,9 +23,9 @@ enum Shape {
     Tap,        // a siphon's brass tap
     Lantern,    // a hanging lantern; p0: lit 0..1, flare, seed
     Wood,       // a wooden plank
-    Backdrop,   // the room behind it all; p0: theme, unscaled half width
+    Backdrop,   // the room behind it all; p0: theme, unscaled half width, the table's far edge (0: none)
     Icon,       // toolbar icons; p0.x: which Icon
-    Seal,       // a completed flask's stopper with a wax seal
+    Seal,       // a completed flask's cork with a wax seal
     Ring,       // a circle outline; p0.x: thickness
     Candle,     // wax, wick and a flickering flame; p0.x: seed
     Beam,       // a stream of light along a curve; p0: start, control; p1: end, width, head 0..1
@@ -560,8 +561,115 @@ let FRAGMENT_SHADER = """
         return room_apothecary(cv, t);
     }
 
-    // The flask: a round-bottomed body, a neck and a lip, at half size h.
-    float sd_flask(vec2 p, vec2 h) {
+    // --- the tables: in a level the flasks stand on one, seen from above at a
+    // slant, its far edge at canvas height `edge` with the room beyond -----
+    // Planks running away from the eye: q is the table's own coordinates.
+    vec3 planks(vec2 q, vec3 wood, float width, float seed) {
+        float k = floor(q.x / width);
+        float u = q.x / width - k;
+        float grain = noise(vec2(q.x * 0.09, q.y * 0.012 + k * 7.0 + seed)) * 0.55 +
+                      noise(vec2(q.x * 0.4, q.y * 0.03 + k * 3.0)) * 0.3;
+        vec3 c = wood * (0.72 + 0.5 * grain) * (0.9 + 0.2 * hash12(vec2(k, seed)));
+        c *= 1.0 - 0.45 * (1.0 - smoothstep(0.0, 0.025, u)) - 0.25 * smoothstep(0.975, 1.0, u);
+        // A joint now and then along a plank.
+        float j = fract(q.y / 260.0 + hash12(vec2(k, 3.0 + seed)));
+        c *= 1.0 - 0.35 * (1.0 - smoothstep(0.0, 0.006, abs(j - 0.5)));
+        return c;
+    }
+    vec3 table_top(int theme, vec2 q, float t) {
+        if (theme == 1) {           // frost cellar: frosted stone slabs
+            vec2 g = q / vec2(118.0, 92.0);
+            vec2 f = abs(fract(g + vec2(step(0.5, fract(g.y * 0.5)) * 0.5, 0.0)) - 0.5);
+            float seam = 1.0 - smoothstep(0.47, 0.49, max(f.x, f.y));
+            vec3 c = vec3(0.30, 0.36, 0.44) * (0.8 + 0.35 * noise(q * 0.02) + 0.15 * noise(q * 0.11));
+            c *= 0.55 + 0.45 * seam;
+            float frost = smoothstep(0.45, 0.8, noise(q * 0.012 + 4.0) * 0.7 + noise(q * 0.06) * 0.3);
+            c = mix(c, vec3(0.78, 0.88, 0.96), frost * 0.45);
+            c += vec3(0.9, 0.95, 1.0) * speckle(q / 9.0, t, 1.2, 0.1) * 0.5 * frost;
+            return c;
+        }
+        if (theme == 2) {           // glassworks: a scorched workbench
+            vec3 c = planks(q, vec3(0.30, 0.17, 0.09), 84.0, 2.0);
+            float scorch = smoothstep(0.5, 0.85, noise(q * 0.008 + 1.3) * 0.65 + noise(q * 0.035) * 0.35);
+            c = mix(c, vec3(0.06, 0.035, 0.03), scorch * 0.8);
+            // Rings left by hot crucibles, and a few embers in the char.
+            vec2 rc = vec2(mod(q.x + 40.0, 230.0) - 115.0, mod(q.y + 70.0, 300.0) - 150.0);
+            c *= 1.0 - 0.4 * fill_aa(abs(length(rc) - 46.0) - 3.0) * step(0.5, hash12(floor((q + vec2(40.0, 70.0)) / vec2(230.0, 300.0))));
+            c += vec3(1.0, 0.4, 0.1) * speckle(q / 14.0, t, 0.7, 0.08) * scorch * 0.8;
+            return c;
+        }
+        if (theme == 3) {           // observatory: dark wood, brass inlay, a star chart
+            vec3 c = planks(q, vec3(0.20, 0.11, 0.08), 120.0, 5.0) * 0.9;
+            vec2 m = q - vec2(0.0, 420.0);
+            float r = length(m * vec2(1.0, 1.05));
+            float chart = 1.0 - smoothstep(236.0, 240.0, r);
+            c = mix(c, vec3(0.08, 0.09, 0.17) * (0.85 + 0.3 * noise(q * 0.02)), chart * 0.85);
+            float stars = dots(q / 22.0 + 1.7, 0.08) * chart;
+            c += vec3(0.85, 0.8, 0.6) * stars * 0.7;
+            float a = atan(m.y, m.x);
+            float lines = (abs(r - 236.0) < 4.0 ? 1.0 : 0.0) + fill_aa(abs(r - 160.0) - 0.8) * 0.6 +
+                          fill_aa(abs(mod(a, 0.5236) - 0.2618) * r - 0.8) * step(r, 236.0) * step(40.0, r) * 0.35;
+            vec3 brass = vec3(0.78, 0.6, 0.3);
+            c = mix(c, brass, clamp(lines, 0.0, 1.0) * 0.8);
+            // The inlaid border.
+            float border = min(abs(abs(q.x) - 300.0), abs(q.y - 30.0));
+            c = mix(c, brass * 0.9, fill_aa(border - 2.5) * 0.9);
+            return c;
+        }
+        if (theme == 4) {           // greenhouse: a mossy potting bench
+            float k = q.x / 64.0;
+            float gap = smoothstep(0.0, 0.06, fract(k)) * (1.0 - smoothstep(0.94, 1.0, fract(k)));
+            vec3 c = planks(q, vec3(0.30, 0.22, 0.13), 64.0, 8.0);
+            c = mix(vec3(0.04, 0.05, 0.03), c, gap);
+            float moss = smoothstep(0.5, 0.75, noise(q * 0.01 + 7.0) * 0.6 + noise(q * 0.05) * 0.4);
+            c = mix(c, vec3(0.18, 0.32, 0.12) * (0.7 + 0.6 * noise(q * 0.3)), moss * 0.85 * gap);
+            c = mix(c, vec3(0.13, 0.09, 0.06), dots(q / 7.0, 0.18) * 0.5 * (1.0 - moss));
+            return c;
+        }
+        if (theme == 5) {           // athanor: dark stone, runes inlaid
+            vec3 c = vec3(0.17, 0.10, 0.10) * (0.75 + 0.35 * noise(q * 0.015) + 0.2 * noise(q * 0.09));
+            float crack = 1.0 - smoothstep(0.0, 0.03, abs(noise(q * 0.01 + 3.0) - 0.5));
+            c *= 1.0 - 0.35 * crack;
+            vec2 m = q - vec2(0.0, 430.0);
+            float r = length(m);
+            float a = atan(m.y, m.x) + t * 0.015;
+            float ring = min(abs(r - 250.0) - 2.0, abs(r - 214.0) - 1.5);
+            float cell = fract(a / 6.2831853 * 28.0);
+            float rune = max(abs(r - 232.0) - 9.0, abs(cell - 0.5) * 34.0 - (hash12(vec2(floor(a / 6.2831853 * 28.0), 2.0)) > 0.5 ? 2.0 : 5.0));
+            float glow = fill_aa(min(ring, rune));
+            float pulse = 0.7 + 0.3 * sin(t * 0.8);
+            c = mix(c, vec3(1.0, 0.55, 0.2) * pulse, glow * 0.55);
+            c += vec3(0.6, 0.2, 0.05) * exp(-abs(r - 232.0) / 26.0) * 0.12 * pulse;
+            return c;
+        }
+        return planks(q, vec3(0.42, 0.25, 0.13), 96.0, 0.0);   // apothecary: warm wood
+    }
+    // The table in perspective below `edge`, and its near edge's lip; the
+    // room beyond, seen from farther off.
+    vec3 table(int theme, vec2 cv, float edge, float t) {
+        if (cv.y < edge) {
+            vec2 far = vec2(270.0 + (cv.x - 270.0) * 1.35, 40.0 + cv.y * 1.9);
+            vec3 c = room(theme, far, t) * 0.85;
+            // The table's shadow on the wall just above it.
+            c *= 1.0 - 0.45 * smoothstep(edge - 24.0, edge, cv.y);
+            return c;
+        }
+        float k = clamp((cv.y - edge) / (960.0 - edge), 0.0, 1.0);
+        float f = mix(0.58, 1.0, k);
+        vec2 q = vec2((cv.x - 270.0) / f, (cv.y - edge) / sqrt(f));
+        vec3 c = table_top(theme, q, t);
+        // Light falls off toward the far edge and the sides.
+        c *= mix(0.7, 1.0, smoothstep(0.0, 0.35, k)) * (1.0 - 0.3 * pow(abs(cv.x - 270.0) / 300.0, 2.0));
+        // The far edge: a bright lip, then the board's thickness in shadow.
+        float lip = cv.y - edge;
+        c = mix(c, c * 1.5 + vec3(0.05), 1.0 - smoothstep(0.0, 2.5, lip));
+        c *= 1.0 - 0.3 * (1.0 - smoothstep(2.0, 14.0, lip)) * step(2.0, lip);
+        return c;
+    }
+
+    // A bottle with a round body, a neck and a lip (the extra-flask icon),
+    // at half size h.
+    float sd_bottle(vec2 p, vec2 h) {
         float bw = h.x;
         float neck_w = h.x * 0.52;
         float lip_w = h.x * 0.66;
@@ -579,20 +687,35 @@ let FRAGMENT_SHADER = """
         float d = mix(neck, body, hsm) - k * hsm * (1.0 - hsm);
         return min(d, lip);
     }
-    // Where the liquid sits: the body's inside, bottom and height.
-    void flask_body(vec2 h, out float bottom, out float top) {
-        float body_top = -h.y + h.x * 0.95;
-        bottom = h.y - h.x * 0.16;
-        top = body_top + h.x * 0.25;
-    }
 
-    vec3 shade_liquid(vec3 c, float x, float w) {
-        float t = x / w;
-        float light = 1.0 - 0.38 * t * t + 0.12 * (1.0 - smoothstep(-0.75, -0.35, t)) * 0.0;
-        vec3 col = c * light;
-        float streak = smoothstep(-0.62, -0.5, t) * (1.0 - smoothstep(-0.44, -0.3, t));
-        return col + vec3(0.22) * streak;
+    // The flasks are glass cylinders on the table, seen from above at a
+    // slant: the rim and the bottom are ellipses FLASK_E of their half width
+    // deep, and the body is a little narrower than the lip. FLASK_EXTRA is
+    // what a flask has beyond its segments, in half widths (board.goose's).
+    const float FLASK_E = 0.36;
+    const float FLASK_EXTRA = 1.25;
+    const float FLASK_BODY = 0.92;
+    // An ellipse of radii r, near enough a distance (after Inigo Quilez).
+    float sd_ellipse(vec2 p, vec2 r) {
+        float k0 = length(p / r);
+        float k1 = length(p / (r * r));
+        return k0 * (k0 - 1.0) / max(k1, 1e-5);
     }
+    // An upright cylinder, from the ellipse round yt down to the one round yb.
+    float sd_cylinder(vec2 p, vec2 r, float yt, float yb) {
+        return sd_ellipse(vec2(p.x, p.y - clamp(p.y, yt, yb)), r);
+    }
+    float flask_top(vec2 h) { return -h.y + h.x * FLASK_E; }                   // the rim's middle
+    float flask_bottom(vec2 h) { return h.y - h.x * FLASK_E * FLASK_BODY; }    // the bottom's
+    float sd_flask(vec2 p, vec2 h) {
+        float ry = h.x * FLASK_E;
+        float body = sd_cylinder(p, vec2(h.x, ry) * FLASK_BODY, flask_top(h), flask_bottom(h));
+        float lip = sd_cylinder(p, vec2(h.x, ry), flask_top(h), flask_top(h) + h.x * 0.1);
+        return min(body, lip);
+    }
+    // The liquid inside: its column's half width, and the middle of its bottom.
+    float liquid_w(vec2 h) { return h.x * (FLASK_BODY - 0.08); }
+    float liquid_base(vec2 h) { return flask_bottom(h) - h.x * 0.05; }
 
     vec4 symbol(vec2 p, float which, float r) {
         float d = 1e5;
@@ -650,7 +773,7 @@ let FRAGMENT_SHADER = """
             * 0.8));
             return min(min(a, b), min(h1, h2));
         } else if (which == ICON_BOTTLE) {    // extra bottle: a flask outline and a plus
-            float f = abs(sd_flask(p - vec2(-r * 0.25, 0.1 * r), vec2(r * 0.32, r * 0.8))) - r * 0.08;
+            float f = abs(sd_bottle(p - vec2(-r * 0.25, 0.1 * r), vec2(r * 0.32, r * 0.8))) - r * 0.08;
             float plus = min(sd_box(p - vec2(r * 0.55, r * 0.35), vec2(r * 0.32, r * 0.09)),
                              sd_box(p - vec2(r * 0.55, r * 0.35), vec2(r * 0.09, r * 0.32)));
             return min(f, plus);
@@ -710,12 +833,12 @@ let FRAGMENT_SHADER = """
                    sd_segment(p, vec2(-r * 0.15, r * 0.45), vec2(r * 0.7, -r * 0.5))) - r * 0.12;
     }
 
-    // The liquid's layer fi: its color, and whether murk hides it. Layers
-    // k and k + 4 share a number in p0 (k + 32 (k + 4)), so eight at most.
+    // The liquid's layer fi: its color, and whether murk hides it. Four
+    // layers share each number in p0, five bits each, bottom first.
     float layer_color(float fi) {
-        int idx = int(fi) % 4;
-        float pair = idx == 0 ? v_p0.x : idx == 1 ? v_p0.y : idx == 2 ? v_p0.z : v_p0.w;
-        return fi < 3.5 ? mod(pair, 32.0) : floor(pair / 32.0);
+        int k = int(fi);
+        float v = k < 4 ? v_p0.x : k < 8 ? v_p0.y : k < 12 ? v_p0.z : v_p0.w;
+        return float((int(v + 0.5) >> (5 * (k % 4))) & 31);
     }
     bool layer_murky(float fi) { return ((int(v_p1.y + 0.5) >> int(fi)) & 1) != 0; }
 
@@ -781,7 +904,7 @@ let FRAGMENT_SHADER = """
         return min(min(min(pipe, elbow), min(spout, collar)), min(min(stem, handle), knobs));
     }
     // An hourglass's stand: posts either side with the pivots at the middle,
-    // on a bar along the shelf; hy is the flask's half height.
+    // on a bar along the table; hy is the flask's half height.
     float sd_frame(vec2 q, float u, float hy) {
         vec2 a = vec2(abs(q.x), q.y);
         float top = -0.35 * u;
@@ -834,43 +957,54 @@ let FRAGMENT_SHADER = """
             col = vec4(v_color.rgb, v_color.a * a);
         } else if (kind == SHAPE_FLASK_BACK) {                 // inside of a flask
             float d = sd_flask(p, h);
-            float a = fill_aa(d + 1.5);
-            float shade = 0.75 + 0.25 * (1.0 - abs(p.x / h.x));
-            col = vec4(v_color.rgb * shade, v_color.a * a);
+            float nx = clamp(p.x / (h.x * FLASK_BODY), -1.0, 1.0);
+            vec3 c = v_color.rgb * (0.6 + 0.4 * sqrt(1.0 - nx * nx));
+            // In at the open top: the inside of the far wall, darker.
+            float open = fill_aa(sd_ellipse(p - vec2(0.0, flask_top(h)), vec2(h.x, h.x * FLASK_E) * 0.86));
+            c = mix(c, v_color.rgb * 0.4, open);
+            col = vec4(c, min(1.0, v_color.a * (1.0 + 0.4 * open)) * fill_aa(d + 1.0));
         } else if (kind == SHAPE_LIQUID) {                 // liquid
-            float bottom; float top;
-            flask_body(h, bottom, top);
             float cap = max(v_p1.w, 4.0);
-            float seg = (bottom - top) / cap;
-            float inside = sd_flask(p, h) + h.x * 0.13;
-            if (inside < 0.5) {
+            float seg = (2.0 * h.y - FLASK_EXTRA * h.x) / cap;
+            float w = liquid_w(h);
+            float ry = w * FLASK_E;
+            float base = liquid_base(h);
+            float nx = p.x / w;
+            if (abs(nx) < 1.0 && v_p1.x > 0.001) {
+                float s = sqrt(1.0 - nx * nx);
                 float tilt = clamp(tan(v_misc.y), -2.6, 2.6);
-                float lvl = bottom - p.y - tilt * p.x;
+                // How high above the bottom is the point of the column's front
+                // seen here; a level stays level when the flask tips.
+                float lvl = base - p.y + ry * s - tilt * p.x;
                 float fill = v_p1.x * seg;
                 // The surface: a slow idle drift, the slosh's tilt, and ripples
                 // spreading from where a stream lands.
                 float seed = v_color.g;
-                float drift = h.x * 0.035 * (0.6 * sin(p.x / h.x * 1.7 + t * 1.1 + seed * 6.3) +
-                                             0.4 * sin(p.x / h.x * 3.9 - t * 1.6 + seed * 2.1));
+                float drift = h.x * 0.035 * (0.6 * sin(nx * 1.7 + t * 1.1 + seed * 6.3) +
+                                             0.4 * sin(nx * 3.9 - t * 1.6 + seed * 2.1));
                 float rx = (p.x - v_color.b * h.x) / h.x;
                 float ripple = v_p1.z * h.x * 0.09 * sin(rx * 7.0 - t * 15.0) * exp(-abs(rx) * 1.1);
                 float surface = fill + drift + v_color.r * p.x + ripple;
-                if (lvl < surface && v_p1.x > 0.001) {
-                    float fi = clamp(floor(max(lvl, 0.0) / seg), 0.0, min(cap, ceil(v_p1.x - 0.001)) - 1.0);
+                // Upright, the top is seen from above: the surface's ellipse.
+                float top_d = sd_ellipse(vec2(p.x, p.y - (base - surface)), vec2(w, ry));
+                bool on_top = tilt == 0.0 && lvl >= surface && top_d < 0.5;
+                if (lvl > -0.5 && (lvl < surface || on_top)) {
+                    float n = ceil(v_p1.x - 0.001);
+                    float fi = on_top ? n - 1.0 : clamp(floor(max(lvl, 0.0) / seg), 0.0, n - 1.0);
                     float ci = layer_color(fi);
                     vec3 c = palette[int(ci + 0.5)].rgb;
                     bool hidden = layer_murky(fi);
                     if (hidden) {
                         // Murk: colorless smoke curling inside, one band however deep.
                         vec2 sq = p / h.x;
-                        vec2 w = vec2(noise(sq * 1.6 + vec2(t * 0.18, 0.0)), noise(sq * 1.6 + vec2(5.2, -t * 0.15)));
-                        float n2 = noise(sq * 2.8 + w * 2.2 + vec2(-t * 0.25, t * 0.1));
-                        float wisp = noise(sq * vec2(6.0, 3.0) + w * 3.0 + vec2(t * 0.3, 0.0));
+                        vec2 wq = vec2(noise(sq * 1.6 + vec2(t * 0.18, 0.0)), noise(sq * 1.6 + vec2(5.2, -t * 0.15)));
+                        float n2 = noise(sq * 2.8 + wq * 2.2 + vec2(-t * 0.25, t * 0.1));
+                        float wisp = noise(sq * vec2(6.0, 3.0) + wq * 3.0 + vec2(t * 0.3, 0.0));
                         c = mix(vec3(0.15, 0.13, 0.19), vec3(0.36, 0.33, 0.42), smoothstep(0.2, 0.9, n2));
                         c += vec3(0.07) * smoothstep(0.55, 0.85, wisp) * smoothstep(0.3, 0.6, n2);
                     } else {
                         c = personality(c, int(ci + 0.5), p / h.x + vec2(seed * 3.0, 0.0), t);
-                        if (int(ci + 0.5) == 17) {
+                        if (int(ci + 0.5) == 17 && !on_top) {
                             // The Drop: a pearl in its own glow.
                             vec2 dq = vec2(p.x, (fi + 0.5) * seg - lvl) / (seg * 0.55);
                             float dd = length(vec2(dq.x * (1.0 + max(0.0, -dq.y) * 0.9), dq.y - 0.15)) - 0.5;
@@ -882,46 +1016,71 @@ let FRAGMENT_SHADER = """
                             c = mix(c, pearl, fill_aa(dd * seg * 0.55));
                         }
                     }
-                    c = shade_liquid(c, p.x, h.x);
-                    // A darker line where one liquid meets another (smoke is all
-                    // one); a run of one color reads as a single band.
-                    float edge = abs(lvl - (fi + 1.0) * seg);
-                    bool next_same = (layer_murky(fi + 1.0) ? hidden : !hidden) && (hidden || layer_color(fi + 1.0) == ci);
-                    if (fi + 1.0 < v_p1.x - 0.01 && !next_same) c *= 1.0 - 0.18 * (1.0 - smoothstep(0.0, 1.6, edge));
-                    float surf = surface - lvl;
-                    c += vec3(0.25) * (1.0 - smoothstep(0.0, 2.5, surf));
-                    // Now and then a bubble rises from the bottom.
-                    float period = 7.0 + fract(seed * 7.13) * 5.0;
-                    float cyc = t / period + seed;
-                    float rise = 2.4 / period;
-                    if (fract(cyc) < rise && tilt == 0.0 && fill > seg * 0.6) {
-                        float k = fract(cyc) / rise;
-                        vec2 bc = vec2((hash12(vec2(floor(cyc), seed * 13.0)) - 0.5) * h.x * 0.9 +
-                                       sin(k * 9.0) * h.x * 0.06, bottom - k * (fill - h.x * 0.1));
-                        float bd = length(p - bc) - h.x * (0.05 + 0.03 * k);
-                        c = mix(c, c * 0.8 + vec3(0.3), fill_aa(abs(bd) - 0.6) * 0.8);
-                        c += vec3(0.08) * fill_aa(bd);
+                    float a = clamp((1.0 - abs(nx)) * w, 0.0, 1.0) * clamp(lvl + 0.5, 0.0, 1.0);
+                    if (on_top) {
+                        // The surface catches the light: brighter, with a bright edge
+                        // and the room's glow across it.
+                        c = c * 1.12 + vec3(0.05) + light.rgb * 0.06 * (0.5 - (p.y - (base - surface)) / ry);
+                        c += vec3(0.28) * (1.0 - smoothstep(0.0, 2.2, -top_d));
+                        a *= fill_aa(top_d);
+                    } else {
+                        // Round like the glass: darker to the sides, a gleam on the left.
+                        c *= 0.66 + 0.34 * s;
+                        c += vec3(0.2) * smoothstep(-0.66, -0.52, nx) * (1.0 - smoothstep(-0.44, -0.3, nx));
+                        // A darker line where one liquid meets another, curving
+                        // round the column (smoke is all one); a run of one color
+                        // reads as a single band.
+                        float edge = abs(lvl - (fi + 1.0) * seg);
+                        bool next_same = (layer_murky(fi + 1.0) ? hidden : !hidden) && (hidden || layer_color(fi + 1.0) == ci);
+                        if (fi + 1.0 < v_p1.x - 0.01 && !next_same) c *= 1.0 - 0.22 * (1.0 - smoothstep(0.0, 1.6, edge));
+                        float surf = surface - lvl;
+                        c += vec3(0.2) * (1.0 - smoothstep(0.0, 2.0, surf));
+                        if (tilt != 0.0) a *= clamp(surf + 0.5, 0.0, 1.0);
+                        // Now and then a bubble rises from the bottom.
+                        float period = 7.0 + fract(seed * 7.13) * 5.0;
+                        float cyc = t / period + seed;
+                        float rise = 2.4 / period;
+                        if (fract(cyc) < rise && tilt == 0.0 && fill > seg * 0.6) {
+                            float k = fract(cyc) / rise;
+                            vec2 bc = vec2((hash12(vec2(floor(cyc), seed * 13.0)) - 0.5) * w * 0.9 +
+                                           sin(k * 9.0) * h.x * 0.06, base + ry * 0.6 - k * (fill - h.x * 0.1));
+                            float bd = length(p - bc) - h.x * (0.05 + 0.03 * k);
+                            c = mix(c, c * 0.8 + vec3(0.3), fill_aa(abs(bd) - 0.6) * 0.8);
+                            c += vec3(0.08) * fill_aa(bd);
+                        }
                     }
-                    float a = fill_aa(inside) * clamp(surf + 0.5, 0.0, 1.0);
                     col = vec4(c, a * v_color.a);
                 }
             }
         } else if (kind == SHAPE_GLASS) {                 // glass, rim and highlights
             float d = sd_flask(p, h);
-            float wall = h.x * 0.13;
-            float rim = fill_aa(abs(d + wall * 0.5) - wall * 0.5);
+            float yt = flask_top(h);
+            float ry = h.x * FLASK_E;
             float body = fill_aa(d);
             // The candlelight warms the glass, and flickers in it.
             vec3 c = mix(v_color.rgb, light.rgb, 0.18 + 0.22 * light.a);
-            float a = body * 0.07 + rim * (0.47 + 0.16 * light.a);
-            float sx = p.x / h.x;
-            float streak = smoothstep(-0.78, -0.62, sx) * (1.0 - smoothstep(-0.55, -0.4, sx)) *
-                           smoothstep(-h.y * 0.45, -h.y * 0.25, p.y) * (1.0 - smoothstep(h.y * 0.5, h.y *
-                           0.75, p.y));
-            float streak2 = smoothstep(0.5, 0.6, sx) * (1.0 - smoothstep(0.62, 0.7, sx)) *
-                            smoothstep(-h.y * 0.1, h.y * 0.1, p.y) * (1.0 - smoothstep(h.y * 0.3, h.y *
-                            0.45, p.y));
-            a += body * (streak * (0.36 + 0.16 * light.a) + streak2 * 0.25);
+            // Thin glass shows most at its sides, where the eye looks through more of it.
+            float nx = clamp(p.x / (h.x * FLASK_BODY), -1.0, 1.0);
+            float a = body * (0.05 + 0.3 * pow(abs(nx), 8.0));
+            a = max(a, fill_aa(abs(d + 0.8) - 0.8) * (0.42 + 0.15 * light.a));
+            // The rim: the lip's thickness between two ellipses, bright on the
+            // near side and fainter across the opening's far side.
+            vec2 rp = p - vec2(0.0, yt);
+            float outer = sd_ellipse(rp, vec2(h.x, ry));
+            float inner = sd_ellipse(rp, vec2(h.x, ry) * 0.84);
+            float near = smoothstep(-ry * 0.3, ry * 0.3, rp.y);
+            a = max(a, fill_aa(max(outer, -inner)) * mix(0.22, 0.5, near));
+            a = max(a, fill_aa(abs(inner) - 0.6) * mix(0.3, 0.6, near));
+            a = max(a, fill_aa(abs(outer + 0.5) - 0.7) * mix(0.35, 0.75, near) * (0.85 + 0.15 * light.a));
+            // A glint on the near lip, up and to the left.
+            a += exp(-length((rp - vec2(-h.x * 0.55, ry * 0.62)) / vec2(h.x * 0.16, ry * 0.18))) * 0.5 * near;
+            // Highlights down the body: a broad one on the left, a thin one on the right.
+            float top_y = yt + ry * 1.2;
+            float bot_y = flask_bottom(h) - ry * 0.2;
+            float along = smoothstep(top_y, top_y + h.x * 0.6, p.y) * (1.0 - smoothstep(bot_y - h.x * 0.7, bot_y, p.y));
+            float streak = smoothstep(-0.74, -0.62, nx) * (1.0 - smoothstep(-0.5, -0.36, nx));
+            float streak2 = smoothstep(0.5, 0.58, nx) * (1.0 - smoothstep(0.62, 0.7, nx));
+            a += body * along * (streak * (0.3 + 0.16 * light.a) + streak2 * 0.2);
             col = vec4(c, clamp(a, 0.0, 1.0) * v_color.a);
             if (v_p0.x > 0.0) {
                 float g = exp(-max(d, 0.0) * 0.28) * (1.0 - body) * v_p0.x;
@@ -1142,7 +1301,7 @@ let FRAGMENT_SHADER = """
             col = vec4(c, a * v_color.a);
         } else if (kind == SHAPE_BACKDROP) {                // the room
             vec2 cv = p * (v_p0.y / h.x) + vec2(270.0, 480.0);      // canvas units
-            vec3 c = room(int(v_p0.x + 0.5), cv, t);
+            vec3 c = v_p0.z > 0.0 ? table(int(v_p0.x + 0.5), cv, v_p0.z, t) : room(int(v_p0.x + 0.5), cv, t);
             // Candlelight from the back shelf and the work below, flickering.
             float f = 0.8 + 0.2 * light.a;
             float glow = exp(-pow(length((cv - vec2(270.0, 880.0)) * vec2(0.9, 1.6)) / 520.0, 2.0) * 2.0);
@@ -1155,16 +1314,23 @@ let FRAGMENT_SHADER = """
             float r = min(h.x, h.y);
             float d = sd_icon(p, int(v_p0.x + 0.5), r);
             col = vec4(v_color.rgb, v_color.a * fill_aa(d));
-        } else if (kind == SHAPE_SEAL) {                // seal: stopper and wax
-            float stop = sd_round_box(p - vec2(0.0, -h.y * 0.25), vec2(h.x * 0.8, h.y * 0.55), vec4(h.x *
-            0.25));
-            float wax = sd_circle(p - vec2(0.0, h.y * 0.45), h.x * 0.55) +
-                        0.8 * sin(atan(p.y - h.y * 0.45, p.x) * 7.0);
-            float a = max(fill_aa(stop), fill_aa(wax));
-            vec3 c = mix(vec3(0.66, 0.5, 0.33), v_color.rgb * 0.9, fill_aa(wax));
-            float shine = fill_aa(sd_circle(p - vec2(-h.x * 0.15, h.y * 0.35), h.x * 0.15));
-            c += vec3(0.25) * shine;
-            col = vec4(c, a);
+        } else if (kind == SHAPE_SEAL) {                // a completed flask's cork, sealed with wax
+            // The cork's top, an ellipse seen from above, over its side; the
+            // wax a blob on top running down the near side.
+            float ry = h.x * FLASK_E;
+            float ty = -h.y + ry;
+            float top = sd_ellipse(p - vec2(0.0, ty), vec2(h.x, ry));
+            float cork = sd_cylinder(p, vec2(h.x, ry), ty, ty + h.x * 0.34);
+            vec2 wq = p - vec2(0.0, ty + ry * 0.15);
+            float wax = sd_ellipse(wq, vec2(h.x * 0.5, ry * 0.62)) + 0.6 * sin(atan(wq.y, wq.x) * 7.0);
+            float drip = sd_segment(p, vec2(h.x * 0.12, ty + ry * 0.5), vec2(h.x * 0.15, ty + ry + h.x * 0.38)) - h.x * 0.07;
+            wax = min(wax, drip);
+            float grain = noise(p / h.x * vec2(6.0, 9.0)) * 0.25;
+            vec3 c = vec3(0.62, 0.45, 0.28) * (0.75 + grain) * (top < 0.0 ? 1.15 : 0.8);
+            c = mix(c, c * 0.7, fill_aa(abs(top) - 0.6));
+            c = mix(c, v_color.rgb * (0.75 + 0.35 * clamp(-wq.y / ry, 0.0, 1.0)), fill_aa(wax));
+            c += vec3(0.3) * fill_aa(sd_ellipse(wq + vec2(h.x * 0.18, ry * 0.2), vec2(h.x * 0.1, ry * 0.12)));
+            col = vec4(c, max(fill_aa(cork), fill_aa(wax)) * v_color.a);
         } else if (kind == SHAPE_RING) {                // ring
             float d = abs(length(p) - (h.x - v_p0.x * 0.5)) - v_p0.x * 0.5;
             col = vec4(v_color.rgb, v_color.a * fill_aa(d));

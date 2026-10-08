@@ -12,7 +12,7 @@
 import std;
 
 let CAP = 4;            // an ordinary flask, and how much there is of most colors
-let MAX_CAP = 8;        // the tallest flask
+let MAX_CAP = 14;       // the tallest flask: three rows of the grid
 let MAX_BOTTLES = 24;
 let MAX_COLORS = 14;    // the dyes, 1..MAX_COLORS
 let QUICKSILVER = 15;   // a liquid that sinks
@@ -70,10 +70,10 @@ fn fixture_index(f: Fixture) -> i64 {
 }
 
 struct Bottle {
-    seg: u8[8],             // bottom to top; only the first `n` mean anything
+    seg: u8[MAX_CAP] = [0; MAX_CAP],   // bottom to top; only the first `n` mean anything
     n: u8 = 0,
     cap: u8 = 4,            // segments it holds: CAP, or more for a tall flask
-    murk: u8 = 0,           // bit k: segment k shows as smoke
+    murk: u16 = 0,          // bit k: segment k shows as smoke
     body: Body = Body.Plain,
     vow: u8 = 0,            // Vow: the color it took, once one is poured in
     flip_every: u8 = 0,     // Hourglass: pours between flips
@@ -96,8 +96,14 @@ struct Board {
     count: i64 = 0,         // bottles in use
     colors: i64 = 0,        // flasks the level fills: its distinct colors
     pours: i64 = 0,         // successful pours so far
-    per_row: i64 = 0,       // flasks on a shelf row, fixed once the board is settled
     salamander: i64 = -1,   // the flask the salamander sits on, or -1
+    // The grid the flasks stand in (see place_grid): its columns, fixed
+    // once placed, the rows in use (0 until placed), and each flask's cell,
+    // the top row of a tall flask.
+    cols: i64 = 0,
+    rows: i64 = 0,
+    row: i8[MAX_BOTTLES] = [-1; MAX_BOTTLES],
+    col: i8[MAX_BOTTLES] = [-1; MAX_BOTTLES],
 }
 
 // Things a pour set off, in order, for the game to animate. `bottle` is the
@@ -212,51 +218,221 @@ fn any_lantern_lit(board: Board) -> bool {
     false
 }
 
-// --- shelves and neighbors -------------------------------------------------------
+// --- the grid and neighbors ---------------------------------------------------------
+//
+// Flasks stand in a grid of columns and rows. A tall flask takes one column
+// over `rows_of(cap)` rows from the top, with segments the size of an
+// ordinary flask's, so a row is five segments high: four, and the gap to
+// the next row. The other flasks fill the rows in order, the last row's
+// from the middle out. The game draws the grid as placed here, so the rules'
+// neighbors are the ones on screen.
 
-fn tallest_cap(board: Board) -> i64 {
-    var t = CAP;
-    for i in board.count { t = max(t, board.bottles[i].cap); }
-    t
+// The grid as drawn, in a flask's half width: the board area (canvas
+// units), a column's width, a segment's height, what an ordinary flask has
+// beyond its four segments (rim, bottom, room at the top), how far alternate
+// columns are set back, and the largest half width. The layout uses these
+// too, so the grid chosen here is the one that fits the screen best.
+let GRID_W = 520.0;
+let GRID_H = 690.0;
+let COLUMN_STEP = 2.45;
+let SEGMENT = 0.95;
+let FLASK_EXTRA = 1.05;
+let STAGGER = 1.6;
+let MAX_UNIT = 40.0;
+
+fn rows_of(cap: i64) -> i64 { max(1, (cap + 5) / 5) }
+
+// The half width that fits `rows` rows of `cols` columns in the board area.
+fn grid_unit(cols: i64, rows: i64) -> f64 {
+    let w = max(1, cols) * COLUMN_STEP;
+    let h = (max(1, rows) - 1) * 5.0 * SEGMENT + CAP * SEGMENT + FLASK_EXTRA + (if cols > 1 { STAGGER } else { 0.0 });
+    min(min(GRID_W / w, GRID_H / h), MAX_UNIT)
 }
 
-// How many flasks stand on a shelf row: the row count that lets them be
-// drawn largest on the game's board area (510 by 670 units, a flask 0.68
-// wide per unit of its half width). The layout uses it too, so the rules'
-// neighbors are the ones on screen.
-fn shelf_per_row(count: i64, tallest: i64) -> i64 {
-    let n = max(1, count);
-    let rise = (tallest - CAP) * 1.26;      // in half widths
-    var best_rows = 1;
-    var best_hx = 0.0;
-    for rows in 1..6 {
-        let per = (n + rows - 1) / rows;
-        let hx_w = 510.0 / per * 0.34;
-        let hx_h = (670.0 / rows - 34.0) / (7.6 + rise);
-        let hx = min(min(hx_w, hx_h), 30.0);
-        if hx > best_hx + 0.5 {
-            best_hx = hx;
-            best_rows = rows;
+// The columns tall flasks stand in, best first: the middle when there is
+// one, else the edges.
+fn tall_column(cols: i64, k: i64) -> i64 {
+    let mid = cols / 2;
+    let order: i64[3] = if cols % 2 == 1 { [mid, 0, cols - 1] } else { [0, cols - 1, mid] };
+    if k < 3 { order[k] } else { k % cols }
+}
+
+// The rows `cols` columns need for the board's flasks, and the cells left
+// empty; tall flasks take the first columns tall_column gives.
+fn grid_rows(board: Board, cols: i64) -> i64, i64 {
+    var span: i64[MAX_BOTTLES] = [0; MAX_BOTTLES];  // by column
+    var talls = 0;
+    var plain = 0;
+    var tall_cells = 0;
+    for i in board.count {
+        let s = rows_of(board.bottles[i].cap);
+        if s > 1 && talls < cols {
+            span[tall_column(cols, talls)] = s;
+            talls++;
+            tall_cells += s;
+        } else {
+            plain++;
         }
     }
-    (n + best_rows - 1) / best_rows
+    var rows = 0;
+    var left = plain;
+    loop {
+        var tall_here = false;
+        for c in cols { if span[c] > rows { tall_here = true; } }
+        if left <= 0 && !tall_here { break; }
+        for c in cols { if span[c] <= rows { left--; } }
+        rows++;
+    }
+    return max(rows, 1), rows * cols - tall_cells - plain;
 }
 
-fn row_length(board: Board) -> i64 {
-    if board.per_row > 0 { board.per_row } else { shelf_per_row(board.count, tallest_cap(board)) }
+// The column count that shows the flasks largest; among near ties, the one
+// with the fewest empty cells, then the most columns.
+fn grid_columns(board: Board) -> i64 {
+    var best = 1;
+    var best_unit = 0.0;
+    var best_empty = 0;
+    var cols = 8;
+    while cols >= 1 {
+        var talls = 0;
+        for i in board.count { if board.bottles[i].cap > CAP { talls++; } }
+        if talls <= cols {
+            let rows, empty = grid_rows(board, cols);
+            let u = grid_unit(cols, rows);
+            if u > best_unit + 0.5 || (u > best_unit - 0.5 && empty < best_empty) {
+                best = cols;
+                best_unit = max(u, best_unit);
+                best_empty = empty;
+            }
+        }
+        cols--;
+    }
+    best
 }
 
-// The flasks either side of `i` on its shelf row, or -1.
-fn neighbors(board: Board, i: i64) -> i64, i64 {
-    let per = row_length(board);
-    let left = if i > 0 && i % per != 0 { i - 1 } else { -1 };
-    let right = if i + 1 < board.count && (i + 1) % per != 0 { i + 1 } else { -1 };
-    return left, right;
+// Whether flask j stands in cell (row, col).
+fn in_cell(board: Board, j: i64, row: i64, col: i64) -> bool {
+    let r: i64 = board.row[j];
+    board.col[j] == col && row >= r && row < r + rows_of(board.bottles[j].cap)
 }
 
-fn are_neighbors(board: Board, a: i64, b: i64) -> bool {
-    let l, r = neighbors(board, a);
-    b >= 0 && (b == l || b == r)
+fn flask_at(board: Board, row: i64, col: i64) -> i64 {
+    if col < 0 || col >= board.cols { return -1; }
+    for j in board.count { if in_cell(board, j, row, col) { return j; } }
+    -1
+}
+
+// The free cell of `row` nearest the middle (the left one of two), or -1.
+fn middle_free(board: Board, row: i64) -> i64 {
+    var best = -1;
+    var best_d = 1e9;
+    for c in board.cols {
+        if flask_at(board, row, c) >= 0 { continue; }
+        let d = abs(c - (board.cols - 1) * 0.5);
+        if d < best_d - 0.01 {
+            best = c;
+            best_d = d;
+        }
+    }
+    best
+}
+
+// Puts every flask in a cell: tall ones first, in their columns from the top
+// row, then the rest row by row, the last row's from the middle out, left to
+// right in order. The columns stay as they are when already chosen.
+fn place_grid(board: Board&) {
+    if board.cols <= 0 { board.cols = grid_columns(board); }
+    let cols = board.cols;
+    for i in MAX_BOTTLES {
+        board.row[i] = -1;
+        board.col[i] = -1;
+    }
+    var talls = 0;
+    var plain: i64[..MAX_BOTTLES] = [];
+    for i in board.count {
+        if rows_of(board.bottles[i].cap) > 1 && talls < cols {
+            board.row[i] = 0;
+            board.col[i] = tall_column(cols, talls) as i8;
+            talls++;
+        } else {
+            plain.push(i);
+        }
+    }
+    let rows, empty = grid_rows(board, cols);
+    board.rows = rows;
+    var next = 0;
+    for r in rows {
+        var free: i64[..MAX_BOTTLES] = [];
+        for c in cols { if flask_at(board, r, c) < 0 { free.push(c); } }
+        let left = plain.len - next;
+        if left >= free.len {
+            for c in free {
+                board.row[plain[next]] = r as i8;
+                board.col[plain[next]] = c as i8;
+                next++;
+            }
+        } else {
+            // The last row: the cells nearest the middle, then left to right.
+            var take: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
+            for k in left {
+                var best = -1;
+                var best_d = 1e9;
+                for c in free {
+                    let d = abs(c - (cols - 1) * 0.5);
+                    if !take[c] && d < best_d - 0.01 {
+                        best = c;
+                        best_d = d;
+                    }
+                }
+                take[best] = true;
+            }
+            for c in cols {
+                if !take[c] { continue; }
+                board.row[plain[next]] = r as i8;
+                board.col[plain[next]] = c as i8;
+                next++;
+            }
+        }
+    }
+}
+
+// The flasks directly left and right of flask `i` in each row it stands in:
+// a tall flask is a neighbor on every row it spans. Left ones first, top
+// down, each flask once.
+fn neighbors(board: Board, i: i64) -> i64[..6] {
+    if board.rows == 0 {
+        // Not placed yet: where it would be.
+        var placed = board;
+        place_grid(placed);
+        return neighbors_in(placed, i);
+    }
+    neighbors_in(board, i)
+}
+
+fn neighbors_in(board: Board, i: i64) -> i64[..6] {
+    var out: i64[..6] = [];
+    if i < 0 || i >= board.count { return out; }
+    let r0: i64 = board.row[i];
+    let c: i64 = board.col[i];
+    for side in [-1, 1] {
+        for r in r0..r0 + rows_of(board.bottles[i].cap) {
+            let j = flask_at(board, r, c + side);
+            if j >= 0 && !contains(out, j) { out.push(j); }
+        }
+    }
+    out
+}
+
+fn are_neighbors(board: Board, a: i64, b: i64) -> bool { b >= 0 && contains(neighbors(board, a), b) }
+
+// The first flask to the right of `i`, on its top row, or -1.
+fn right_of(board: Board, i: i64) -> i64 {
+    if board.rows == 0 {
+        var placed = board;
+        place_grid(placed);
+        return flask_at(placed, placed.row[i], placed.col[i] + 1);
+    }
+    flask_at(board, board.row[i], board.col[i] + 1)
 }
 
 // --- what goes where ---------------------------------------------------------------
@@ -302,15 +478,15 @@ fn can_pour(board: Board, from: i64, to: i64) -> bool {
 
 // --- making bottles -------------------------------------------------------------
 
-// The height of a Tall Flask that spans `rows` rows of flasks, with segments
-// the size of an ordinary flask's: 9 for two rows, 14 for three. Until flasks
-// stand in a grid that can hold them, it is held to MAX_CAP. Everything that
-// makes a tall flask asks this for its height.
-fn tall_cap(rows: i64) -> i64 { min(CAP * rows + rows - 1, MAX_CAP) }
+// The height of a Tall Flask that spans `rows` rows of the grid, with
+// segments the size of an ordinary flask's: 9 for two rows, 14 for three
+// (four a row, and one for each gap between rows). Everything that makes a
+// tall flask asks this for its height.
+fn tall_cap(rows: i64) -> i64 { CAP * rows + rows - 1 }
 
 fn bottle(colors: const i64[:]) -> Bottle {
     assert(colors.len <= CAP);
-    var b = Bottle { seg: [0; 8], .. };
+    var b = Bottle { .. };
     for c, i in colors { b.seg[i] = c as u8; }
     b.n = colors.len as u8;
     b
@@ -324,11 +500,19 @@ fn push_bottle(board: Board&, b: Bottle) -> i64 {
 }
 
 // Adds an empty bottle, as the extra-bottle tool does. False when full up. It
-// joins the last row or starts a new one; the rows stay as they were.
+// takes the free cell of the last row nearest the middle, or starts a row;
+// the other flasks stay where they are.
 fn add_empty_bottle(board: Board&) -> bool {
     if board.count >= MAX_BOTTLES { return false; }
-    if board.per_row == 0 { board.per_row = row_length(board); }
-    push_bottle(board, Bottle { seg: [0; 8], .. });
+    if board.rows == 0 { place_grid(board); }
+    let i = push_bottle(board, Bottle { .. });
+    var c = middle_free(board, board.rows - 1);
+    if c < 0 {
+        board.rows++;
+        c = middle_free(board, board.rows - 1);
+    }
+    board.row[i] = (board.rows - 1) as i8;
+    board.col[i] = c as i8;
     true
 }
 
@@ -348,7 +532,7 @@ fn take_one(b: Bottle&) -> i64 {
     let c: i64 = b.seg[n - 1];
     b.seg[n - 1] = 0;
     b.n--;
-    b.murk = ((b.murk as i64) & ((1 << (n - 1)) - 1)) as u8;
+    b.murk = ((b.murk as i64) & ((1 << (n - 1)) - 1)) as u16;
     c
 }
 
@@ -366,7 +550,7 @@ fn put_one(b: Bottle&, c: i64) {
         }
         b.seg[at] = c as u8;
         let m: i64 = b.murk;
-        b.murk = ((m & ((1 << at) - 1)) | ((m >> at) << (at + 1))) as u8;
+        b.murk = ((m & ((1 << at) - 1)) | ((m >> at) << (at + 1))) as u16;
     } else {
         b.seg[n] = c as u8;
     }
@@ -375,7 +559,7 @@ fn put_one(b: Bottle&, c: i64) {
 
 // Settles quicksilver to the bottom, keeping the order of everything else.
 fn sink_quicksilver(b: Bottle&) {
-    var seg: u8[8] = [0; 8];
+    var seg: u8[MAX_CAP] = [0; MAX_CAP];
     var murk = 0;
     var at = 0;
     for pass in 2 {
@@ -387,7 +571,7 @@ fn sink_quicksilver(b: Bottle&) {
         }
     }
     b.seg = seg;
-    b.murk = murk as u8;
+    b.murk = murk as u16;
 }
 
 // One segment from `from` into `to`, with what happens as it lands.
@@ -409,7 +593,7 @@ fn clear_top_murk(board: Board&, i: i64, r: PourResult&) {
     let n: i64 = b.n;
     let keep = if n == 0 { 0 } else { (b.murk as i64) & ((1 << (n - 1)) - 1) };
     if keep != b.murk {
-        b.murk = keep as u8;
+        b.murk = keep as u16;
         if n > 0 { note(r, EventKind.MurkCleared, i, -1); }
     }
 }
@@ -451,19 +635,16 @@ fn heat(board: Board&, i: i64, source: i64, r: PourResult&) {
 
 // Heat to a flask's neighbors, and to itself when `own` is set.
 fn heat_around(board: Board&, i: i64, own: bool, r: PourResult&) {
-    let left, right = neighbors(board, i);
     if own { heat(board, i, i, r); }
-    heat(board, left, i, r);
-    heat(board, right, i, r);
+    for j in neighbors(board, i) { heat(board, j, i, r); }
 }
 
 // Light from a lantern at `i` reaches it and its neighbors: murk clears and
 // shrouds lift.
 fn shine(board: Board&, i: i64, r: PourResult&) {
-    let left, right = neighbors(board, i);
-    let reach: i64[3] = [left, i, right];
+    var reach: i64[..7] = [i];
+    for j in neighbors(board, i) { reach.push(j); }
     for j in reach {
-        if j < 0 { continue; }
         var b .= board.bottles[j];
         if b.murk != 0 {
             b.murk = 0;
@@ -497,7 +678,7 @@ fn flip(board: Board&, i: i64, r: PourResult&) {
         if murky(b, n - 1 - k) { murk |= 1 << k; }
     }
     b.seg = seg;
-    b.murk = murk as u8;
+    b.murk = murk as u16;
     sink_quicksilver(b);
     note(r, EventKind.Flipped, i, -1);
     clear_top_murk(board, i, r);
@@ -511,10 +692,8 @@ fn spread(board: Board&, root: i64, r: PourResult&) {
     for j in board.count {
         let b = board.bottles[j];
         if j == root || b.done || covered(b) { continue; }
-        let left, right = neighbors(board, j);
         var next_to = false;
-        for k in [left, right] {
-            if k < 0 { continue; }
+        for k in neighbors(board, j) {
             if k == root || board.bottles[k].cover == Cover.Vine { next_to = true; }
         }
         if next_to {
@@ -570,11 +749,22 @@ fn tick(board: Board&, r: PourResult&) {
 // --- completing flasks --------------------------------------------------------------
 
 // Complete for the rules: in a level with an athanor, quicksilver is gold
-// still to be made and never completes a flask.
+// still to be made and never completes a flask; and an ordinary flask full of
+// a tall flask's color is not done while more of it is elsewhere, since the
+// tall flask needs it all.
 fn complete_on(board: Board, i: i64) -> bool {
     let b = board.bottles[i];
     if !is_complete(b) { return false; }
-    flask_color(b) != QUICKSILVER || !has_body(board, Body.Athanor)
+    let c = flask_color(b);
+    if c == QUICKSILVER && has_body(board, Body.Athanor) { return false; }
+    if b.cap > CAP { return true; }
+    var elsewhere = 0;
+    for j in board.count {
+        if j == i { continue; }
+        let x = board.bottles[j];
+        for k in x.n as i64 { if x.seg[k] == c { elsewhere++; } }
+    }
+    elsewhere == 0
 }
 
 fn seal_if_complete(board: Board&, i: i64, r: PourResult&) -> bool {
@@ -683,7 +873,7 @@ fn pour(board: Board&, from: i64, to: i64) -> PourResult {
 fn is_won(board: Board) -> bool {
     for i in board.count {
         let b = board.bottles[i];
-        if b.n == 0 && b.body != Body.Vow { continue; }
+        if b.done || (b.n == 0 && b.body != Body.Vow) { continue; }
         if !complete_on(board, i) { return false; }
     }
     true
@@ -698,16 +888,17 @@ fn has_move(board: Board) -> bool {
 
 fn is_lost(board: Board) -> bool { !is_won(board) && !has_move(board) }
 
-// Brings a built or loaded level into a consistent start: fixes the shelf
-// rows, settles quicksilver, clears murk off the tops, and seals what starts
-// complete (lighting lanterns and so on). A level is passed through this once.
+// Brings a built or loaded level into a consistent start: places the flasks
+// in the grid, settles quicksilver, clears murk off the tops, and seals what
+// starts complete (lighting lanterns and so on). A level is passed through
+// this once.
 fn settle(board: Board&) {
-    if board.per_row == 0 { board.per_row = row_length(board); }
+    if board.rows == 0 { place_grid(board); }
     var r = PourResult {};
     for i in board.count {
         var b .= board.bottles[i];
         let n: i64 = b.n;
-        b.murk = ((b.murk as i64) & ((1 << n) - 1)) as u8;
+        b.murk = ((b.murk as i64) & ((1 << n) - 1)) as u16;
         sink_quicksilver(b);
         if b.body == Body.Vow && b.vow == 0 { b.vow = flask_color(b) as u8; }
         if b.cover == Cover.Rime && b.thaw == 0 { b.cover = Cover.None; }
@@ -753,9 +944,8 @@ fn validate(board: Board) -> u8[>..] {
         }
         if b.cover == Cover.Vine { vines++; }
         if b.cover == Cover.Shroud {
-            let l, r = neighbors(board, i);
             var lantern = false;
-            for k in [l, r] { if k >= 0 && board.bottles[k].fixture == Fixture.Lantern { lantern = true; } }
+            for k in neighbors(board, i) { if board.bottles[k].fixture == Fixture.Lantern { lantern = true; } }
             if !lantern { return str("bottle ", i + 1, ": a shroud needs a lantern next to it"); }
         }
         if b.twin >= 0 {
@@ -859,9 +1049,9 @@ fn board_hash(board: Board) -> u64 {
         var x: u64 = 1469598103934665603;
         for k in b.n as i64 { x = (x ^ b.seg[k]) * 1099511628211; }
         let a: u64 = b.n | (b.cap as u64 << 4) | (b.murk as u64 << 8) |
-                     (body_index(b.body) as u64 << 16) | (b.vow as u64 << 20) |
-                     (b.flip_every as u64 << 28) | (b.flip_count as u64 << 36) |
-                     (cover_index(b.cover) as u64 << 44) | (b.key as u64 << 48) | (b.soft as u64 << 56);
+                     (body_index(b.body) as u64 << 24) | (b.vow as u64 << 28) |
+                     (b.flip_every as u64 << 34) | (b.flip_count as u64 << 40) |
+                     (cover_index(b.cover) as u64 << 46) | (b.key as u64 << 50) | (b.soft as u64 << 56);
         let c: u64 = b.thaw | (fixture_index(b.fixture) as u64 << 8) | (b.spread_every as u64 << 12) |
                      (b.spread_count as u64 << 20) | ((b.twin as i64 + 1) as u64 << 28) |
                      (bit(b.lit) << 36) | (bit(b.spent) << 37) | (bit(b.done) << 38);

@@ -3,7 +3,8 @@
 // files; a new level is written here.
 //
 // A level is its campaign number, a name, a difficulty, a hint shown when
-// it starts, and its flasks left to right, rows filling as the shelf allows:
+// it starts, and its flasks in order, placed in the grid by place_grid
+// (tall flasks first, the rest row by row):
 //
 //     level(23, "First Frost", Difficulty.Normal, "Ice melts after enough pours.", [
 //         flask("RRGB"),                          // liquid, bottom to top
@@ -22,8 +23,9 @@
 // .brazier() .lantern() .catalyst() .root(every); .twin_of(index) on both
 // twins. A tall flask is made with tall_flask(color, rows), which holds the
 // share of its color beyond an ordinary flask's. A salamander goes in with
-// `.salamander(index)` on the level. Every one of them is checked and solved
-// by the tests.
+// `.salamander(index)` on the level, and `.columns(n)` holds the grid to n
+// columns where the level needs rows that long. Every one of them is
+// checked and solved by the tests.
 
 import std;
 import .board;
@@ -57,7 +59,7 @@ fn letter_of_color(c: i64) -> u8 {
 }
 
 // Murk over the lowest `n` segments.
-fn murk_below(n: i64) -> u8 { ((1 << clamp(n, 0, MAX_CAP)) - 1) as u8 }
+fn murk_below(n: i64) -> u16 { ((1 << clamp(n, 0, MAX_CAP)) - 1) as u16 }
 
 struct HandMade {
     number: i64,        // the campaign level it is
@@ -68,7 +70,7 @@ struct HandMade {
 // --- building them ------------------------------------------------------------------
 
 fn flask(liquid: const u8[:]) -> Bottle {
-    var b = Bottle { seg: [0; 8], .. };
+    var b = Bottle { .. };
     for ch in liquid {
         let c = color_of_letter(ch);
         assert(c > 0 && b.n < MAX_CAP);
@@ -82,7 +84,7 @@ fn under_murk(b: Bottle, lowest: i64) -> Bottle { var x = b; x.murk = murk_below
 // A Tall Flask over `rows` rows (see tall_cap), already holding the share of
 // `color` beyond CAP; the level has CAP more of it, like any other color.
 fn tall_flask(color: u8, rows: i64) -> Bottle {
-    var b = Bottle { seg: [0; 8], .. };
+    var b = Bottle { .. };
     b.cap = tall_cap(rows) as u8;
     for k in b.cap - CAP { b.seg[k] = color_of_letter(color) as u8; }
     b.n = b.cap - CAP;
@@ -135,6 +137,8 @@ fn level(number: i64, name: const u8[:], difficulty: Difficulty, hint: const u8[
 }
 
 fn salamander(h: HandMade, at: i64) -> HandMade { var x = h; x.board.salamander = at; x }
+// The grid's columns, where the level needs its flasks in rows that long.
+fn columns(h: HandMade, n: i64) -> HandMade { var x = h; x.board.cols = n; x }
 
 // --- the levels -------------------------------------------------------------------------
 
@@ -162,7 +166,7 @@ fn hand_made(k: i64) -> HandMade {
                    [flask("RGBY"), flask("GYRB"), flask("BRYG"), flask("YBGR"), flask("").vow_flask(), flask("")]),
         5 => level(15, "The Apprentice's Exam", Difficulty.SuperHard,
                    "Smoke, a seal, a vow and a tall flask: choose the vow's color with care.",
-                   [flask("YVYO").under_murk(3), flask("RBRB").under_murk(2), flask("YGOG"), flask("OBV").seal('Y'),
+                   [flask("YVYV").under_murk(3), flask("RBRB").under_murk(2), flask("YGOG"), flask("OBO").seal('Y'),
                     flask("GGVR").under_murk(2), tall_flask('V', 2), flask("").vow_flask(), flask("RYV"), flask("OB")]),
         // The Frost Cellar.
         6 => level(18, "First Frost", Difficulty.Normal,
@@ -187,7 +191,7 @@ fn hand_made(k: i64) -> HandMade {
                     [flask("BRRR"), flask("GGR").twin_of(2), flask("").twin_of(1), flask("GBBB"), flask("G")]),
         12 => level(45, "The Glassblower's Bench", Difficulty.SuperHard,
                     "Siphons, twins, quicksilver and a tall flask: let the liquid find its way.",
-                    [flask("QBRG").siphon(), flask("YBR").twin_of(2), flask("QOR").twin_of(1), flask("GBYQ"),
+                    [flask("OBRG").siphon(), flask("GBYQ"), flask("YBR").twin_of(3), flask("QQR").twin_of(2),
                      tall_flask('Q', 2), flask("OOBR"), flask("QG").siphon(), flask("YOGY"), flask("")]),
         // The Observatory.
         13 => level(48, "Lamplight", Difficulty.Normal,
@@ -216,7 +220,7 @@ fn hand_made(k: i64) -> HandMade {
         20 => salamander(level(75, "The Moonlit Greenhouse", Difficulty.SuperHard,
                     "The vine creeps, the salamander burns its tendrils, and the moonpetal waits for the lantern.",
                     [flask("GROB"), flask("YOBB"), flask("OR").root(3), flask("RYY").moonpetal(), flask("GY").lantern(),
-                     flask("OGG"), flask("RB"), flask(""), flask("")]), 5),
+                     flask("OGG"), flask("RB"), flask(""), flask("")]), 5).columns(5),
         // The Athanor.
         21 => level(78, "The Athanor", Difficulty.Normal,
                     "The athanor turns quicksilver poured into it into gold. Every drop of quicksilver has to become gold.",
@@ -231,7 +235,7 @@ fn hand_made(k: i64) -> HandMade {
                    "Everything at once: fire the catalyst, feed the furnace quicksilver, and keep the Drop for the seal.",
                    [flask("").athanor(), flask("QCY"), flask("CYR").seal('K'), flask("").brazier(), flask("KUR").rime(10),
                     flask("RBC"), flask("YRY").catalyst(), flask("QBK").hourglass(9), flask("BU*"), flask("K").shroud(),
-                    flask("KC").lantern(), flask("")]),
+                    flask("KC").lantern(), flask("")]).columns(6),
     };
     settle(h.board);
     h

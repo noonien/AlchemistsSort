@@ -1,4 +1,4 @@
-// The game's small motions: flasks dropping onto the shelf, liquid that
+// The game's small motions: flasks dropping onto the table, liquid that
 // sloshes and ripples, droplets, the stopper and label of a finished potion,
 // buttons that squash, the ink between screens, and the win's finale.
 //
@@ -23,7 +23,7 @@ fn bounce_in(x: f64) -> f32 {
     (1.0 - 0.14 * sin((u - 0.7) / 0.3 * PI)) as f32
 }
 
-// --- flasks dropping onto the shelf ------------------------------------------------------
+// --- flasks dropping onto the table ------------------------------------------------------
 
 let DROP_STEP: f64 = 0.06;     // between one flask and the next
 let DROP_TIME: f64 = 0.45;
@@ -115,10 +115,11 @@ fn draw_completion(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: float2
     if i >= 0 && busy(i) { return; }        // still being poured into
     let c = palette_color(flask_color(b), save.color_safe);
     let since = if i >= 0 { now - complete_at[i] } else { 10.0 };
-    let neck = pos - float2 { 0.0, half.y - half.x * 0.35 };
+    // A cork filling the opening, its top a little above the rim.
+    let rim = pos - float2 { 0.0, half.y - half.x * FLASK_E };
     let fall = (1.0 - bounce_in(since / 0.4)) * half.x * 3.0;
     let a = clamp(since * 8.0, 0.0, 1.0) as f32;
-    var seal = inst(Shape.Seal, neck - float2 { 0.0, half.x * 0.1 + fall }, float2 { half.x * 0.55, half.x * 0.55 }, c);
+    var seal = inst(Shape.Seal, rim + float2 { 0.0, half.x * 0.12 - fall }, float2 { half.x * 0.86, half.x * 0.58 }, c);
     seal.color.w = a;
     out.push(seal);
     // The label, sliding on once the stopper is in.
@@ -257,7 +258,7 @@ fn finale_overlay_at() -> f64 { finale_stone_at() + 0.75 }
 var finale_rung = 0;           // notes played so far
 var finale_chimed = false;
 
-fn neck_of(i: i64) -> float2 { slots[i].pos - float2 { 0.0, slots[i].half.y - slots[i].half.x * 0.2 } }
+fn neck_of(i: i64) -> float2 { slots[i].pos - float2 { 0.0, slots[i].half.y - slots[i].half.x * FLASK_E } }
 
 // Plays the notes as the light arrives, and the chord when the stone forms.
 fn update_finale() {

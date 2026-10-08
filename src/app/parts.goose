@@ -18,6 +18,14 @@ import .draw;
 import .palette;
 import .text;
 
+// The flask as the shader draws it (shaders.goose): a glass cylinder seen
+// from above at a slant, its rim and bottom ellipses FLASK_E of its half
+// width deep, its body FLASK_BODY of the lip's width, the liquid's column a
+// little narrower still.
+let FLASK_E: f32 = 0.36;
+let FLASK_BODY: f32 = 0.92;
+let LIQUID_W: f32 = 0.84;
+
 // Where a flask's parts go, in the flask's own frame: offsets from its
 // middle before it is turned or squashed. `at` places them on the screen.
 struct Anchors {
@@ -26,25 +34,38 @@ struct Anchors {
     hx: f32,            // its half width, the unit parts are sized in
     angle: f32,         // turned by (radians)
     squash: f32,        // squashed upright, 1 when not
-    rim: float2,        // the top of the lip
-    neck: float2,       // the middle of the neck
-    shoulder: float2,   // where the neck meets the body
+    rim: float2,        // the middle of the opening
+    lip: float2,        // the near edge of the rim
+    neck: float2,       // just under the rim, on the near side
+    shoulder: float2,   // below that, where a band goes round
     body: float2,       // the middle of the liquid
     base: float2,       // the middle of the bottom, where it stands
     side: float2,       // the right of the body, low down (left is its mirror)
-    joint: float2,      // the right shoulder, where a twin's tube joins
+    joint: float2,      // the right of the body, high up, where a twin's tube joins
 }
 
 fn flask_anchors(pos: float2, half: float2, angle: f32, squash: f32) -> Anchors {
     let hx = half.x;
+    let ry = hx * FLASK_E;
+    let top = -half.y + ry;
+    let bottom = half.y - ry * FLASK_BODY;
     Anchors { center: pos, half: half, hx: hx, angle: angle, squash: squash,
-              rim: float2 { 0.0, -half.y },
-              neck: float2 { 0.0, -half.y + hx * 0.5 },
-              shoulder: float2 { 0.0, -half.y + hx * 0.95 },
-              body: float2 { 0.0, (half.y - hx * 0.16 - half.y + hx * 1.2) * 0.5 },
-              base: float2 { 0.0, half.y },
-              side: float2 { hx * 0.84, half.y - hx * 0.4 },
-              joint: float2 { hx * 0.92, -half.y + hx * 1.45 } }
+              rim: float2 { 0.0, top },
+              lip: float2 { 0.0, top + ry },
+              neck: float2 { 0.0, top + ry + hx * 0.25 },
+              shoulder: float2 { 0.0, top + ry + hx * 0.55 },
+              body: float2 { 0.0, (top + ry + bottom) * 0.5 },
+              base: float2 { 0.0, bottom },
+              side: float2 { hx * FLASK_BODY, bottom - hx * 0.45 },
+              joint: float2 { hx * FLASK_BODY, top + ry + hx * 0.7 } }
+}
+
+// The middle of the near face of liquid segment k, relative to the flask's
+// middle: segments are SEGMENT half widths high, from the bottom up.
+fn segment_center(half: float2, k: i64) -> float2 {
+    let hx = half.x;
+    let base = half.y - hx * FLASK_E * FLASK_BODY - hx * 0.05;
+    float2 { 0.0, base + hx * LIQUID_W * FLASK_E - (k + 0.5) * hx * SEGMENT }
 }
 
 // A point in the flask's frame (an anchor plus an offset), on the screen.
@@ -146,14 +167,15 @@ fn draw_cover(out: Inst[>..]&, i: i64, b: Bottle, a: Anchors, look: CoverLook, s
 
 fn draw_wax(out: Inst[>..]&, key: i64, a: Anchors, soft: f32, crack: f32, seed: f32, alpha: f32, safe: bool) {
     let hx = a.hx;
-    let c = at(a, a.rim + float2 { 0.0, hx * 0.61 });
-    var w = inst(Shape.Wax, c, float2 { hx * 0.85, hx * 1.1 }, with_alpha(palette_color(key, safe), alpha));
+    // Over the whole opening, running down the near side.
+    let c = at(a, a.rim + float2 { 0.0, hx * 0.62 });
+    var w = inst(Shape.Wax, c, float2 { hx * 1.1, hx * 1.43 }, with_alpha(palette_color(key, safe), alpha));
     w.p0 = float4 { soft, crack, seed, 0.0 };
     w.misc.y = a.angle;
     out.push(w);
     if safe {
-        let m = at(a, a.rim + float2 { 0.0, hx * (0.69 + 0.2 * soft) });
-        var s = inst(Shape.Symbol, m, float2 { hx * 0.2, hx * 0.2 }, rgba(1.0, 1.0, 1.0, alpha));
+        let m = at(a, a.rim + float2 { 0.0, hx * (0.72 + 0.26 * soft) });
+        var s = inst(Shape.Symbol, m, float2 { hx * 0.26, hx * 0.26 }, rgba(1.0, 1.0, 1.0, alpha));
         s.p0 = float4 { key, 0.0, 0.0, 0.0 };
         out.push(s);
     }
@@ -255,19 +277,23 @@ fn draw_stand_front(out: Inst[>..]&, i: i64, b: Bottle, a: Anchors, look: StandL
     }
 }
 
-fn lantern_pos(a: Anchors) -> float2 { at(a, a.rim - float2 { 0.0, a.hx * 1.12 }) }
+// A lantern hangs off the right of the rim, on a short chain from a hook.
+fn lantern_pos(a: Anchors) -> float2 { at(a, a.rim + float2 { a.hx * 1.05, a.hx * 0.9 }) }
 
 fn draw_lantern(out: Inst[>..]&, a: Anchors, lit: f32, flare: f32, seed: i64) {
     let hx = a.hx;
     let c = lantern_pos(a);
-    // A short chain up to a hook.
-    let top = c.y - hx * 1.02;
-    rect(out, float2 { c.x, top - hx * 0.35 }, float2 { 0.9, hx * 0.35 }, 0.5, float4 { 0.55, 0.42, 0.22, 0.9 });
-    for k in 3 { ring(out, float2 { c.x, top - hx * (0.12 + 0.22 * k) }, hx * 0.07, 1.2, float4 { 0.7, 0.55, 0.3, 1.0 }); }
-    if lit > 0.0 {
-        glow(out, c + float2 { 0.0, hx * 0.1 }, float2 { hx * 1.6, hx * 1.6 }, 1.0, float4 { 1.0, 0.75, 0.4, 0.2 * lit + 0.3 * flare });
+    let hook = at(a, a.rim + float2 { hx * 0.86, -hx * 0.04 });
+    let top = c - float2 { 0.0, hx * 0.62 };
+    for k in 3 {
+        let f = (k + 0.5) / 3.0;
+        ring(out, float2 { hook.x + (top.x - hook.x) * f, hook.y + (top.y - hook.y) * f }, hx * 0.06, 1.1, float4 { 0.7, 0.55, 0.3, 1.0 });
     }
-    var l = inst(Shape.Lantern, c, float2 { hx * 0.68, hx * 1.05 }, rgba(1.0, 1.0, 1.0, 1.0));
+    rect(out, hook, float2 { hx * 0.08, hx * 0.05 }, hx * 0.04, float4 { 0.6, 0.45, 0.22, 1.0 });
+    if lit > 0.0 {
+        glow(out, c + float2 { 0.0, hx * 0.06 }, float2 { hx * 1.3, hx * 1.3 }, 1.0, float4 { 1.0, 0.75, 0.4, 0.2 * lit + 0.3 * flare });
+    }
+    var l = inst(Shape.Lantern, c, float2 { hx * 0.5, hx * 0.77 }, rgba(1.0, 1.0, 1.0, 1.0));
     l.p0 = float4 { lit, flare, seed * 1.7, 0.0 };
     l.misc.z = hx * 0.5;
     out.push(l);
@@ -295,7 +321,7 @@ fn draw_tube(out: Inst[>..]&, a: Anchors, b: Anchors, head: f32, color: float4) 
     let a_left = a.center.x <= b.center.x;
     let p = at(a, if a_left { a.joint } else { mirror(a.joint) });
     let q = at(b, if a_left { mirror(b.joint) } else { b.joint });
-    let mid = float2 { (p.x + q.x) * 0.5, min(p.y, q.y) - a.hx * 0.9 };
+    let mid = float2 { (p.x + q.x) * 0.5, min(p.y, q.y) - a.hx * 0.6 };
     let w = a.hx * 0.19;
     for e in [p, q] { rect(out, e, float2 { w * 1.1, w * 1.5 }, w * 0.6, float4 { 0.78, 0.6, 0.3, 0.9 }); }
     curve(out, Shape.Tube, p, mid, q, w, head, color);

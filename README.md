@@ -78,7 +78,8 @@ Hard** finale that combines the chapter's modifiers with earlier ones. Each
 modifier is taught in its own hand-made tutorial, then shows up in every
 level until the next tutorial, alongside one or two from earlier chapters.
 Murk is the background of every level from 3 on, and from level 12 every
-fourth level has a Tall Flask. The rules of every modifier, and how they meet
+fourth level has a Tall Flask, spanning two rows of the grid the flasks
+stand in (three on Hard levels). The rules of every modifier, and how they meet
 through heat, light, flow, flip, growth and transmutation, are in
 [docs/revamp.md](docs/revamp.md).
 
@@ -117,7 +118,7 @@ nix/goose.nix           goose + its vendored SDL3/TinyCC/Nuklear/Box3D, set up f
 nix/game.nix            native build of the game, with its levels and fonts
 nix/tests.nix           the unit tests, for `nix flake check`
 src/core/               the rules, with no drawing or input
-  board.goose           bottles, pours, every modifier, win and loss
+  board.goose           bottles, pours, every modifier, win and loss, the grid and neighbors
   solver.goose          weighted A*, used by the generator, shuffle and hints
   generator.goose       seeded level generation
   campaign.goose        level numbers, tutorials, difficulty ramp
@@ -125,8 +126,8 @@ src/core/               the rules, with no drawing or input
   tools.goose           shuffle and hint
 src/app/                rendering, text, sound, saving
   draw.goose            one instanced pipeline; all art is signed distance fields in its shader
-  shaders.goose         that shader: every shape, the chapters' rooms, each color's shimmer
-  scene.goose           the workbench: rooms, candlelight, motes, the back shelf
+  shaders.goose         that shader: every shape, the chapters' rooms and tables, each color's shimmer
+  scene.goose           the workbench: rooms, the table, candlelight, motes, the back shelf
   fx.goose              slosh, droplets, stoppers and labels, ink between screens, the win's finale
   menus.goose           the title screen and the chapter map
   sfx.goose             sounds synthesized at startup; each color is a pentatonic note

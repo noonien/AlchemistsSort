@@ -316,7 +316,7 @@ fn start_beat(b: Beat&) {
                 alt.seg[k] = s.seg[n - 1 - k];
                 if murky(s, n - 1 - k) { murk |= 1 << k; }
             }
-            alt.murk = murk as u8;
+            alt.murk = murk as u16;
             b.alt = alt;
         },
         VineSpread => play(Sfx.Rustle),
@@ -370,7 +370,7 @@ fn apply_beat(b: Beat&, live: bool) {
         MurkCleared => {
             let old: i64 = s.murk;
             let n: i64 = s.n;
-            if b.from < 0 { s.murk = (old & ((1 << max(0, n - 1)) - 1)) as u8; } else { s.murk = 0; }
+            if b.from < 0 { s.murk = (old & ((1 << max(0, n - 1)) - 1)) as u16; } else { s.murk = 0; }
             b.mask = old & ~(s.murk as i64);
         },
         Flipped => {
@@ -620,7 +620,7 @@ fn draw_beats(out: Inst[>..]&) {
 // Where heat comes from: a brazier under the flask, or the salamander on it.
 fn heat_source_point(src: i64) -> float2 {
     let a = stand_anchors(src);
-    if shown.salamander == src && shown.bottles[src].fixture != Fixture.Brazier { return at(a, a.rim); }
+    if shown.salamander == src && shown.bottles[src].fixture != Fixture.Brazier { return at(a, a.lip); }
     at(a, a.base - v2(0.0, a.hx * 0.3))
 }
 
@@ -657,10 +657,9 @@ fn draw_light(out: Inst[>..]&, e: Beat, k: f32) {
     let src = lantern_pos(a);
     let fade = 1.0 - clamp((k - 0.6) / 0.4, 0.0, 1.0);
     glow(out, src, v2(hx * 3.5, hx * 3.5), 1.0, float4 { 1.0, 0.85, 0.5, 0.5 * (1.0 - k) });
-    let left, right = neighbors(shown, i);
-    let reach: i64[3] = [left, i, right];
+    var reach: i64[..7] = [i];
+    for j in neighbors(shown, i) { reach.push(j); }
     for j in reach {
-        if j < 0 { continue; }
         let aj = slot_anchors(j);
         let to = at(aj, aj.body);
         let ctrl = v2((src.x + to.x) * 0.5, (src.y + to.y) * 0.5 - hx * 0.4);
@@ -695,10 +694,9 @@ fn draw_flip(out: Inst[>..]&, e: Beat, k: f32) {
 // A vine reaching across from the flask next to the new tendril.
 fn draw_vine_reach(out: Inst[>..]&, e: Beat, k: f32) {
     let i = e.bottle;
-    let left, right = neighbors(shown, i);
     var src = e.from;
-    for j in [left, right] {
-        if j >= 0 && (shown.bottles[j].cover == Cover.Vine || j == e.from) { src = j; }
+    for j in neighbors(shown, i) {
+        if shown.bottles[j].cover == Cover.Vine || j == e.from { src = j; }
     }
     if src < 0 || src >= shown.count { return; }
     let sa = stand_anchors(src);
@@ -722,8 +720,8 @@ fn draw_hop(out: Inst[>..]&, e: Beat, k: f32) {
     let i = e.bottle;
     let to_a = slot_anchors(i);
     let from_a = if e.from >= 0 && e.from < shown.count { slot_anchors(e.from) } else { to_a };
-    let p = at(from_a, from_a.rim);
-    let q = at(to_a, to_a.rim);
+    let p = at(from_a, from_a.lip);
+    let q = at(to_a, to_a.lip);
     let up = max(abs(q.x - p.x) * 0.45, to_a.hx * 1.6);
     let ctrl = v2((p.x + q.x) * 0.5, min(p.y, q.y) - up * 2.0);
     let u = ease(k);

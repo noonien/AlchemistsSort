@@ -60,7 +60,9 @@ fn scene_light(theme: i64, t: f64) -> float4 {
 fn draw_scene(out: Inst[>..]&, theme: i64) {
     var bg = inst(Shape.Backdrop, float2 { VW * 0.5, VH * 0.5 }, float2 { VW * 0.5 + 400.0, VH * 0.5 + 200.0 },
                   rgba(1.0, 1.0, 1.0, 1.0));
-    bg.p0 = float4 { theme, VW * 0.5 + 400.0, 0.0, 0.0 };
+    // In a level, the flasks stand on the room's table.
+    let edge: f32 = if screen_id == Screen.Play { TABLE_EDGE } else { 0.0 };
+    bg.p0 = float4 { theme, VW * 0.5 + 400.0, edge, 0.0 };
     out.push(bg);
     draw_motes(out, theme);
 }
@@ -121,6 +123,7 @@ fn draw_motes(out: Inst[>..]&, theme: i64) {
 // --- the back shelf --------------------------------------------------------------------
 
 let SHELF_Y: f32 = 117.0;
+let TABLE_EDGE: f32 = 146.0;        // the table's far edge, in a level
 
 var shelf_colors: i64[..16];        // the level's colors, in order
 var shelf_lit_at: f64[16];          // when each color's bottle lit, or -1

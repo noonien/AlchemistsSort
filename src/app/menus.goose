@@ -41,7 +41,7 @@ fn title_liquid() -> float4 {
 }
 
 fn small_flask(out: Inst[>..]&, pos: float2, colors: const i64[:], hx: f32) {
-    var b = Bottle { seg: [0; 8], .. };
+    var b = Bottle { .. };
     for c, k in colors { b.seg[k] = c as u8; }
     b.n = colors.len as u8;
     let half = bottle_half(hx, CAP);
@@ -265,7 +265,7 @@ fn draw_map(out: Inst[>..]&) {
     let done_here = if page.last > 0 { clamp(save.level - page.first, 0, 15) } else { 0 };
     let lit = chapter_done(map_page);
     let pot_half = bottle_half(26.0, CAP);
-    var b = Bottle { seg: [0; 8], .. };
+    var b = Bottle { .. };
     let col = CHAPTER_POTION[clamp(map_page, 0, 6)];
     for s in 4 { b.seg[s] = col as u8; }
     b.n = 4;

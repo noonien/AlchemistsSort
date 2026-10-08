@@ -38,15 +38,16 @@ fn board_of(rows: const u8[:][:]) -> Board {
     board
 }
 
-// The same, all on one shelf row, so flask i's neighbors are i - 1 and i + 1.
+// The same, all in one row of the grid, so flask i's neighbors are i - 1 and i + 1.
 fn row_of(rows: const u8[:][:]) -> Board {
     var board = board_of(rows);
-    board.per_row = MAX_BOTTLES;
+    board.cols = MAX_BOTTLES;
+    place_grid(board);
     board
 }
 
-fn letters(b: Bottle) -> u8[..8] {
-    var s: u8[..8] = [];
+fn letters(b: Bottle) -> u8[..MAX_CAP] {
+    var s: u8[..MAX_CAP] = [];
     for k in b.n as i64 { s.push(letter_of_color(b.seg[k])); }
     s
 }
@@ -122,21 +123,52 @@ fn test_pour_rules() {
     check(b.pours == 1, "a rejected pour does not");
 }
 
-fn test_shelves() {
-    test("shelves and neighbors");
-    check(shelf_per_row(6, CAP) == 3 && shelf_per_row(9, CAP) == 5, "the layout's rows");
+fn test_grid() {
+    test("the grid and neighbors");
+    check(tall_cap(2) == 9 && tall_cap(3) == 14 && rows_of(CAP) == 1 && rows_of(9) == 2 && rows_of(14) == 3,
+          "a tall flask's rows");
     var b = board_of(["RRRR", "GGGG", "", "", "", "", "", "", "", ""]);
     settle(b);
-    let per = b.per_row;
-    check(per == shelf_per_row(10, CAP), "settle fixes the row length");
-    let l, r = neighbors(b, per - 1);
-    check(l == per - 2 && r == -1, "the end of a row has no right neighbor");
-    let l2, r2 = neighbors(b, per);
-    check(l2 == -1 && r2 == per + 1, "the start of the next row has no left one");
-    let l3, r3 = neighbors(b, 0);
-    check(l3 == -1 && r3 == 1, "the first flask");
+    check(b.cols == grid_columns(b) && b.rows * b.cols >= b.count, "settle places the flasks");
+    for i in b.count {
+        check(flask_at(b, b.row[i], b.col[i]) == i, str("flask ", i, " has a cell of its own"));
+    }
+    let l = neighbors(b, 0);
+    check(l.len == 1 && l[0] == 1 && b.row[0] == 0 && b.col[0] == 0, "the first flask has one neighbor");
+    let cols = b.cols;
+    let rows = b.rows;
+    var cells: i64[MAX_BOTTLES] = [0; MAX_BOTTLES];
+    for i in b.count { cells[i] = b.row[i] * 100 + b.col[i]; }
     for k in 6 { add_empty_bottle(b); }
-    check(b.per_row == per, "extra flasks never change the rows");
+    check(b.cols == cols && b.rows >= rows, "extra flasks never change the columns");
+    var kept = true;
+    for i in 10 { if b.row[i] * 100 + b.col[i] != cells[i] { kept = false; } }
+    check(kept, "nor move the flasks there");
+    for i in b.count { check(flask_at(b, b.row[i], b.col[i]) == i, str("extra flask ", i, " has a cell")); }
+
+    test("a tall flask's neighbors");
+    // Three ordinary flasks either side of a three-row tall one in the middle.
+    var t = board_of(["RRRR", "GGGG", "BBBB", "YYYY", "", "", "", "", "", "", "", "", "", "", "", "", "", ""]);
+    var tall = Bottle { cap: tall_cap(3) as u8, .. };
+    push_bottle(t, tall);
+    t.cols = 3;
+    settle(t);
+    let ti = t.count - 1;
+    check(t.col[ti] == 1 && t.row[ti] == 0 && t.rows >= 3, "it stands in the middle column from the top");
+    let around = neighbors(t, ti);
+    check(around.len == 6, str("it has a neighbor either side on each of its rows: ", around.len));
+    for j in around { check(are_neighbors(t, j, ti), "and is theirs"); }
+    check(!are_neighbors(t, 0, 2), "the flasks either side of it are not neighbors");
+    let corner = neighbors(t, 0);
+    check(corner.len == 1 && corner[0] == ti, "the flask beside it has only it");
+
+    test("grid columns");
+    var small = board_of(["RRGB", "GGBR", "BBRG", "", ""]);
+    settle(small);
+    check(small.cols == 5 && small.rows == 1, str("five flasks stand in a row: ", small.cols));
+    var many = board_of(["RRRR", "GGGG", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""]);
+    settle(many);
+    check(many.cols >= 4 && many.rows >= 3, "many flasks take several rows");
 }
 
 // --- the chapter 1 modifiers --------------------------------------------------------
@@ -246,6 +278,17 @@ fn test_tall() {
     c.bottles[2].cover = Cover.Seal;
     c.bottles[2].key = 1;
     check(validate(c).len == 0, "and it can carry a cover");
+
+    test("a tall flask's color in an ordinary flask");
+    var d = board_of(["RRR", "GGGR", "G", ""]);
+    push_bottle(d, tall_flask('R', 2));
+    d.colors = color_count(d);
+    settle(d);
+    check(validate(d).len == 0 && d.bottles[4].cap == 9, "nine reds for a two-row flask");
+    r = pour(d, 1, 0);
+    check(r.ok && d.bottles[0].n == 4 && !d.bottles[0].done && !r.completed, "four reds are not done while the tall flask needs more");
+    check(can_pour(d, 0, 4), "and pour on into it");
+    check(solve(d, 20000, path).solved, "the solver fills it");
 }
 
 // --- chapter 2: rime, braziers, quicksilver -------------------------------------------
@@ -367,7 +410,8 @@ fn test_twins() {
 
     test("twins must be neighbors");
     var v = board_of(["RRRR", "GGGG", "", ""]);
-    v.per_row = 2;
+    v.cols = 2;
+    place_grid(v);
     v.bottles[1].twin = 2;
     v.bottles[2].twin = 1;
     check(validate(v).len > 0, "not across rows");
@@ -715,14 +759,14 @@ fn has_modifier(board: Board, which: i64) -> bool {
     for i in board.count { for k in board.bottles[i].n as i64 { tally[board.bottles[i].seg[k]]++; } }
     for i in board.count {
         let b = board.bottles[i];
-        let l, r = neighbors(board, i);
+        var by_ice = false;
+        for j in neighbors(board, i) { if board.bottles[j].cover == Cover.Rime { by_ice = true; } }
         let ok = match which {
             0 => b.murk != 0,
             1 => b.cover == Cover.Seal,
             2 => b.body == Body.Vow,
             3 => b.cap > CAP,
-            4 => b.fixture == Fixture.Brazier && ((l >= 0 && board.bottles[l].cover == Cover.Rime) ||
-                                                  (r >= 0 && board.bottles[r].cover == Cover.Rime)),
+            4 => b.fixture == Fixture.Brazier && by_ice,
             5 => tally[QUICKSILVER] == CAP,
             6 => b.body == Body.Siphon,
             7 => b.twin >= 0 && are_neighbors(board, i, b.twin),
@@ -990,7 +1034,7 @@ fn test_levels() {
         let err = validate(h.board);
         check(err.len == 0, str(name, ": ", err));
         check(h.info.hint.len > 0 && h.info.name.len > 0, str(name, " has a name and a hint"));
-        check(h.board.per_row > 0 && !is_won(h.board), str(name, " is settled and not yet won"));
+        check(h.board.rows > 0 && !is_won(h.board), str(name, " is settled and not yet won"));
         check(h.number > 0 && !contains(numbers, h.number), str(name, " has a level number of its own"));
         numbers.push(h.number);
         let back, found = campaign_hand_made(h.number);
@@ -1034,7 +1078,7 @@ fn test_music() {
 fn main() {
     test_levels();
     test_pour_rules();
-    test_shelves();
+    test_grid();
     test_murk();
     test_split();
     test_vow();
