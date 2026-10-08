@@ -1,0 +1,6 @@
+{
+  "name": "Mystery Flask",
+  "difficulty": "normal",
+  "hint": "The ? flask takes whatever color you pour into it first, and from then on only that color. It must end up full.",
+  "bottles": ["RGBY", "GYRB", "BRYG", "YBGR", { "kind": "mystery", "liquid": "" }, ""]
+}

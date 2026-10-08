@@ -1,0 +1,6 @@
+{
+  "name": "Corked Flask",
+  "difficulty": "normal",
+  "hint": "A cork pops when you pour exactly its color onto it, and the liquid lands inside. What it holds stays a mystery until then.",
+  "bottles": ["RGBY", "YBRG", { "kind": "cork", "liquid": "GBY", "key": "Y" }, "RRGB", "Y", ""]
+}

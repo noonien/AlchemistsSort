@@ -1,0 +1,6 @@
+{
+  "name": "Frozen Flask",
+  "difficulty": "normal",
+  "hint": "Ice keeps a flask shut until enough pours have been made anywhere on the table. The number counts down with every pour.",
+  "bottles": ["RGBY", "YBRG", { "kind": "frozen", "liquid": "GRYB", "thaw": 5 }, "BYGR", "", ""]
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Split Color",
+  "difficulty": "normal",
+  "hint": "Violet is split between two flasks: a pair on top of one, a pair at the bottom of the other. Bring them back together.",
+  "bottles": ["RRVV", "VVGG", "GBRB", "BGBR", "", ""]
+}

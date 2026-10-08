@@ -1,0 +1,13 @@
+{
+  "name": "Locked Vaults",
+  "difficulty": "normal",
+  "hint": "Padlocks open like corks: pour the key color onto them. The key for the second vault is locked inside the first.",
+  "bottles": [
+    { "kind": "vault", "liquid": "RVV", "key": "Y" },
+    { "kind": "vault", "liquid": "GRV", "key": "V" },
+    "YGYR",
+    "GYRG",
+    "VY",
+    ""
+  ]
+}

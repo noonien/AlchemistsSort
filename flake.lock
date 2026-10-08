@@ -1,0 +1,47 @@
+{
+  "nodes": {
+    "goose-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1791437957,
+        "narHash": "sha256-egBhX9Sc6jY43k6xbROlBMmfEuNhAK3uQ58mIYALAbk=",
+        "ref": "refs/heads/master",
+        "rev": "35368105e3d50341b79a4cb873cc0261e82dfa42",
+        "shallow": true,
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/aardappel/goose"
+      },
+      "original": {
+        "shallow": true,
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/aardappel/goose"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1791456040,
+        "narHash": "sha256-H83yz/do+hjOO0uujHyH8RgtIQP2v7Mw+cLwcZK/xKc=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "e7439b6b14ad3cc35d05608ebca9bce01a25f5f8",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "goose-src": "goose-src",
+        "nixpkgs": "nixpkgs"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

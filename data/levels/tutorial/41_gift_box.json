@@ -1,0 +1,6 @@
+{
+  "name": "Gift Box",
+  "difficulty": "normal",
+  "hint": "A gift box opens on any pour, and whatever you poured lands on top of the mixed flask hidden inside.",
+  "bottles": ["RGBY", "YBRG", { "kind": "gift", "liquid": "GRY" }, "BYGR", "B", ""]
+}
