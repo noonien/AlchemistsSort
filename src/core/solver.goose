@@ -9,13 +9,35 @@ import .board;
 
 struct Move { from: i64, to: i64 }
 
-struct SolveNode { board: Board, parent: i32, from: i8, to: i8, g: i32 }
+struct SolveNode {
+    board: Board,
+    hash: u64,
+    heap: i64 = 0,      // the open queue's entry in this slot (see Search)
+    parent: i32,
+    chain: i32 = -1,    // the next node in this one's chain of the seen set
+    bucket: i32 = -1,   // the first node of the seen set's chain for this slot
+    from: i8,
+    to: i8,
+    g: i32,
+}
 
 struct SolveStats {
     solved: bool = false,
     exhausted: bool = false,// every reachable position was tried: no win exists
     expanded: i64 = 0,      // positions taken off the queue
     length: i64 = 0,        // moves in the solution found
+}
+
+// A search in progress; see search_begin and search_step. One made with
+// `Search {}` is finished and found nothing.
+struct Search {
+    stats: SolveStats = SolveStats {},
+    budget: i64 = 0,
+    done: bool = true,
+    goal: i64 = -1,         // the winning node, once found
+    queued: i64 = 0,        // the open queue's entries, in nodes[..queued].heap
+    buckets: i64 = 0,       // the seen set's chains, headed in nodes[..buckets].bucket
+    nodes: SolveNode[>..<] = [],    // grow-shrink, so a job can start a new search in place
 }
 
 // How far a position looks from solved: a run boundary costs one (the Drop
@@ -95,54 +117,164 @@ fn useful_moves(board: Board, out: Move[>..]&) {
     }
 }
 
-// Searches for a way to win from `start`, giving up after `budget` positions.
-// The moves of the solution found go into `path`.
-fn solve(start: Board, budget: i64, path: Move[>..]&) -> SolveStats {
-    var stats = SolveStats {};
-    path.clear();
-    if is_won(start) { stats.solved = true; return stats; }
-    var nodes: SolveNode[>..] = [];
-    var queue: i64[>..<] = [];
-    var seen = dictionary<u64, bool> {};
+// --- the search, a slice at a time -----------------------------------------------
+//
+// A Search holds all of the A* state, so the game can run it a few hundred
+// positions a frame. A Goose struct owns at most one growable array, so the
+// nodes carry the other two tables too: slot k's `heap` is the k-th entry of
+// the open queue (which never holds more entries than there are nodes), and
+// slot k's `bucket` heads the k-th chain of the set of positions seen (which
+// keeps no more chains than nodes).
+
+// Queue entries are `priority << 32 | node`, all distinct, so the order the
+// positions come off depends only on what was pushed.
+fn queue_push(s: Search&, key: i64) {
+    var i = s.queued;
+    s.queued++;
+    while i > 0 {
+        let p = (i - 1) / 2;
+        let up = s.nodes[p].heap;
+        if key >= up { break; }
+        s.nodes[i].heap = up;
+        i = p;
+    }
+    s.nodes[i].heap = key;
+}
+
+fn queue_pop(s: Search&) -> i64 {
+    let first = s.nodes[0].heap;
+    s.queued--;
+    let n = s.queued;
+    if n == 0 { return first; }
+    let key = s.nodes[n].heap;
+    var i = 0;
+    loop {
+        var c = 2 * i + 1;
+        if c >= n { break; }
+        if c + 1 < n && s.nodes[c + 1].heap < s.nodes[c].heap { c++; }
+        let down = s.nodes[c].heap;
+        if key <= down { break; }
+        s.nodes[i].heap = down;
+        i = c;
+    }
+    s.nodes[i].heap = key;
+    first
+}
+
+fn chain_of(s: Search&, h: u64) -> i64 { (hash(h) & ((s.buckets - 1) as u64)) as i64 }
+
+fn seen(s: Search&, h: u64) -> bool {
+    var k: i64 = s.nodes[chain_of(s, h)].bucket;
+    while k >= 0 {
+        if s.nodes[k].hash == h { return true; }
+        k = s.nodes[k].chain;
+    }
+    false
+}
+
+fn link(s: Search&, id: i64) {
+    let c = chain_of(s, s.nodes[id].hash);
+    s.nodes[id].chain = s.nodes[c].bucket;
+    s.nodes[c].bucket = id as i32;
+}
+
+// Adds a position to the tree and to the set seen. When there are twice as
+// many nodes as chains, the chains double and every node is linked anew.
+fn add_node(s: Search&, board: Board, h: u64, parent: i64, m: Move, g: i64) -> i64 {
+    s.nodes.push(SolveNode { board: board, hash: h, parent: parent as i32,
+                             from: m.from as i8, to: m.to as i8, g: g as i32, .. });
+    let id = s.nodes.len - 1;
+    if s.nodes.len < 2 * s.buckets {
+        link(s, id);
+        return id;
+    }
+    s.buckets *= 2;
+    for c in s.buckets { s.nodes[c].bucket = -1; }
+    for k in s.nodes.len { link(s, k); }
+    id
+}
+
+// A search for a way to win from `start` that gives up after `budget`
+// positions. Nothing is searched until search_step.
+fn search_begin(start: Board, budget: i64) -> Search {
+    var s = Search { budget: budget, done: false, .. };
+    if is_won(start) {
+        s.stats.solved = true;
+        s.done = true;
+        return s;
+    }
+    s.buckets = 1;
+    let root = add_node(s, start, board_hash(start), -1, Move { -1, -1 }, 0);
+    queue_push(s, (heuristic(start) << 32) | root);
+    s
+}
+
+// Takes up to `nodes` more positions off the queue (at least one). True once
+// the search is over: solved, every position tried, or the budget spent.
+fn search_step(s: Search&, nodes: i64) -> bool {
     var moves: Move[>..] = [];
-    nodes.push(SolveNode { board: start, parent: -1, from: -1, to: -1, g: 0 });
-    seen.insert(board_hash(start), true);
-    queue.heap_push(heuristic(start) << 32);
-    var goal = -1;
-    while queue.len > 0 && goal < 0 {
-        let key = queue.heap_pop();
-        let at = key & 0xffffffff;
-        stats.expanded++;
-        if stats.expanded > budget { break; }
-        let here = nodes[at].board;
-        let g: i64 = nodes[at].g + 1;
+    var left = max(1, nodes);
+    while !s.done && left > 0 && s.queued > 0 {
+        left--;
+        let at = queue_pop(s) & 0xffffffff;
+        s.stats.expanded++;
+        if s.stats.expanded > s.budget { break; }
+        let here = s.nodes[at].board;
+        let g: i64 = s.nodes[at].g + 1;
         moves.clear();
         useful_moves(here, moves);
         for m in moves {
             var next = here;
             let r = pour(next, m.from, m.to);
             if !r.ok { continue; }
-            if !seen.insert(board_hash(next), true) { continue; }
-            nodes.push(SolveNode { board: next, parent: at as i32, from: m.from as i8,
-                                   to: m.to as i8, g: g as i32 });
-            let id = nodes.len - 1;
-            if is_won(next) { goal = id; break; }
-            queue.heap_push(((g + 4 * heuristic(next)) << 32) | id);
+            let h = board_hash(next);
+            if seen(s, h) { continue; }
+            let id = add_node(s, next, h, at, m, g);
+            if is_won(next) {
+                s.goal = id;
+                s.stats.solved = true;
+                s.stats.length = g;
+                s.done = true;
+                break;
+            }
+            queue_push(s, ((g + 4 * heuristic(next)) << 32) | id);
         }
     }
-    if goal < 0 {
-        stats.exhausted = queue.len == 0 && stats.expanded <= budget;
-        return stats;
+    if !s.done && (s.queued == 0 || s.stats.expanded > s.budget) {
+        s.stats.exhausted = s.queued == 0 && s.stats.expanded <= s.budget;
+        s.done = true;
     }
-    var at = goal;
-    while nodes[at].parent >= 0 {
-        path.push(Move { nodes[at].from, nodes[at].to });
-        at = nodes[at].parent;
+    s.done
+}
+
+// The moves of the solution found, if any.
+fn search_path(s: Search&, path: Move[>..]&) {
+    path.clear();
+    if s.goal < 0 { return; }
+    var at: i64 = s.goal;
+    while s.nodes[at].parent >= 0 {
+        path.push(Move { s.nodes[at].from, s.nodes[at].to });
+        at = s.nodes[at].parent;
     }
     reverse(path);
-    stats.solved = true;
-    stats.length = path.len;
-    stats
+}
+
+// The first move of the solution found; false when there is none, or the
+// board was won to begin with.
+fn search_first_move(s: Search&) -> Move, bool {
+    if s.goal < 0 { return Move { -1, -1 }, false; }
+    var at: i64 = s.goal;
+    while s.nodes[at].parent > 0 { at = s.nodes[at].parent; }
+    return Move { s.nodes[at].from, s.nodes[at].to }, true;
+}
+
+// Searches for a way to win from `start`, giving up after `budget` positions.
+// The moves of the solution found go into `path`.
+fn solve(start: Board, budget: i64, path: Move[>..]&) -> SolveStats {
+    var s = search_begin(start, budget);
+    while !search_step(s, budget + 1) {}
+    search_path(s, path);
+    s.stats
 }
 
 // Whether `board` is proven to have no way to win, searching at most

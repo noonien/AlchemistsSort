@@ -39,10 +39,9 @@ enum Overlay { None, Win, Lose, Intro, Reset, Brewing }
 enum PlayMode { Campaign, Seed, Hand }
 
 // Solver positions each use may search.
-let HINT_BUDGET = 80000;        // a hint, or a move in autoplay
+let HINT_BUDGET = 80000;        // the board's search: a hint, the dead-end check, autoplay
 let SHUFFLE_BUDGET = 30000;     // each shuffled deal tried
 let SHUFFLE_TRIES = 40;
-let DEAD_END_BUDGET = 5000;     // only asked when cornered, where positions are few
 
 // The most flasks the layout keeps readable.
 let MAX_ON_SCREEN = 22;
@@ -130,6 +129,21 @@ var seed_text: u8[..20];
 var autoplay = false;
 var autoplay_next: f64 = 0.0;
 var rand = rng { 12345 };
+
+// --- background work ------------------------------------------------------------------
+// The solver never holds up a frame: searches, shuffles and level generation
+// are jobs that step_jobs advances a slice a frame, the same on the desktop and
+// in the browser (which has no threads to spare). One search runs on the
+// board in play, restarted on every change: it answers the Hint button, the
+// dead-end check and autoplay alike.
+let JOB_SLICE: f64 = 0.004;     // seconds of work a frame
+let JOB_NODES = 16;             // positions between looks at the clock
+var board_search: Search;       // on `board`; see restart_search
+var hint_thinking = false;      // Hint was pressed; the answer waits on board_search
+var shuffling = false;          // shuffle_job is dealing
+var shuffle_job: ShuffleJob;
+var brewing = false;            // brew is generating the level to load
+var brew: GenJob;
 
 // This frame's clicks, in canvas units, and the pointer.
 var clicks: float2[..16];
@@ -320,9 +334,7 @@ fn load_campaign(n: i64) {
         begin_board(h.board);
         return;
     }
-    let g = generate(spec.params, spec.seed);
-    generated_info(spec.difficulty);
-    begin_board(g.board);
+    brew_level();
 }
 
 // One of the built-in hand-made levels, by its place in levels.goose.
@@ -338,15 +350,31 @@ fn load_seed(seed: u64, like: i64) {
     play_seed = seed;
     play_like = like;
     spec = seed_spec(seed, like);
-    let g = generate(spec.params, spec.seed);
+    brew_level();
+}
+
+// Generates `spec`'s level a slice a frame (see step_jobs), under the Brewing
+// overlay, and starts it when it is done.
+fn brew_level() {
+    brew = gen_begin(spec.params, spec.seed);
+    brewing = true;
+    pending_load = true;
+    overlay = Overlay.Brewing;
+}
+
+fn finish_brew() {
+    brewing = false;
+    pending_load = false;
     generated_info(spec.difficulty);
-    begin_board(g.board);
+    begin_board(brew.result.board);
 }
 
 // Starts loading on the next frame, after a frame that says so is shown.
 fn request_load() {
+    brewing = false;
     pending_load = true;
     overlay = Overlay.Brewing;
+    overlay_t = now;
     screen_id = Screen.Play;
 }
 
@@ -461,6 +489,7 @@ fn start_pour(from: i64, to: i64) {
     }
     hint_from = -1;
     lost_checked = false;
+    restart_search();
 }
 
 fn tap_bottle(i: i64) {
@@ -520,6 +549,15 @@ fn board_changed() {
     lost_checked = false;
     dead_end_waved = false;
     if overlay == Overlay.Lose { overlay = Overlay.None; }
+    restart_search();
+}
+
+// After any change to the board: search the new one, dropping a hint being
+// thought about and a shuffle being dealt for the old one.
+fn restart_search() {
+    board_search = search_begin(board, HINT_BUDGET);
+    hint_thinking = false;
+    shuffling = false;
 }
 
 fn do_undo() {
@@ -554,12 +592,21 @@ fn do_extra_bottle() {
     play(Sfx.Tool);
 }
 
+// Deals in the background (see step_jobs); finish_shuffle shows the result.
 fn do_shuffle() {
+    if shuffling { return; }
     finish_animations();
-    var r = rng { random_seed() };
-    let before = board;
-    if shuffle_board(board, r, SHUFFLE_TRIES, SHUFFLE_BUDGET) {
-        history.push(before);
+    shuffle_job = shuffle_begin(board, rng { random_seed() }, SHUFFLE_TRIES, SHUFFLE_BUDGET);
+    shuffling = true;
+    finish_shuffle();
+}
+
+fn finish_shuffle() {
+    if !shuffling || !shuffle_job.done { return; }
+    shuffling = false;
+    if shuffle_job.found {
+        history.push(board);
+        board = shuffle_job.trial;
         used.shuffle++;
         board_changed();
         for i in board.count { burst(slots[i].pos, 6, gold(0.8), 90.0); }
@@ -570,19 +617,28 @@ fn do_shuffle() {
     }
 }
 
+// The answer comes from the board's search, at once if it is done already,
+// else when it is (see finish_hint); the button thinks meanwhile.
 fn do_hint() {
+    if hint_thinking { return; }
     finish_animations();
-    var path: Move[>..] = [];
-    let s = solve(board, HINT_BUDGET, path);
     used.hint++;
-    if !s.solved || path.len == 0 {
-        if s.exhausted { say("No winning path from here. Try Undo or another flask.", 3.0); }
+    hint_thinking = true;
+    finish_hint();
+}
+
+fn finish_hint() {
+    if !hint_thinking || !board_search.done { return; }
+    hint_thinking = false;
+    let m, ok = search_first_move(board_search);
+    if !ok {
+        if board_search.stats.exhausted { say("No winning path from here. Try Undo or another flask.", 3.0); }
         else { say("No path found in time. Try Undo or another flask.", 3.0); }
         play(Sfx.Denied);
         return;
     }
-    hint_from = path[0].from;
-    hint_to = path[0].to;
+    hint_from = m.from;
+    hint_to = m.to;
     hint_until = now + 3.5;
     selected = -1;
     play(Sfx.Tool);
@@ -595,6 +651,32 @@ fn next_after_win() {
 }
 
 // --- per-frame update ---------------------------------------------------------------
+
+// Advances the background jobs by about JOB_SLICE: the level being brewed,
+// else a shuffle being dealt, else the board's search.
+fn step_jobs() {
+    if brewing && screen_id != Screen.Play {
+        // Left before it was done.
+        brewing = false;
+        pending_load = false;
+        overlay = Overlay.None;
+    }
+    let until = gfx::time() + JOB_SLICE;
+    loop {
+        if brewing {
+            if gen_step(brew, JOB_NODES) { finish_brew(); }
+        } else if screen_id != Screen.Play || pending_load {
+            break;
+        } else if shuffling {
+            if shuffle_step(shuffle_job, JOB_NODES) { finish_shuffle(); }
+        } else if !board_search.done {
+            let over = search_step(board_search, JOB_NODES);
+        } else {
+            break;
+        }
+        if gfx::time() >= until { break; }
+    }
+}
 
 fn update_pours() {
     for &a in pours {
@@ -617,6 +699,7 @@ fn update_pours() {
 }
 
 fn update_play(dt: f32) {
+    finish_hint();
     process_taps();
     update_pours();
     if any_pouring() { return; }
@@ -634,11 +717,12 @@ fn update_play(dt: f32) {
         play(Sfx.Win);
         confetti();
     }
-    if won_at < 0.0 && !lost_checked && overlay == Overlay.None {
+    // No pour left shows at once; a dead end once the board's search has
+    // tried every position, which on a big board takes a few frames.
+    let stuck = won_at < 0.0 && !lost_checked && overlay == Overlay.None && is_lost(board);
+    if won_at < 0.0 && !lost_checked && overlay == Overlay.None && (stuck || board_search.done) {
         lost_checked = true;
-        // The solver only runs when the player is nearly cornered.
-        let stuck = is_lost(board);
-        let dead = !stuck && !dead_end_waved && cornered(board) && dead_end(board, DEAD_END_BUDGET);
+        let dead = !stuck && !dead_end_waved && board_search.stats.exhausted;
         if stuck || dead {
             dead_end_shown = dead;
             overlay = Overlay.Lose;
@@ -646,8 +730,9 @@ fn update_play(dt: f32) {
             play(Sfx.Lose);
         }
     }
-    if autoplay && overlay == Overlay.None && won_at < 0.0 && now > autoplay_next && taps.len == 0 {
-        let m, ok = hint_move(board, HINT_BUDGET);
+    if autoplay && overlay == Overlay.None && won_at < 0.0 && now > autoplay_next && taps.len == 0 &&
+       board_search.done {
+        let m, ok = search_first_move(board_search);
         if ok {
             taps.push(m.from);
             taps.push(m.to);
@@ -955,6 +1040,17 @@ fn round_button(out: Inst[>..]&, layer: i64, center: float2, r: f32, which: Icon
     enabled && clicked(center, v2(r, r))
 }
 
+// A tool still working: a ring pulsing out of its button, bubbles rising.
+fn thinking(out: Inst[>..]&, center: float2, r: f32) {
+    let pulse = (now * 1.4 % 1.0) as f32;
+    ring(out, center, r + 3.0 + 9.0 * pulse, 2.0, gold(0.7 * (1.0 - pulse)));
+    for k in 3 {
+        let t = ((now * 0.8 + k / 3.0) % 1.0) as f32;
+        let x = center.x + (k - 1) * 11.0 + sin(now * 3.0 + k * 2.1) as f32 * 3.0;
+        glow(out, v2(x, center.y - r - 6.0 - 30.0 * t), v2(3.5, 3.5), 0.5, gold(0.9 * (1.0 - t)));
+    }
+}
+
 fn panel(out: Inst[>..]&, center: float2, half: float2) {
     glow(out, center + v2(0.0, 10.0), half + v2(30.0, 30.0), 0.5, float4 { 0.0, 0.0, 0.0, 0.5 });
     gradient_rect(out, center, half, 22.0, float4 { 0.24, 0.17, 0.33, 0.98 }, float4 { 0.15, 0.10, 0.22, 0.98 });
@@ -1005,6 +1101,8 @@ fn draw_play(out: Inst[>..]&) {
     if round_button(out, 0, v2(x0 + gap * 2.0, y), 32.0, Icon.Shuffle, "Shuffle", used.shuffle, enabled) { do_shuffle(); }
     if round_button(out, 0, v2(x0 + gap * 3.0, y), 32.0, Icon.Bottle, "Flask", used.extra, enabled) { do_extra_bottle(); }
     if round_button(out, 0, v2(x0 + gap * 4.0, y), 32.0, Icon.Hint, "Hint", used.hint, enabled) { do_hint(); }
+    if shuffling { thinking(out, v2(x0 + gap * 2.0, y), 32.0); }
+    if hint_thinking { thinking(out, v2(x0 + gap * 4.0, y), 32.0); }
 
     if now < message_until {
         let a = clamp((message_until - now) * 2.0, 0.0, 1.0) as f32;
@@ -1050,8 +1148,17 @@ fn draw_overlay(out: Inst[>..]&) {
     let fade = clamp((now - overlay_t) * 4.0, 0.0, 1.0) as f32;
     rect(out, v2(VW * 0.5, VH * 0.5), v2(VW, VH), 0.0, float4 { 0.03, 0.02, 0.07, 0.6 * fade });
     if overlay == Overlay.Brewing {
-        panel(out, v2(VW * 0.5, VH * 0.45), v2(180.0, 60.0));
-        text(1, VW * 0.5, VH * 0.45, "Brewing...", TextStyle.Heading, gold(1.0), Align.Center);
+        // The level is generated a slice a frame meanwhile, so this moves:
+        // three bubbles swell in turn under the word.
+        let c = v2(VW * 0.5, VH * 0.45);
+        panel(out, c, v2(180.0, 60.0));
+        text(1, c.x, c.y - 12.0, "Brewing", TextStyle.Heading, gold(1.0), Align.Center);
+        for k in 3 {
+            let swell = max(0.0, sin(now * 5.0 - k * 0.9)) as f32;
+            glow(out, c + v2((k - 1) * 22.0, 26.0 - 5.0 * swell), v2(4.0 + 3.0 * swell, 4.0 + 3.0 * swell), 0.35,
+                 gold(0.45 + 0.55 * swell));
+        }
+        clicks.clear();
         return;
     }
     if overlay == Overlay.Win {
@@ -1372,6 +1479,7 @@ fn draw_frame(dt: f32) {
 // Whether this frame has anything moving or waiting on input soon.
 fn lively() -> bool {
     if pending_load || any_pouring() || taps.len > 0 || clicks.len > 0 { return true; }
+    if screen_id == Screen.Play && (shuffling || !board_search.done) { return true; }
     let d = gfx::mouse_delta();
     if d.x != 0.0 || d.y != 0.0 || gfx::mouse_down(gfx::MOUSE_LEFT) { return true; }
     if now - overlay_t < 0.6 || now < message_until || now < hint_until || autoplay { return true; }
@@ -1460,12 +1568,8 @@ fn main() {
         if drawn >= 10 && (drawn - 10) % 20 == 0 && (drawn - 10) / 20 < clicks_script.len {
             clicks.push(clicks_script[(drawn - 10) / 20]);
         }
-        if pending_load && overlay == Overlay.Brewing && drawn > 0 && now - overlay_t >= 0.0 {
-            // The "Brewing" frame has been shown once; now do the work.
-            do_pending_load();
-        } else if pending_load {
-            overlay_t = now;
-        }
+        if pending_load && !brewing && drawn > 0 { do_pending_load(); }
+        step_jobs();
         handle_keys();
         if screen_id == Screen.Play && !pending_load { update_play(dt); }
         update_particles(dt);
