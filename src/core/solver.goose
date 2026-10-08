@@ -1,4 +1,4 @@
-// A solver for any board, obstacles included: weighted A* over positions,
+// A solver for any board, every modifier included: weighted A* over positions,
 // with a visited set and a node budget. It sees through murk, seals
 // and shrouds -- it is the level designer's check that a board
 // can be won, and the hint tool's source of a good next move.
