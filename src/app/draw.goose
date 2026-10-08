@@ -1,6 +1,6 @@
 // All the game's pictures are drawn by one pipeline: instanced quads whose
 // fragment shader draws a shape chosen per instance -- a flask, its liquid,
-// a pouring stream, ice, a cloth, a cork, an icon -- as signed distance
+// a pouring stream, rime, a wax seal, a lantern, an icon -- as signed distance
 // fields. There are no image files; every bit of art is in the shader, in
 // shaders.goose.
 //
@@ -19,7 +19,7 @@ struct Inst {
     color: float4,
     p0: float4,
     p1: float4,
-    misc: float4,       // shape index, angle (radians), padding in pixels, unused
+    misc: float4,       // shape index, angle (radians), padding in pixels, upright squash (0: none)
 }
 
 struct Corner { c: float2 }
@@ -135,7 +135,7 @@ fn spark(out: Inst[>..]&, center: float2, r: f32, color: float4) {
     out.push(inst(Shape.Spark, center, float2 { r, r }, color));
 }
 
-// A shape drawn along the quadratic curve a-ctrl-b (Stream, Beam): the
+// A shape drawn along the quadratic curve a-ctrl-b (Stream, Beam, Tube, Heat): the
 // instance covers the curve's box and holds the points relative to it.
 fn curve(out: Inst[>..]&, shape: Shape, a: float2, ctrl: float2, b: float2, width: f32, last: f32, color: float4) {
     let lo = float2 { min(min(a.x, b.x), ctrl.x), min(min(a.y, b.y), ctrl.y) };
@@ -164,7 +164,8 @@ fn scale_inst(i: Inst&, scale: f32, offset: float2) {
     let shape = (i.misc.x + 0.5) as! i64;
     if shape == shape_index(Shape.Rect) || shape == shape_index(Shape.Wood) { i.p0.x *= scale; i.p0.y *= scale; }
     if shape == shape_index(Shape.Ring) { i.p0.x *= scale; }
-    if shape == shape_index(Shape.Stream) || shape == shape_index(Shape.Beam) {
+    if shape == shape_index(Shape.Stream) || shape == shape_index(Shape.Beam) || shape == shape_index(Shape.Tube) ||
+       shape == shape_index(Shape.Heat) {
         i.p0 = i.p0 * float4 { scale, scale, scale, scale };
         i.p1.x *= scale;
         i.p1.y *= scale;

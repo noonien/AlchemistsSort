@@ -337,6 +337,7 @@ fn draw_finale(out: Inst[>..]&) {
 
 fn update_fx(dt: f32) {
     update_drops(dt);
+    update_bits(dt);
     update_finale();
 }
 
