@@ -169,34 +169,16 @@ events in order. Kinds: `SealBroken`, `SealSoftened`, `Thawed`, `HeatPulse`,
 `VineWithered`, `TendrilBurned`, `SalamanderHop`, `Transmuted`,
 `Overflowed`, `CatalystFired`, `Completed`.
 
-## Level format
+## Built-in levels
 
-**Shipped levels** (tutorials, finales, examples) are written in Goose in
-`src/core/levels.goose` and compiled in; there are no level files in the
-game's data. The JSON format below is for the player's own levels only
-(My Levels, `--file`, and the `E` export).
-
-Liquid letters as before, plus `Q` quicksilver, `U` gold, `*` the Drop.
-Bottle objects:
-
-```json
-{ "liquid": "GGBR", "murk": 3, "height": 6,
-  "body": "hourglass", "flip": 3,
-  "cover": "rime", "thaw": 4,
-  "fixture": "brazier",
-  "twin": 5 }
-```
-
-- `body`: `plain` `vow` `siphon` `hourglass` (`flip`) `athanor` `moonpetal`
-- `cover`: `seal` (`key`) `rime` (`thaw`) `shroud` `vine`
-- `fixture`: `brazier` `lantern` `catalyst` `root` (`spread`)
-- `murk`: how many of the lowest segments start murky (as `hidden` was)
-- top level: `"salamander": <index>`
-
-The old keys (`hidden`, `kind`: `mystery`/`frozen`/`cork`/`cloak`/
-`vault`/`gift`/`curtain`) are still read where a mapping exists: hidden →
-murk, mystery → vow, frozen → rime, cork/vault → seal, cloak → shroud.
-`gift` and `curtain` are rejected with a clear message.
+Every level is built into the game. There are no level files, no JSON, and
+no player-made levels: the My Levels screen, `--file` and the `E` export are
+gone. Hand-made levels (tutorials and finales) are a table in
+`src/core/levels.goose`, written with compact constructors close to how a
+level reads: liquid strings bottom to top (`"RRGB"`; `Q` quicksilver, `U`
+gold, `*` the Drop) plus the bottle's body, cover, fixture, murk, height and
+twin. The campaign looks hand-made levels up by number; every other level is
+generated from its seed. The tests solve every level in the table.
 
 ## Campaign: six chapters, then the Great Work
 
