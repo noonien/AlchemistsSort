@@ -108,8 +108,11 @@ fn draw_home(out: Inst[>..]&) {
 
 var map_page = 0;
 
-fn open_map() {
-    map_page = chapter_of(save.level);
+fn open_map() { open_map_at(save.level); }
+
+// The map, open at the chapter of level n.
+fn open_map_at(n: i64) {
+    map_page = chapter_of(n);
     screen_id = Screen.Map;
 }
 

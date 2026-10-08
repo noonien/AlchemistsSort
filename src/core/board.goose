@@ -302,6 +302,12 @@ fn can_pour(board: Board, from: i64, to: i64) -> bool {
 
 // --- making bottles -------------------------------------------------------------
 
+// The height of a Tall Flask that spans `rows` rows of flasks, with segments
+// the size of an ordinary flask's: 9 for two rows, 14 for three. Until flasks
+// stand in a grid that can hold them, it is held to MAX_CAP. Everything that
+// makes a tall flask asks this for its height.
+fn tall_cap(rows: i64) -> i64 { min(CAP * rows + rows - 1, MAX_CAP) }
+
 fn bottle(colors: const i64[:]) -> Bottle {
     assert(colors.len <= CAP);
     var b = Bottle { seg: [0; 8], .. };

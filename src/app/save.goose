@@ -3,8 +3,13 @@
 
 import std;
 import os;
+import core.campaign;
+
+// Version 2 came with the chapters; saves before it have no version.
+let SAVE_VERSION = 2;
 
 struct Save {
+    version: i64 = SAVE_VERSION,
     level: i64 = 1,             // the next level to play
     sound: bool = true,
     color_safe: bool = false,   // color-blind palette and symbols
@@ -52,13 +57,15 @@ fn load_save() -> Save {
     ensure_save_dir();
     var text: u8[>..] = [];
     if !read_file(save_path(), text) { return s; }
+    s.version = 1;
     each_split(text, '\n') {
         let eq = find(it, "=");
         if eq > 0 {
             let k = trim(it[..eq]);
             let v, ok = parse_int(trim(it[eq + 1..]));
             if ok {
-                if k == "level" { s.level = max(1, v); }
+                if k == "version" { s.version = v; }
+                else if k == "level" { s.level = max(1, v); }
                 else if k == "sound" { s.sound = v != 0; }
                 else if k == "color_safe" { s.color_safe = v != 0; }
                 else if k == "seed_like" { s.seed_like = clamp(v, 1, 999); }
@@ -66,12 +73,18 @@ fn load_save() -> Save {
             }
         }
     };
+    // Before the chapters, levels were numbered differently: start the
+    // player at the beginning of the chapter their old level falls in.
+    if s.version < SAVE_VERSION {
+        s.level = migrated_level(s.level);
+        s.version = SAVE_VERSION;
+    }
     s
 }
 
 fn write_save(s: Save) -> bool {
     if !ensure_save_dir() { return false; }
-    let text = str("level=", s.level, "\nsound=", if s.sound { 1 } else { 0 },
+    let text = str("version=", SAVE_VERSION, "\nlevel=", s.level, "\nsound=", if s.sound { 1 } else { 0 },
                    "\ncolor_safe=", if s.color_safe { 1 } else { 0 },
                    "\nseed_like=", s.seed_like, "\nlast_seed=", s.last_seed, "\n");
     write_file_atomic(save_path(), text)

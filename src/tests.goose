@@ -586,7 +586,7 @@ fn test_solver() {
     let pointless = board_of(["RGRG", "GRG"]);
     check(has_move(pointless) && dead_end(pointless, 1000), "a dead end can still have pours");
     check(cornered(pointless) && !cornered(b), "cornered: few pours and no empty flask");
-    let big = generate(level_spec(60).params, level_spec(60).seed).board;
+    let big = generate(level_spec(59).params, level_spec(59).seed).board;
     check(!dead_end(big, 10), "running out of budget proves nothing");
     // The only way on is a pour that just moves a bottle, to melt the ice.
     var ice = board_of(["RR", "", "RR"]);
@@ -609,8 +609,8 @@ fn test_resumable() {
     boards.push(board_of(["RGBR", "GBRG", "BRGB", "", ""]));
     boards.push(board_of(["RGRG", "GRGR"]));
     boards.push(board_of(["RGRG", "GRG"]));
-    boards.push(generate(level_spec(60).params, level_spec(60).seed).board);
-    boards.push(generate(level_spec(45).params, level_spec(45).seed).board);
+    boards.push(generate(level_spec(59).params, level_spec(59).seed).board);
+    boards.push(generate(level_spec(44).params, level_spec(44).seed).board);
     var path: Move[>..] = [];
     var stepped: Move[>..] = [];
     for b in boards {
@@ -670,7 +670,7 @@ fn test_generator() {
             0 => { q.murk = 3; name = "murk"; },
             1 => { q.seal = 2; name = "seal"; },
             2 => { q.vow = 1; name = "vow"; },
-            3 => { q.tall = 1; q.tall_height = 6; name = "tall"; },
+            3 => { q.tall = 1; q.tall_rows = 2; name = "tall"; },
             4 => { q.rime = 1; q.brazier = 1; name = "brazier"; },
             5 => { q.quicksilver = true; name = "quicksilver"; },
             6 => { q.siphon = 1; name = "siphon"; },
@@ -758,35 +758,104 @@ fn test_tools() {
 
 fn test_campaign() {
     test("campaign");
-    check(level_spec(1).hand_made, "level one is hand-made");
+    check(chapter_count() == 7 && chapter_info(6).last < 0, "six chapters, then the endless Great Work");
+    for c in 6 {
+        let ch = chapter_info(c);
+        check(ch.first == c * 15 + 1 && ch.last == ch.first + 14, "fifteen levels a chapter");
+        check(chapter_of(ch.first) == c && chapter_of(ch.last) == c, "a chapter's levels are its own");
+        check(level_spec(ch.first + 4).difficulty == Difficulty.Hard &&
+              level_spec(ch.first + 9).difficulty == Difficulty.Hard, "Hard at 5 and 10");
+        let fin = level_spec(ch.last);
+        check(fin.is_finale && fin.hand_made && fin.difficulty == Difficulty.SuperHard,
+              str(ch.name, " ends in a hand-made Super Hard finale"));
+        check(chapter_features(c).len >= 2, "every chapter brings modifiers");
+    }
+    check(chapter_of(91) == 6 && chapter_of(500) == 6, "the Great Work goes on");
+    check(!level_spec(105).hand_made && level_spec(105).difficulty == Difficulty.SuperHard, "and keeps the rhythm");
+    var last = 0;
     for f in ALL_FEATURES {
-        let s = level_spec(tutorial_level(f));
-        check(s.is_tutorial && s.tutorial == f && s.hand_made && s.difficulty == Difficulty.Normal,
-              "tutorial levels");
-        check(!introduced(f, tutorial_level(f) - 1), "nothing used before its tutorial");
+        let n = tutorial_level(f);
+        check(n > last, "modifiers come in order");
+        last = n;
+        let s = level_spec(n);
+        check(s.is_tutorial && s.tutorial == f && s.hand_made && s.difficulty == Difficulty.Normal && n % 5 != 0,
+              str(feature_name(f), " has its tutorial"));
+        let h, found = campaign_hand_made(n);
+        check(found && feature_on(h.board, f), str(feature_name(f), "'s tutorial uses it"));
     }
-    check(level_spec(15).difficulty == Difficulty.Hard && level_spec(30).difficulty == Difficulty.SuperHard,
-          "tags");
-    check(level_spec(23).params.colors <= level_spec(70).params.colors, "colors ramp up");
-    for n in 2..13 {
-        let p = level_spec(n).params;
-        check(p.seal + p.rime + p.shroud + p.vow == 0, "no mechanical modifier before the vow tutorial");
-    }
+    check(level_spec(1).hand_made && level_spec(2).mods.len == 0 && level_spec(2).params.murk == 0,
+          "levels 1 and 2 are plain");
+    check(level_spec(4).params.colors <= level_spec(44).params.colors &&
+          level_spec(44).params.colors <= level_spec(89).params.colors, "colors ramp up");
+}
+
+// Every level from 1 to 120: the hand-made ones are there, and the rest are
+// generated solvable, quickly, with what the ramp asks for.
+fn test_generated_levels() {
+    test("generated levels");
     let t0 = clock();
     var worst = 0.0;
     var worst_level = 0;
-    for n in 2..61 {
+    for n in 1..121 {
         let spec = level_spec(n);
-        if spec.hand_made { continue; }
+        if spec.hand_made {
+            let h, found = campaign_hand_made(n);
+            check(found && h.number == n, str("level ", n, " is built in"));
+            continue;
+        }
+        check(!spec.is_tutorial && !spec.is_finale, str("level ", n, ": tutorials and finales are hand-made"));
         let t = clock();
         let g = generate(spec.params, spec.seed);
         let dt = clock() - t;
-        if dt > worst { worst = dt; worst_level = n; }
-        check(g.stats.solved, str("level ", n, " is solvable"));
-        check(g.board.count <= 18, "fits the screen");
+        if dt > worst {
+            worst = dt;
+            worst_level = n;
+        }
+        check(g.stats.solved && validate(g.board).len == 0, str("level ", n, " is solvable and well formed"));
+        check(g.attempts <= 6, str("level ", n, " brews in a few attempts"));
+        check(g.board.count <= 18, str("level ", n, " fits the screen"));
+        for f in spec.mods {
+            check(introduced(f, n), str("level ", n, ": ", feature_name(f), " only after its tutorial"));
+            check(feature_on(g.board, f), str("level ", n, " has its ", feature_name(f)));
+        }
+        let newest, any = newest_feature(n);
+        check(!any || contains(spec.mods, newest), str("level ", n, " uses the newest modifier"));
+        check(!tall_level(n) || feature_on(g.board, Feature.Tall), str("level ", n, " has a tall flask"));
+        check(n < 3 || feature_on(g.board, Feature.Murk), str("level ", n, " has murk"));
+        let ch = chapter_of(n);
+        var earlier = 0;
+        for f in spec.mods { if f != Feature.Tall && chapter_of(tutorial_level(f)) < ch { earlier++; } }
+        if ch > 0 && ch < 6 && chapter_position(n) <= 2 {
+            var only_earlier = true;
+            for f in spec.mods { if chapter_of(tutorial_level(f)) >= ch { only_earlier = false; } }
+            check(only_earlier && earlier >= 2, str("level ", n, " warms up with two earlier modifiers"));
+        } else if ch > 0 && ch < 6 && !tall_level(n) {
+            let want = if spec.difficulty == Difficulty.Normal { 1 } else { 2 };
+            check(earlier >= want, str("level ", n, " uses earlier chapters' modifiers"));
+        } else if ch == 6 {
+            var drawn = 0;
+            for f in spec.mods { if f != Feature.Tall { drawn++; } }
+            check(drawn >= 3, str("level ", n, " draws three or four modifiers"));
+        }
     }
-    print("  campaign: levels 2-60 generated in ", clock() - t0, "s, slowest ", worst_level,
-          " at ", worst, "s");
+    print("  levels 1-120 generated in ", clock() - t0, "s, slowest ", worst_level, " at ", worst, "s");
+    var job = gen_begin(level_spec(97).params, level_spec(97).seed);
+    while !gen_step(job, 10) {}
+    check(board_hash(job.result.board) == board_hash(generate(level_spec(97).params, level_spec(97).seed).board),
+          "a level is the same board every time");
+}
+
+// Old saves kept the next level from before the chapters.
+fn test_saves() {
+    test("old saves");
+    check(migrated_level(1) == 1 && migrated_level(15) == 1 && migrated_level(16) == 16 &&
+          migrated_level(50) == 46 && migrated_level(90) == 76 && migrated_level(91) == 91 &&
+          migrated_level(400) == 91 && migrated_level(0) == 1, "to the start of the chapter that holds it");
+    for n in 1..200 {
+        let m = migrated_level(n);
+        check(m <= n && chapter_info(chapter_of(m)).first == m && migrated_level(m) == m,
+              "a chapter's first level, at or before the old one");
+    }
 }
 
 // --- enum tables -------------------------------------------------------------------
@@ -812,22 +881,112 @@ fn test_tables() {
 
 // --- shipped levels -------------------------------------------------------------------
 
-// Every hand-made level is well formed and can be won.
+// What a solution set off, pour by pour.
+struct PathFacts {
+    seen: bool[16] = [false; 16],   // by event kind
+    heat_ice: bool = false,         // heat reached a flask under ice
+    heat_seal: bool = false,        // a seal broken by heat
+    drop_key: bool = false,         // the Drop broke a seal
+    siphon_quicksilver: bool = false,   // quicksilver came out of a siphon's tap
+    into_moonpetal: bool = false,
+}
+
+fn kind_index(k: EventKind) -> i64 {
+    match k {
+        SealBroken => 0, SealSoftened => 1, Thawed => 2, HeatPulse => 3, Lit => 4, ShroudLifted => 5,
+        MurkCleared => 6, Flipped => 7, VineSpread => 8, VineWithered => 9, TendrilBurned => 10,
+        SalamanderHop => 11, Transmuted => 12, Overflowed => 13, CatalystFired => 14, Completed => 15,
+    }
+}
+
+fn path_facts(start: Board, path: Move[:]) -> PathFacts {
+    var f = PathFacts {};
+    var b = start;
+    for m in path {
+        let before = b;
+        let src = b.bottles[m.from];
+        let dst = b.bottles[m.to];
+        let r = pour(b, m.from, m.to);
+        if r.popped && r.color == DROP { f.drop_key = true; }
+        if src.body == Body.Siphon && r.color == QUICKSILVER { f.siphon_quicksilver = true; }
+        if dst.body == Body.Moonpetal && r.amount > 0 { f.into_moonpetal = true; }
+        for e in r.events {
+            f.seen[kind_index(e.kind)] = true;
+            if e.kind == EventKind.HeatPulse && before.bottles[e.bottle].cover == Cover.Rime { f.heat_ice = true; }
+            if e.kind == EventKind.SealBroken && e.from >= 0 && b.bottles[e.from].fixture == Fixture.Brazier {
+                f.heat_seal = true;
+            }
+        }
+    }
+    f
+}
+
+// What each hand-made level is there to show, on the way to winning it.
+fn shows(number: i64, f: PathFacts) -> bool {
+    fn saw(k: EventKind) -> bool { f.seen[kind_index(k)] }
+    match number {
+        6 => saw(EventKind.SealBroken),
+        18 => saw(EventKind.Thawed),
+        21 => f.heat_ice,
+        36 => saw(EventKind.Overflowed),
+        48 => saw(EventKind.Lit),
+        51 => saw(EventKind.ShroudLifted),
+        56 => saw(EventKind.Flipped),
+        63 => saw(EventKind.VineSpread) && saw(EventKind.VineWithered),
+        66 => saw(EventKind.SalamanderHop) && f.heat_ice,
+        71 => saw(EventKind.Lit) && f.into_moonpetal,
+        78 => saw(EventKind.Transmuted),
+        86 => saw(EventKind.CatalystFired) && saw(EventKind.Flipped),
+        // The finales: the interactions are the point.
+        15 => saw(EventKind.SealBroken),
+        30 => f.heat_ice && f.heat_seal,
+        45 => saw(EventKind.Overflowed) && f.siphon_quicksilver,
+        60 => saw(EventKind.Lit) && saw(EventKind.ShroudLifted) && saw(EventKind.Flipped),
+        75 => saw(EventKind.TendrilBurned) && saw(EventKind.VineWithered) && saw(EventKind.Lit) && f.into_moonpetal,
+        90 => f.drop_key && saw(EventKind.CatalystFired) && saw(EventKind.Transmuted) && saw(EventKind.ShroudLifted) &&
+              saw(EventKind.Flipped) && f.heat_ice,
+        _ => true,
+    }
+}
+
+// The level without the modifier it teaches, where it cannot be won without
+// it: quicksilver as an ordinary color, a siphon or an hourglass made plain,
+// the catalyst taken away.
+fn without_lesson(number: i64, board: Board) -> Board, bool {
+    var b = board;
+    var any = false;
+    for i in b.count {
+        var x .= b.bottles[i];
+        if number == 26 { for k in x.n as i64 { if x.seg[k] == QUICKSILVER { x.seg[k] = 6; any = true; } } }
+        if number == 33 && x.body == Body.Siphon { x.body = Body.Plain; any = true; }
+        if number == 56 && x.body == Body.Hourglass { x.body = Body.Plain; any = true; }
+        if number == 86 && x.fixture == Fixture.Catalyst { x.fixture = Fixture.None; any = true; }
+    }
+    return b, any;
+}
+
+// Every hand-made level is well formed, can be won without a huge search,
+// and its solution uses what the level is there to show.
 fn test_levels() {
     test("shipped levels");
+    var numbers: i64[>..] = [];
     for k in HAND_MADE_COUNT {
         let h = hand_made(k);
         let name = h.info.name;
         let err = validate(h.board);
         check(err.len == 0, str(name, ": ", err));
-        check(h.info.hint.len > 0, str(name, " has a hint"));
+        check(h.info.hint.len > 0 && h.info.name.len > 0, str(name, " has a name and a hint"));
         check(h.board.per_row > 0 && !is_won(h.board), str(name, " is settled and not yet won"));
+        check(h.number > 0 && !contains(numbers, h.number), str(name, " has a level number of its own"));
+        numbers.push(h.number);
+        let back, found = campaign_hand_made(h.number);
+        check(found && back.info.name == name, str(name, " is found by its number"));
         var moves: Move[>..] = [];
-        check(solve(h.board, 200000, moves).solved, str(name, " can be won"));
-        if h.number > 0 {
-            let back, found = campaign_hand_made(h.number);
-            check(found && back.info.name == name, str(name, " is found by its number"));
-        }
+        let s = solve(h.board, 100000, moves);
+        check(s.solved && s.expanded <= 30000, str(name, " can be won"));
+        check(shows(h.number, path_facts(h.board, moves)), str(name, ": the solution uses what it teaches"));
+        let plain, any = without_lesson(h.number, h.board);
+        if any { check(solve(plain, 100000, moves).exhausted, str(name, " cannot be won without it")); }
     }
 }
 
@@ -858,6 +1017,8 @@ fn main() {
     test_generator();
     test_tools();
     test_campaign();
+    test_generated_levels();
+    test_saves();
     test_tables();
     print(checks - failures, "/", checks, " checks passed");
     if failures > 0 { exit(1); }
