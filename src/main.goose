@@ -25,6 +25,7 @@ import app.shaders;
 import app.palette;
 import app.text;
 import app.sfx;
+import app.music;
 import app.save;
 import app.scene;
 import app.fx;
@@ -1268,11 +1269,16 @@ fn toggle_row(out: Inst[>..]&, y: f32, label: const u8[:], on: bool) -> bool {
 fn draw_settings(out: Inst[>..]&) {
     text_shadowed(0, VW * 0.5, 90.0, "Settings", TextStyle.Heading, gold(1.0), Align.Center);
     panel(out, v2(VW * 0.5, 330.0), v2(220.0, 170.0));
-    if toggle_row(out, 220.0, "Sound", save.sound) {
+    if toggle_row(out, 190.0, "Sound", save.sound) {
         save.sound = !save.sound;
         sound_on = save.sound;
         write_save(save);
         play(Sfx.Tool);
+    }
+    if toggle_row(out, 240.0, "Music", save.music) {
+        save.music = !save.music;
+        music_on = save.music;
+        write_save(save);
     }
     if toggle_row(out, 290.0, "Color-blind palette", save.color_safe) {
         save.color_safe = !save.color_safe;
@@ -1447,6 +1453,15 @@ fn draw_frame(dt: f32) {
 }
 
 // Whether this frame has anything moving or waiting on input soon.
+// The room whose music plays: the level in play's, else the player's next.
+fn music_room_now() -> i64 {
+    var n = save.level;
+    if screen_id == Screen.Play && (mode == PlayMode.Campaign || pending_load) { n = level_number; }
+    else if screen_id == Screen.Play && mode == PlayMode.Seed { n = play_like; }
+    let c = chapter_info(chapter_of(n));
+    music_room(n, c.theme, c.first)
+}
+
 fn lively() -> bool {
     if pending_load || any_pouring() || taps.len > 0 || clicks.len > 0 { return true; }
     if screen_id == Screen.Play && (shuffling || !board_search.done) { return true; }
@@ -1458,7 +1473,8 @@ fn lively() -> bool {
     for i in MAX_BOTTLES {
         if now < shake_until[i] || now - complete_at[i] < 1.3 { return true; }
     }
-    fx_lively()
+    // Music being made gets a slice every frame.
+    fx_lively() || music_making
 }
 
 fn env_or(name: const u8[:], fallback: const u8[:], out: u8[>..]&) {
@@ -1489,6 +1505,7 @@ fn main() {
         else if opt == "--like" && has_value { let n, ok = parse_int(argv[a + 1]); if ok { like = n; } a++; }
         else if opt == "--hand" && has_value { let n, ok = parse_int(argv[a + 1]); if ok { start_hand_level = n; } a++; }
         else if opt == "--autoplay" { autoplay = true; }
+        else if opt == "--export-music" && has_value { exit(if export_music(argv[a + 1]) { 0 } else { 1 }); }
         else if opt == "--click" && a + 2 < argv.len {
             let x, okx = parse_int(argv[a + 1]);
             let y, oky = parse_int(argv[a + 2]);
@@ -1502,6 +1519,7 @@ fn main() {
                   --seed S       play the board brewed from seed S, shaped like level L (default 20)
                   --hand K       play built-in hand-made level K (0 to 9; levels.goose)
                   --autoplay     let the hint solver play
+                  --export-music DIR   write each room's music loop to DIR as a WAV file
                 """);
             return;
         }
@@ -1512,6 +1530,7 @@ fn main() {
     env_or("ALCHEMIST_SORT_FONTS", str(data_dir, "/fonts"), font_dir);
     save = load_save();
     sound_on = save.sound;
+    music_on = save.music;
 
     guard gfx::open("Alchemist's Sort", 540, 960, gfx::WINDOW_RESIZABLE) else {
         write_stderr(str("could not open a window: ", gfx::error(), "\n"));
@@ -1519,7 +1538,7 @@ fn main() {
     }
     if !init_draw() { abort(str("could not make the pipeline: ", gfx::error())); }
     if !init_text(font_dir) { abort(str("could not load fonts: ", ui::error())); }
-    if frames < 0 { init_sounds(); }
+    if frames < 0 { init_sounds(); init_music(); }
     rand = rng { random_seed() };
     fit_canvas();
     if start_hand_level >= 0 { start_hand(start_hand_level); }
@@ -1543,6 +1562,7 @@ fn main() {
         }
         if pending_load && !brewing && drawn > 0 { do_pending_load(); }
         step_jobs();
+        step_music(music_room_now(), dt);
         handle_keys();
         if screen_id == Screen.Play && !pending_load { update_play(dt); }
         update_particles(dt);

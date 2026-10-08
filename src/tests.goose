@@ -11,6 +11,7 @@ import core.levels;
 import core.tools;
 import core.campaign;
 import app.shaders;
+import app.tunes;
 
 var failures = 0;
 var checks = 0;
@@ -844,6 +845,33 @@ fn test_levels() {
     }
 }
 
+// --- music ------------------------------------------------------------------------
+
+// A short loop (four bars of each of two rooms): its end runs on into its
+// start, and it stays under full scale.
+fn test_music() {
+    test("music");
+    var notes: Note[>..] = [];
+    var pcm: f32[>..] = [];
+    for room in [0, 5] {
+        var job = tune_begin(room, 4, notes, pcm);
+        while !tune_step(job, notes, pcm, 1.0) {}
+        check(pcm.len == job.period && notes.len > 0, "a whole loop is made");
+        var peak = 0.0;
+        var step = 0.0;
+        for v, i in pcm {
+            peak = max(peak, abs(v as f64));
+            if i > 0 { step = max(step, abs(v - pcm[i - 1])); }
+        }
+        let last = pcm.len - 1;
+        let wrap = abs(pcm[0] - pcm[last]) as f64;
+        let bend = abs((pcm[0] - pcm[last]) - (pcm[last] - pcm[last - 1])) as f64;
+        check(peak > 0.05 && peak < 0.9, str("the peak is under 0.9: ", peak));
+        check(wrap <= step && bend < 0.01, str("the loop point is smooth: ", wrap, " ", bend));
+    }
+    check(music_room(95, 6, 91) == 0 && music_room(106, 6, 91) == 1 && music_room(20, 1, 16) == 1, "rooms for the music");
+}
+
 fn main() {
     test_levels();
     test_pour_rules();
@@ -873,6 +901,7 @@ fn main() {
     test_tools();
     test_campaign();
     test_tables();
+    test_music();
     print(checks - failures, "/", checks, " checks passed");
     if failures > 0 { exit(1); }
 }

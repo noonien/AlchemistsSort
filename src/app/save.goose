@@ -7,6 +7,7 @@ import os;
 struct Save {
     level: i64 = 1,             // the next level to play
     sound: bool = true,
+    music: bool = true,
     color_safe: bool = false,   // color-blind palette and symbols
     seed_like: i64 = 20,        // custom seed boards look like this level
     last_seed: i64 = 1234,
@@ -60,6 +61,7 @@ fn load_save() -> Save {
             if ok {
                 if k == "level" { s.level = max(1, v); }
                 else if k == "sound" { s.sound = v != 0; }
+                else if k == "music" { s.music = v != 0; }
                 else if k == "color_safe" { s.color_safe = v != 0; }
                 else if k == "seed_like" { s.seed_like = clamp(v, 1, 999); }
                 else if k == "last_seed" { s.last_seed = max(0, v); }
@@ -72,6 +74,7 @@ fn load_save() -> Save {
 fn write_save(s: Save) -> bool {
     if !ensure_save_dir() { return false; }
     let text = str("level=", s.level, "\nsound=", if s.sound { 1 } else { 0 },
+                   "\nmusic=", if s.music { 1 } else { 0 },
                    "\ncolor_safe=", if s.color_safe { 1 } else { 0 },
                    "\nseed_like=", s.seed_like, "\nlast_seed=", s.last_seed, "\n");
     write_file_atomic(save_path(), text)
