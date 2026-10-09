@@ -30,7 +30,7 @@ let COLOR_NAMES: const u8[:][18] = ["", "Ruby", "Amber", "Sun", "Lime", "Emerald
 // What kind of flask it is.
 enum Body {
     Plain,
-    Vow,        // takes the first color poured in, then only that; must end full
+    Vow,        // takes the first color poured in, then only that
     Siphon,     // pours its bottom run, from a tap at the base
     Hourglass,  // flips over every `flip_every` pours made anywhere
     Athanor,    // turns quicksilver poured in into gold
@@ -887,7 +887,7 @@ fn pour(board: Board&, from: i64, to: i64) -> PourResult {
 fn is_won(board: Board) -> bool {
     for i in board.count {
         let b = board.bottles[i];
-        if b.done || (b.n == 0 && b.body != Body.Vow) { continue; }
+        if b.done || b.n == 0 { continue; }
         if !complete_on(board, i) { return false; }
     }
     true

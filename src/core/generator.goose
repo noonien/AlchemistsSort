@@ -13,7 +13,7 @@ struct GenParams {
     partial: i64 = 0,       // segments moved off full bottles into the spares
     murk: i64 = 0,          // bottles whose lower layers start under smoke
     split: bool = false,    // one color dealt as two pairs in two bottles
-    vow: i64 = 0,           // empty vow flasks
+    vow: i64 = 0,           // empty vow flasks, in place of as many spares
     seal: i64 = 0,
     rime: i64 = 0,
     tall: i64 = 0,          // tall flasks, each with one color dealt to fill it
@@ -115,8 +115,11 @@ fn deal(p: GenParams, r: rng&) -> Board {
     let colors = clamp(p.colors, 1, MAX_COLORS);
     board.colors = colors;
     let talls = clamp(p.tall, 0, colors);
-    let extra = p.vow + (if p.athanor { 1 } else { 0 });
-    let bottles = min(colors + p.empties, MAX_BOTTLES - extra - talls);
+    // A vow flask is one of the spares, not one more: an empty vow need not
+    // be used, so it is there only when the board needs it.
+    let vows = clamp(p.vow, 0, p.empties);
+    let extra = vows + (if p.athanor { 1 } else { 0 });
+    let bottles = min(colors + p.empties - vows, MAX_BOTTLES - extra - talls);
     // What each dealt color is poured as: a dye, or quicksilver, or the
     // athanor's gold. A vine wants emerald on the board to wither it.
     var liquid: i64[MAX_COLORS + 1] = [0; MAX_COLORS + 1];
@@ -193,7 +196,7 @@ fn deal(p: GenParams, r: rng&) -> Board {
         b.n = (tall - CAP) as u8;
         push_bottle(board, b);
     }
-    for k in p.vow {
+    for k in vows {
         var b = Bottle { .. };
         b.body = Body.Vow;
         push_bottle(board, b);

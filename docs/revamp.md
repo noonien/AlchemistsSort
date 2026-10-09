@@ -76,7 +76,10 @@ fits. **Heat**: each heat pulse softens it, and the second pulse breaks it
 with no liquid landing.
 
 **Vow Flask** (was Mystery). Takes the first color poured in, then only that
-color. It must end full. The Drop is accepted and doesn't set the vow.
+color. It doesn't have to be used: like any flask it counts toward the win
+only once it holds liquid, so an empty vow flask at the end is just an empty
+flask, and one partly filled isn't done. The Drop is accepted and doesn't set
+the vow.
 
 **Tall Flask**. Spans 2 or 3 grid rows; `cap` 9 or 14. The level has one color with `cap` segments to
 fill it. Recurring from level 8 onward (see the campaign). **Nothing ever
@@ -208,7 +211,10 @@ sends a heat pulse, every Hourglass flips, every Lantern lights.
 - **Drop:** one color has one segment fewer to make room for it, so a level
   with the Drop but no color one short is invalid.
 - **Vow:** a vow flask that starts with liquid is vowed to that liquid's
-  color.
+  color. Since an empty vow need not be used, a level puts it where the
+  board needs it: the generator deals it in place of one of the spare
+  flasks, and in levels 11 and 15 it is the spare without which the level
+  can't be won.
 
 `PourResult` keeps its fields and gains an **event list** (a fixed array,
 e.g. up to 32) of `Event { kind, bottle, from }`. The game animates the

@@ -88,7 +88,9 @@ Smoke is the background of every level from 3 on, and from level 12 every
 fourth level has a Tall Flask, spanning two rows of the grid the flasks
 stand in (three on Hard levels). A tall flask is for one color, tinted on its
 glass: it comes with some of that color, takes only that color, and nothing
-ever comes out of it. The rules of every modifier, and how they meet
+ever comes out of it. A Vow Flask takes the first color poured in, then
+only that one; it doesn't have to be used, and left empty it doesn't stand
+in the way of the win. The rules of every modifier, and how they meet
 through heat, light, flow, flip, growth and transmutation, are in
 [docs/revamp.md](docs/revamp.md).
 

@@ -56,7 +56,7 @@ struct Search {
 
 // How far a position looks from solved: a run boundary costs one (the Drop
 // fits anywhere and makes none), as does each murky segment, each cover
-// still standing, an unfilled vow and quicksilver an athanor has yet to turn.
+// still standing and quicksilver an athanor has yet to turn.
 fn heuristic(board: Board) -> i64 {
     var h = 0;
     let athanor = has_body(board, Body.Athanor);
@@ -76,7 +76,6 @@ fn heuristic(board: Board) -> i64 {
         }
         for k in b.n as i64 { if murky(b, k) { h += 1; } }
         if covered(b) { h += 2; }
-        if b.body == Body.Vow && b.n < b.cap { h += 1; }
     }
     max(0, h - board.colors)
 }

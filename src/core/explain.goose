@@ -306,9 +306,9 @@ fn explain_flask(board_in: Board, i: i64) -> Card {
     match b.body {
         Vow => {
             if b.done {} else if b.vow != 0 {
-                line(LineKind.State, str("Vow Flask: sworn to ", color_name(b.vow), ". It takes only that, and must end full."));
+                line(LineKind.State, str("Vow Flask: sworn to ", color_name(b.vow), ". It takes only that."));
             } else {
-                line(LineKind.State, "Vow Flask: takes the first color poured in, then only that. It must end full.");
+                line(LineKind.State, "Vow Flask: takes the first color poured in, then only that. It can stay empty.");
             }
         },
         Siphon => if !b.done {
@@ -489,7 +489,7 @@ fn rule_of(f: Feature) -> const u8[:] {
         Murk => "Smoke hides layers. Each clears when it reaches the top, or when a lit lantern's light reaches its flask.",
         Seal => "Wax hides what's inside. Pour its color onto it to break it; two warmings break it too.",
         Tall => "Holds more than four, all of its own color: only that color goes in, and nothing comes out.",
-        Vow => "Takes the first color poured in, then only that, and must end full.",
+        Vow => "Takes the first color poured in, then only that. It can stay empty.",
         Rime => "Ice keeps a flask shut. Its number counts down with every pour, made anywhere; at 0 it thaws.",
         Brazier => "Each pour into its flask warms the flasks beside it.",
         Quicksilver => "Pours onto any color, and sinks to the bottom.",

@@ -213,12 +213,17 @@ fn test_vow() {
     check(r.ok && !has_event(r, EventKind.Vowed, 2), "green into the vow flask, already vowed");
     check(is_won(b) && b.bottles[2].done, "won once the vow flask is full");
 
-    test("vow must end full");
+    test("a vow need not be used");
     b = board_of(["RRRR", "GGGG", ""]);
     b.bottles[2].body = Body.Vow;
     settle(b);
-    check(!is_won(b), "an empty vow flask blocks the win");
+    check(is_won(b) && !is_lost(b), "an empty vow flask at the end is a win");
     check(!can_pour(b, 0, 2), "sealed bottles cannot fill it");
+    b = board_of(["RRRR", "GG", "GG"]);
+    b.bottles[2].body = Body.Vow;
+    settle(b);
+    check(!is_won(b), "a vow flask partly filled is not done");
+    check(pour(b, 1, 2).ok && is_won(b), "until it is full");
 
     test("the Drop does not set a vow");
     b = board_of(["G*", "", "GGG"]);
@@ -1025,6 +1030,7 @@ fn shows(number: i64, f: PathFacts) -> bool {
     fn saw(k: EventKind) -> bool { f.seen[kind_index(k)] }
     match number {
         6 => saw(EventKind.SealBroken),
+        11 => saw(EventKind.Vowed),
         18 => saw(EventKind.Thawed),
         21 => f.heat_ice,
         36 => saw(EventKind.Overflowed),
@@ -1037,7 +1043,7 @@ fn shows(number: i64, f: PathFacts) -> bool {
         78 => saw(EventKind.Transmuted),
         86 => saw(EventKind.CatalystFired) && saw(EventKind.Flipped),
         // The finales: the interactions are the point.
-        15 => saw(EventKind.SealBroken),
+        15 => saw(EventKind.SealBroken) && saw(EventKind.Vowed),
         30 => f.heat_ice && f.heat_seal,
         45 => saw(EventKind.Overflowed) && f.siphon_quicksilver,
         60 => saw(EventKind.Lit) && saw(EventKind.ShroudLifted) && saw(EventKind.Flipped),
@@ -1050,7 +1056,8 @@ fn shows(number: i64, f: PathFacts) -> bool {
 
 // The level without the modifier it teaches, where it cannot be won without
 // it: quicksilver as an ordinary color, a siphon or an hourglass made plain,
-// the catalyst taken away.
+// the catalyst taken away, the vow flask shut (an empty vow need not be used,
+// so it is there to be the spare the level needs).
 fn without_lesson(number: i64, board: Board) -> Board, bool {
     var b = board;
     var any = false;
@@ -1060,6 +1067,7 @@ fn without_lesson(number: i64, board: Board) -> Board, bool {
         if number == 33 && x.body == Body.Siphon { x.body = Body.Plain; any = true; }
         if number == 56 && x.body == Body.Hourglass { x.body = Body.Plain; any = true; }
         if number == 86 && x.fixture == Fixture.Catalyst { x.fixture = Fixture.None; any = true; }
+        if (number == 11 || number == 15) && x.body == Body.Vow { x.done = true; any = true; }
     }
     return b, any;
 }
