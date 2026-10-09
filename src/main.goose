@@ -1345,15 +1345,25 @@ fn draw_play(out: Inst[>..]&) {
     }
 }
 
-// The flask drawn under a tap: the front one where two overlap, with
-// generous room round each, as taps had before the grid.
+// The flask drawn under a tap, with generous room at the sides and below
+// but little above, where the next row's flask stands. Where two areas
+// overlap (a lifted flask reaches into the row above), the flask whose
+// body is nearest the tap wins.
 fn flask_hit(c: float2) -> i64 {
     var hit = -1;
+    var best: f32 = 0.0;
     for i in drawing {
         if i >= board.count { continue; }
         let half = slots[i].half;
         let center = slots[i].pos - v2(0.0, if i == selected { half.x * 1.2 } else { 0.0 });
-        if in_rect(c, center, half + v2(half.x * 0.4, half.x * 0.6)) { hit = i; }
+        let top = center.y - half.y - half.x * 0.35;
+        let bottom = center.y + half.y + half.x * 0.6;
+        if abs(c.x - center.x) > half.x * 1.4 || c.y < top || c.y > bottom { continue; }
+        // How far outside the body itself, in half widths.
+        let dx = max(0.0, abs(c.x - center.x) - half.x);
+        let dy = max(0.0, abs(c.y - center.y) - half.y);
+        let d = (dx + dy) / half.x;
+        if hit < 0 || d <= best { hit = i; best = d; }
     }
     hit
 }
