@@ -1,12 +1,13 @@
 // The goose: a secret on the title screen, and a nod to Goose, the
-// language the game is brewed in. Now and then a goose peeks over the far
-// end of the bench, looks about, and ducks away again. Tap it while it
-// peeks and it hops up onto the bench, fluffs itself up and bobs its head
-// at you, indignant; it dashes off, stops dead, doubles back, thinks
-// better of it, then spreads its wings wide and charges, neck stretched
-// out low, hissing, and barges breast first into the little yellow
-// vial. Over goes the vial with a splash
-// and a puff of sparkles; the goose honks, a feather or two drifting down,
+// language the game is brewed in. Five seconds after the title screen
+// comes up, a goose hops up onto the bench of its own accord; after that,
+// now and then it peeks over the far end of the bench, looks about, and
+// ducks away again, and a tap while it peeks brings it out again. Out, it
+// fluffs itself up and bobs its head at you, indignant; it dashes off,
+// stops dead, doubles back, thinks better of it, then spreads its wings
+// wide and charges, neck stretched out low, hissing, and barges breast
+// first into the little yellow vial. Over goes the vial with a splash and
+// a puff of sparkles; the goose honks, a feather or two drifting down,
 // folds its wings and storms off home behind the bench. A moment later the
 // vial is back in its place. Tap it on the bench and it spreads its wings
 // and honks at you.
@@ -45,6 +46,7 @@ var goose_next: f64 = 0.0;          // when it next peeks
 var goose_last: f64 = 0.0;          // the act's clock at the last frame, for its cues
 var goose_drawn: f64 = -9.0;        // when the title screen was last drawn
 var goose_fluster: f64 = -9.0;      // when it was last tapped on the bench
+var goose_auto = false;             // its next appearance is the romp, untapped
 
 // A peek, in seconds: up over the edge, a look round, and down again.
 let PEEK_TIME: f64 = 5.0;
@@ -236,13 +238,15 @@ fn update_goose() {
     // Back on the title screen after a while: it starts out of sight.
     if now - goose_drawn > 0.5 {
         goose_act = GooseAct.Away;
-        goose_next = now + 9.0 + 6.0 * hash01(now * 0.53);
+        goose_next = now + 5.0;
+        goose_auto = true;
         goose_last = 0.0;
     }
     goose_drawn = now;
     let e = now - goose_from;
     if goose_act == GooseAct.Away && now >= goose_next {
-        goose_act = GooseAct.Peek;
+        goose_act = if goose_auto { GooseAct.Romp } else { GooseAct.Peek };
+        goose_auto = false;
         goose_from = now;
         goose_last = 0.0;
         return;
