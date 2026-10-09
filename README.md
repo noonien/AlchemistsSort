@@ -77,9 +77,7 @@ this level, each with its rule and the ways it meets the others here; tap a
 line and its flasks light up on the board. **Press and hold** a flask (or
 right-click it) to read it: what it is, how it stands, why it can't pour
 right now and what would change that, with dotted lines to the flasks tied
-to it. While a flask is selected, the ones that can't take its pour are
-dimmed with a lock, and small marks over the others show what that pour
-would set off there.
+to it.
 
 The campaign is six chapters of 15 levels, then the endless Great Work.
 In each chapter, levels 5 and 10 are **Hard** and 15 is a hand-made **Super

@@ -1188,9 +1188,7 @@ fn draw_play(out: Inst[>..]&) {
     text(0, VW - 116.0, 40.0, str(board.pours), TextStyle.Heading, white(0.95), Align.Center);
     text(0, VW - 116.0, 70.0, "moves", TextStyle.Tiny, white(0.7), Align.Center);
 
-    update_preview();
     draw_board(out);
-    draw_pour_preview(out);
     draw_focus(out);
 
     // Toolbar.
@@ -1228,15 +1226,15 @@ fn draw_play(out: Inst[>..]&) {
     }
 }
 
-// The flask drawn under a tap: the front one where two overlap, with a
-// little room round each, but not so much it reaches a neighbor.
+// The flask drawn under a tap: the front one where two overlap, with
+// generous room round each, as taps had before the grid.
 fn flask_hit(c: float2) -> i64 {
     var hit = -1;
     for i in drawing {
         if i >= board.count { continue; }
         let half = slots[i].half;
         let center = slots[i].pos - v2(0.0, if i == selected { half.x * 1.2 } else { 0.0 });
-        if in_rect(c, center, half + v2(half.x * 0.2, half.x * 0.25)) { hit = i; }
+        if in_rect(c, center, half + v2(half.x * 0.4, half.x * 0.6)) { hit = i; }
     }
     hit
 }

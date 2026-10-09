@@ -222,19 +222,13 @@ Every sentence the game says about the rules comes from
   pour into the Brazier on its left melts one more."), what it can't do now
   and what would change that, and the flasks tied to it.
 - `refusal(board, from, to)`: the message a refused tap shows.
-- `preview_pours(board, from)`: every pour from a flask tried on a copy of
-  the board, with the marks of what each would set off (heat, thaw, seal
-  break, flip, vine spread or wither, light, the salamander's hop, gold,
-  overflow, completion). What every allowed pour sets off alike (a rime or
-  hourglass counting down, the salamander's hop) comes back apart, so each
-  flask shows only what is its own.
-
-The game shows them three ways: the **Grimoire** (the book in the level's
+The game shows them two ways: the **Grimoire** (the book in the level's
 header; tapping a line lights its flasks and ties on the board for a few
-seconds, and the book pulses once after a tutorial's panel), a **flask's
+seconds, and the book pulses once after a tutorial's panel) and a **flask's
 card** (press and hold, or right-click; it sits where it covers least of
-the flasks it is about), and **pour marks** while a flask is selected
-(flasks that can't take the pour are dimmed with a lock).
+the flasks it is about). A selected flask shows nothing extra on the
+others: working out where a pour can go is left to the player. Taps act
+the moment the flask is pressed; a press held still also shows the card.
 
 ## Built-in levels
 

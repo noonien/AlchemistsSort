@@ -1235,52 +1235,8 @@ fn test_explain() {
         for e in es { any += e.effects.len; for x in e.effects { check(x.flasks.len > 0 && x.text.len > 0, str("effects name flasks: ", x.text)); } }
         check(es.len >= 3 && any > 0, str(h.info.name, ": a finale's grimoire"));
     }
-
-    test("pour preview");
-    for k in HAND_MADE_COUNT {
-        let h = hand_made(k);
-        for from in h.board.count {
-            if !can_pour_from(h.board.bottles[from]) { continue; }
-            let p, common = preview_pours(h.board, from);
-            for j in h.board.count {
-                var copy = h.board;
-                let r = pour(copy, from, j);
-                check(p[j].ok == r.ok, "the preview knows which pours go");
-                if !r.ok { continue; }
-                // What it shows, its own and the common marks, is what the pour does.
-                var seen: Mark[..11] = [];
-                for m in p[j].marks { add_mark(seen, m); }
-                for m in common { add_mark(seen, m); }
-                let real = marks_of(h.board, r);
-                var all_common = true;
-                for m in real { if !contains(seen[..], m) { all_common = false; } }
-                check(all_common, str(h.info.name, ": the marks match a real pour"));
-                for m in p[j].marks { check(contains(real[..], m), "no mark the pour doesn't make"); }
-            }
-        }
-    }
-    b = row_of(["RG", "", "GGR", "BBB", "B"]);
-    b.bottles[0] = rime(b.bottles[0], 2);
-    b.bottles[1] = brazier(b.bottles[1]);
-    b.bottles[2] = seal(b.bottles[2], 'B');
-    let p, common = preview_pours(b, 4);
-    check(p[1].ok && p[3].ok && p[2].ok && !p[0].ok, "the pours that go");
-    check(contains(p[1].marks[..], Mark.Thaw) && contains(p[1].marks[..], Mark.Heat), "into the brazier: thaw and heat");
-    check(contains(p[2].marks[..], Mark.Unseal) && !contains(p[2].marks[..], Mark.Thaw), "onto the seal: it breaks");
-    check(contains(p[3].marks[..], Mark.Complete), "a completion");
-    check(common.len == 0, "nothing common to every pour");
-    let tut = hand_made(7).board;   // the brazier between two rimes
-    let p2, common2 = preview_pours(tut, 4);
-    check(p2[1].ok && contains(p2[1].marks[..], Mark.Heat) && !contains(p2[5].marks[..], Mark.Heat),
-          "heat on ice shows, even before it melts");
-    b = row_of(["RG", "R", "R", "", ""]);
-    b.salamander = 2;
-    let p3, common3 = preview_pours(b, 1);
-    check(contains(common3[..], Mark.Hop) && !contains(p3[3].marks[..], Mark.Hop), "the hop is the same for every pour");
 }
 
-// A short loop (four bars of each of two rooms): its end runs on into its
-// start, and it stays under full scale.
 fn test_music() {
     test("music");
     var notes: Note[>..] = [];

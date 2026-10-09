@@ -44,19 +44,10 @@ var card_held = false;          // goes when the press is let go; else at the ne
 var card_t: f64 = 0.0;
 var flask_card: Card;
 
-// What each flask would make of the selected flask's pour, worked out once
-// per selection.
-var preview_from = -1;
-var preview_key: i64 = -1;
-var previews: Preview[MAX_BOTTLES];
-var preview_common: Mark[..11];
-
 fn reset_guides() {
     focus_until = 0.0;
     press_flask = -1;
     card_flask = -1;
-    preview_from = -1;
-    preview_key = -1;
 }
 
 // --- colors and icons ---------------------------------------------------------------------
@@ -77,28 +68,6 @@ fn tie_icon(t: Tie) -> Icon {
     match t {
         Heat => Icon.Flame, Light => Icon.Sun, Twin => Icon.Overflow, Vine => Icon.Leaf,
         Salamander => Icon.Hop, Catalyst => Icon.Rune, Flow => Icon.Seed,
-    }
-}
-
-fn mark_icon(m: Mark) -> Icon {
-    match m {
-        Heat => Icon.Flame, Thaw => Icon.Flake, Unseal => Icon.Unseal, Flip => Icon.Flip, Grow => Icon.Leaf,
-        Wither => Icon.Wither, Light => Icon.Sun, Hop => Icon.Hop, Gold => Icon.Gold, Overflow => Icon.Overflow,
-        Complete => Icon.Check,
-    }
-}
-
-fn mark_color(m: Mark) -> float4 {
-    match m {
-        Heat, Hop => float4 { 1.0, 0.6, 0.25, 1.0 },
-        Thaw => float4 { 0.75, 0.92, 1.0, 1.0 },
-        Unseal => float4 { 1.0, 0.55, 0.5, 1.0 },
-        Flip => float4 { 0.95, 0.8, 0.5, 1.0 },
-        Grow => float4 { 0.55, 0.9, 0.4, 1.0 },
-        Wither => float4 { 0.8, 0.62, 0.35, 1.0 },
-        Light, Gold => float4 { 1.0, 0.88, 0.45, 1.0 },
-        Overflow => float4 { 0.6, 0.85, 1.0, 1.0 },
-        Complete => float4 { 0.55, 1.0, 0.65, 1.0 },
     }
 }
 
@@ -369,18 +338,20 @@ fn board_input(down: const float2[:], up: bool, right: const float2[:], holding:
         if card_flask >= 0 { card_flask = -1; press_flask = -1; continue; }
         let i = flask_hit(c);
         if i >= 0 {
+            // Taps act at once, as they always have; a press held still
+            // long enough also shows the card.
+            taps.push(i);
             press_flask = i;
             press_t = now;
             press_pos = c;
         }
     }
     if press_flask >= 0 {
-        if up {
-            taps.push(press_flask);
-            press_flask = -1;
-        } else if !holding || !steady {
+        if up || !holding || !steady {
             press_flask = -1;
         } else if now - press_t >= HOLD_TIME {
+            // The press only picked the flask up: put it back for the card.
+            if selected == press_flask && !any_pouring() { selected = -1; }
             show_card(press_flask, true);
             press_flask = -1;
         }
@@ -460,52 +431,6 @@ fn draw_card(out: Inst[>..]&) {
         } else {
             y += text_block(1, x0, y, tw, l.text, TextStyle.Tiny, white(0.93 * fade), Align.Left, true) + 6.0;
         }
-    }
-}
-
-// --- what a pour would set off ----------------------------------------------------------------
-
-fn update_preview() {
-    if selected < 0 { preview_from = -1; return; }
-    let key = board.pours * 1000 + history.len * 31 + board.count;
-    if selected == preview_from && key == preview_key { return; }
-    preview_from = selected;
-    preview_key = key;
-    let p, common = preview_pours(board, selected);
-    previews = p;
-    preview_common = common;
-}
-
-// A row of marks centered over a point.
-fn mark_row(out: Inst[>..]&, marks: const Mark[:], c: float2, r: f32) {
-    let n = min(marks.len, 4);
-    for k in n {
-        let p = c + v2((k - (n - 1) * 0.5) * r * 2.3, 0.0);
-        badge_icon(out, p, r, mark_icon(marks[k]), mark_color(marks[k]));
-    }
-}
-
-// While a flask is selected: the flasks that can't take its pour dimmed,
-// with a lock; the ones that can show what the pour would set off there,
-// and what any pour would set off shows over the selected flask.
-fn draw_pour_preview(out: Inst[>..]&) {
-    if selected < 0 || preview_from != selected || any_pouring() || won_at >= 0.0 { return; }
-    for i in shown.count {
-        if i == selected { continue; }
-        let a = slot_anchors(i);
-        let hx = a.hx;
-        if !previews[i].ok {
-            var dim = inst(Shape.FlaskBack, a.center, a.half, float4 { 0.03, 0.02, 0.06, 0.55 });
-            out.push(dim);
-            glow(out, a.center, a.half * v2(1.1, 1.0), 0.8, float4 { 0.02, 0.01, 0.05, 0.35 });
-            if !shown.bottles[i].done { badge_icon(out, at(a, a.shoulder + v2(0.0, hx * 0.2)), max(8.0, hx * 0.36), Icon.Lock, white(0.85)); }
-        } else if previews[i].marks.len > 0 {
-            mark_row(out, previews[i].marks[..], at(a, a.rim) - v2(0.0, hx * 0.62), max(7.5, hx * 0.3));
-        }
-    }
-    if preview_common.len > 0 {
-        let a = slot_anchors(selected);
-        mark_row(out, preview_common[..], at(a, a.rim) - v2(0.0, a.hx * 0.62), max(7.5, a.hx * 0.3));
     }
 }
 
