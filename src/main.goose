@@ -1273,8 +1273,7 @@ fn feature_rank(bd: Board, i: i64) -> i64 {
     r
 }
 
-// The level's newest feature, drawn on its flask standing on the intro
-// panel's top edge at `foot`.
+// The level's newest feature, drawn on its flask standing at `foot`.
 fn draw_intro_picture(out: Inst[>..]&, foot: float2) {
     var best = -1;
     var rank = 0;
@@ -1282,11 +1281,14 @@ fn draw_intro_picture(out: Inst[>..]&, foot: float2) {
         let r = feature_rank(shown, i);
         if r > rank { rank = r; best = i; }
     }
-    if best < 0 { return; }
+    // The first level has nothing new: a plain flask of its own.
+    if best < 0 {
+        if shown.count == 0 { return; }
+        best = 0;
+    }
     let b = shown.bottles[best];
-    // A tall flask smaller, so it fits over the panel.
-    let hx: f32 = min(20.0, 120.0 / (b.cap * SEGMENT + FLASK_EXTRA));
-    glow(out, foot - v2(0.0, 50.0), v2(110.0, 90.0), 1.0, float4 { 1.0, 0.8, 0.45, 0.18 });
+    // A tall flask smaller, so it fits its place on the panel.
+    let hx: f32 = min(22.0, 128.0 / (b.cap * SEGMENT + FLASK_EXTRA));
     parts_layer = 1;
     let half = bottle_half(hx, b.cap);
     var x = foot.x;
@@ -1310,6 +1312,127 @@ fn draw_intro_picture(out: Inst[>..]&, foot: float2) {
     draw_flask(out, best, b, a.center, a.half, 0.0, b.n, 0.0, 0.0, gold(1.0), true);
     draw_stand_front(out, best, b, a, StandLook {});
     parts_layer = 0;
+}
+
+// --- the intro ------------------------------------------------------------------------
+
+// A sentence's picture for its bullet, from what it talks about.
+fn sentence_icon(s: const u8[:]) -> Icon, float4 {
+    var low = str(s);
+    for k in low.len { if low[k] >= 'A' && low[k] <= 'Z' { low[k] = low[k] + 32; } }
+    fn has(w: const u8[:]) -> bool { find(low, w) >= 0 }
+    if has("key") || has("door") { return Icon.Key, float4 { 0.95, 0.78, 0.4, 1.0 }; }
+    if has("ice") || has("frost") || has("melt") || has("thaw") { return Icon.Flake, float4 { 0.7, 0.9, 1.0, 1.0 }; }
+    if has("warm") || has("heat") || has("burn") { return Icon.Flame, float4 { 1.0, 0.55, 0.2, 1.0 }; }
+    if has("light") || has("lantern") || has("lamp") { return Icon.Sun, float4 { 1.0, 0.9, 0.5, 1.0 }; }
+    if has("vine") || has("wither") { return Icon.Leaf, float4 { 0.5, 0.85, 0.35, 1.0 }; }
+    if has("hops") || has("salamander") { return Icon.Hop, float4 { 1.0, 0.4, 0.25, 1.0 }; }
+    if has("gold") { return Icon.Gold, float4 { 1.0, 0.82, 0.3, 1.0 }; }
+    if has("seal") || has("wax") { return Icon.Unseal, float4 { 0.95, 0.45, 0.45, 1.0 }; }
+    if has("turns over") || has("bottom layer") || has("sinks") { return Icon.Flip, float4 { 0.85, 0.88, 0.95, 1.0 }; }
+    if has("smoke") || has("hide") || has("hid") || has("mystery") || has("curtain") || has("shroud") {
+        return Icon.Eye, float4 { 0.8, 0.7, 1.0, 1.0 };
+    }
+    if has("drop") || has("catalyst") || has("any color") { return Icon.Rune, float4 { 0.85, 0.6, 1.0, 1.0 }; }
+    if has("only") || has("nothing") || has("shut") { return Icon.Lock, float4 { 1.0, 0.6, 0.55, 1.0 }; }
+    if has("fill") || has("complete") || has("finish") { return Icon.Check, float4 { 0.45, 0.85, 0.55, 1.0 }; }
+    if has("tap") { return Icon.Play, gold(1.0); }
+    return Icon.Rune, gold(1.0);
+}
+
+// The hint, a sentence a line.
+fn sentences(s: const u8[:]) -> u8[..200][..8] {
+    var out: u8[..200][..8] = [];
+    var from = 0;
+    for k in s.len {
+        let end = k + 1 == s.len || ((s[k] == '.' || s[k] == '!' || s[k] == '?') && s[k + 1] == ' ');
+        if !end { continue; }
+        if out.len + 1 == out.cap { break; }
+        var l: u8[..200] = [];
+        l.append(s[from..k + 1]);
+        out.push(l);
+        from = k + 2;
+    }
+    if from < s.len {
+        var l: u8[..200] = [];
+        l.append(s[from..]);
+        out.push(l);
+    }
+    out
+}
+
+// Where the intro's parts go: its words' width and where they start.
+let INTRO_HALF_W: f32 = 232.0;
+let INTRO_TEXT_W: f32 = 360.0;
+
+// The panel before a level with something to say: a page from the
+// Grimoire, with the new modifier on its flask, lit, and the hint a line
+// with a picture at a time.
+fn draw_intro(out: Inst[>..]&) {
+    let t = now - overlay_t;
+    let lines = sentences(info.hint);
+    var lines_h: f32 = 0.0;
+    for l in lines { lines_h += text_block(1, 0.0, 0.0, INTRO_TEXT_W, l, TextStyle.Small, white(1.0), Align.Left, false) + 12.0; }
+    let hero_h: f32 = 170.0;
+    let h = 96.0 + hero_h + lines_h + 82.0;
+    // In, rising and brightening.
+    let a = clamp(t * 4.0, 0.0, 1.0) as f32;
+    let rise = 26.0 * (1.0 - ease(t * 3.0));
+    let c = v2(VW * 0.5, VH * 0.46 + rise);
+    let top = c.y - h * 0.5;
+    let mark = out.len;
+    panel(out, c, v2(INTRO_HALF_W, h * 0.5));
+
+    // The tag on the top edge, the name, and a rule.
+    let tag = if spec.is_tutorial { str("New modifier") } else { level_title() };
+    let tw = text_width(TextStyle.Tiny, tag) * 0.5 + 16.0;
+    rect(out, v2(c.x, top), v2(tw, 13.0), 13.0, float4 { 0.36, 0.25, 0.12, 1.0 });
+    frame_rect(out, v2(c.x, top), v2(tw, 13.0), 13.0, 1.5, gold(0.9));
+    text(1, c.x, top, tag, TextStyle.Tiny, gold(a), Align.Center);
+    let title = if spec.is_tutorial { str(feature_name(spec.tutorial)) }
+                else if info.name.len > 0 { str(info.name) } else { str(level_title()) };
+    text_shadowed(1, c.x, top + 46.0, title, TextStyle.Heading, gold(a), Align.Center);
+    let ry = top + 78.0;
+    rect(out, v2(c.x - 70.0, ry), v2(56.0, 0.7), 0.0, gold(0.45));
+    rect(out, v2(c.x + 70.0, ry), v2(56.0, 0.7), 0.0, gold(0.45));
+    spark(out, v2(c.x, ry), 6.0, gold(0.9));
+
+    // The flask, on a lit stand, breathing; motes rising round it.
+    let foot = v2(c.x, top + 96.0 + hero_h - 14.0);
+    let pulse = (0.85 + 0.15 * sin(now * 2.2)) as f32;
+    glow(out, foot - v2(0.0, 62.0), v2(130.0 * pulse, 92.0 * pulse), 1.0, float4 { 1.0, 0.8, 0.45, 0.2 });
+    glow(out, foot + v2(0.0, 2.0), v2(86.0, 9.0), 0.8, float4 { 0.0, 0.0, 0.0, 0.45 });
+    rect(out, foot + v2(0.0, 3.0), v2(78.0, 1.0), 1.0, gold(0.5));
+    for k in 7 {
+        let u = ((now * 0.35 + k * 0.143) % 1.0) as f32;
+        let x = foot.x + sin(k * 2.4 + now * 0.9) as f32 * (40.0 + k * 9.0);
+        let y = foot.y - 8.0 - u * 150.0;
+        spark(out, v2(x, y), 2.0 + (k % 3) * 1.2, gold(0.8 * sin(u * 3.14159) as f32));
+    }
+    draw_intro_picture(out, foot);
+
+    // The hint, a line at a time, each with its picture.
+    var y = top + 96.0 + hero_h + 6.0;
+    let x0 = c.x - INTRO_HALF_W + 72.0;
+    for l, k in lines {
+        let la = clamp((t - 0.3 - k * 0.22) * 4.0, 0.0, 1.0) as f32;
+        let slide = 14.0 * (1.0 - la);
+        let lh = text_block(1, 0.0, 0.0, INTRO_TEXT_W, l, TextStyle.Small, white(1.0), Align.Left, false);
+        let which, color = sentence_icon(l);
+        let ic = v2(x0 - 26.0 + slide, y + 9.0);
+        if la > 0.0 {
+            let pop = 1.0 + 0.35 * sin(la * 3.14159) as f32;
+            badge_icon(out, ic, 14.0 * pop, which, with_alpha(color, la));
+        }
+        text_block(1, x0 + slide, y + 9.0, INTRO_TEXT_W, l, TextStyle.Small, white(0.94 * la * a), Align.Left, true);
+        y += lh + 12.0;
+    }
+    for k in mark..out.len { out[k].color.w *= a; }
+
+    if button(out, 1, v2(c.x, top + h - 46.0), v2(110.0, 26.0), if spec.is_tutorial { "Show me" } else { "Got it" },
+              float4 { 0.2, 0.55, 0.38, 1.0 }, true) {
+        close_intro();
+    }
 }
 
 // --- buttons ---------------------------------------------------------------------------
@@ -1556,16 +1679,7 @@ fn draw_overlay(out: Inst[>..]&) {
             overlay = Overlay.None;
         }
     } else if overlay == Overlay.Intro {
-        let c = v2(VW * 0.5, VH * 0.42);
-        panel(out, c, v2(220.0, 150.0));
-        draw_intro_picture(out, c - v2(0.0, 160.0));
-        let title = if spec.is_tutorial { str("New: ", feature_name(spec.tutorial)) }
-                    else if info.name.len > 0 { str(info.name) } else { str(level_title()) };
-        text_shadowed(1, c.x, c.y - 100.0, title, TextStyle.Label, gold(1.0), Align.Center);
-        text_wrapped(1, c.x, c.y - 50.0, 380.0, info.hint, TextStyle.Body, white(0.92));
-        if button(out, 1, c + v2(0.0, 105.0), v2(110.0, 26.0), "Got it", float4 { 0.2, 0.55, 0.38, 1.0 }, true) {
-            close_intro();
-        }
+        draw_intro(out);
         clicks.clear();
     } else if overlay == Overlay.Grimoire {
         draw_grimoire(out);
@@ -1589,9 +1703,15 @@ fn draw_overlay(out: Inst[>..]&) {
 
 // The intro goes; the Grimoire's button pulses once after a tutorial's, so
 // it is found.
+// After a tutorial's, the flasks with its modifier light up on the board,
+// its rule said under them, as when its Grimoire entry is tapped.
 fn close_intro() {
     overlay = Overlay.None;
     if spec.is_tutorial || mode == PlayMode.Hand { pulse_book(); }
+    if !spec.is_tutorial { return; }
+    for e in grimoire(board) {
+        if e.feature == spec.tutorial && e.flasks.len > 0 { focus_on(e.flasks[..], [], str(e.name, ": ", e.rule)); }
+    }
 }
 
 fn toggle_row(out: Inst[>..]&, y: f32, label: const u8[:], on: bool) -> bool {
@@ -1816,7 +1936,7 @@ fn lively() -> bool {
     if screen_id == Screen.Play && (shuffling || !board_search.done || guides_lively()) { return true; }
     let d = gfx::mouse_delta();
     if d.x != 0.0 || d.y != 0.0 || gfx::mouse_down(gfx::MOUSE_LEFT) { return true; }
-    if now - overlay_t < 0.6 || now < message_until || now < hint_until || autoplay { return true; }
+    if now - overlay_t < (if overlay == Overlay.Intro { 1.8 } else { 0.6 }) || now < message_until || now < hint_until || autoplay { return true; }
     if won_at >= 0.0 && now - won_at < 1.5 { return true; }
     for p in particles { if p.life > 0.0 { return true; } }
     for i in MAX_BOTTLES {
