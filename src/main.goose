@@ -20,6 +20,7 @@ import core.generator;
 import core.levels;
 import core.tools;
 import core.campaign;
+import core.variation;
 import app.draw;
 import app.shaders;
 import app.palette;
@@ -157,6 +158,19 @@ var shuffling = false;          // shuffle_job is dealing
 var shuffle_job: ShuffleJob;
 var brewing = false;            // brew is generating the level to load
 var brew: GenJob;
+var varying = false;            // vary_job is making this attempt's board
+var vary_fresh = false;         //   to start the level with (else to restart it)
+var vary_job: VariantJob;
+
+// Every attempt at a level after the first is a variant of it (see
+// core/variation.goose): the level as made, its hint (whose colors stay
+// put), this attempt's number, and the attempts made at each level so far.
+var level_board: Board;
+var level_named: u8[..200];
+var attempt_no = 0;
+var level_tries: i64[1100] = [0; 1100];     // campaign levels, then hand-made ones
+var seed_tries = 0;
+var seed_tried: u64 = 0;
 
 // This frame's clicks, in canvas units, and the pointer; right-clicks, and
 // whether a left press was let go. A scripted hold keeps its press down.
@@ -375,6 +389,57 @@ fn begin_board(b: Board) {
     if spec.is_tutorial || info.hint.len > 0 { overlay = Overlay.Intro; overlay_t = now; }
 }
 
+// The attempt about to start at the level in play: 0 for the first.
+fn take_attempt() -> i64 {
+    if mode == PlayMode.Seed {
+        if seed_tried != play_seed { seed_tried = play_seed; seed_tries = 0; }
+        seed_tries++;
+        return seed_tries - 1;
+    }
+    let k = if mode == PlayMode.Hand { 1024 + clamp(hand_index, 0, 75) } else { clamp(level_number, 0, 1023) };
+    level_tries[k]++;
+    level_tries[k] - 1
+}
+
+fn variant_seed() -> u64 { if mode == PlayMode.Hand { hash(hand_index as u64 + 0xBEEF) } else { spec.seed } }
+
+// Starts the level `b`: as it is the first time, else this attempt's variant.
+fn begin_level(b: Board) {
+    level_board = b;
+    level_named.clear();
+    level_named.append(info.hint[..min(200, info.hint.len)]);
+    attempt_no = take_attempt();
+    start_variant(true);
+}
+
+// Makes this attempt's board, at once when a frame's work is enough, else
+// a slice a frame under the Brewing overlay (see step_jobs).
+fn start_variant(fresh: bool) {
+    vary_fresh = fresh;
+    vary_job = variant_begin(level_board, variant_seed(), attempt_no, level_named[..]);
+    let until = gfx::time() + JOB_SLICE;
+    while !vary_job.done && gfx::time() < until { let over = variant_step(vary_job, JOB_NODES); }
+    if vary_job.done {
+        finish_variant();
+        return;
+    }
+    varying = true;
+    overlay = Overlay.Brewing;
+    overlay_t = now;
+}
+
+fn finish_variant() {
+    varying = false;
+    if vary_fresh {
+        begin_board(vary_job.result);
+        return;
+    }
+    start_board = vary_job.result;
+    board = start_board;
+    reset_play_state();
+    overlay = Overlay.None;
+}
+
 fn generated_info(d: Difficulty) {
     info = LevelInfo { name: [], hint: [], difficulty: d };
 }
@@ -387,7 +452,7 @@ fn load_campaign(n: i64) {
         let h, found = campaign_hand_made(level_number);
         info = h.info;
         if spec.is_tutorial && info.hint.len == 0 { info.hint.append(feature_name(spec.tutorial)); }
-        begin_board(h.board);
+        begin_level(h.board);
         return;
     }
     brew_level();
@@ -396,9 +461,10 @@ fn load_campaign(n: i64) {
 // One of the built-in hand-made levels, by its place in levels.goose.
 fn load_hand(k: i64) {
     mode = PlayMode.Hand;
-    let h = hand_made(clamp(k, 0, HAND_MADE_COUNT - 1));
+    hand_index = clamp(k, 0, HAND_MADE_COUNT - 1);
+    let h = hand_made(hand_index);
     info = h.info;
-    begin_board(h.board);
+    begin_level(h.board);
 }
 
 fn load_seed(seed: u64, like: i64) {
@@ -422,7 +488,7 @@ fn finish_brew() {
     brewing = false;
     pending_load = false;
     generated_info(spec.difficulty);
-    begin_board(brew.result.board);
+    begin_level(brew.result.board);
 }
 
 // Starts loading on the next frame, after a frame that says so is shown.
@@ -576,13 +642,14 @@ fn do_undo() {
     play(Sfx.Tool);
 }
 
+// A new attempt: the level's next variant, from the beginning.
 fn do_restart() {
+    if varying { return; }
     finish_animations();
-    board = start_board;
-    reset_play_state();
     used.restart++;
-    overlay = Overlay.None;
     play(Sfx.Tool);
+    attempt_no = take_attempt();
+    start_variant(false);
 }
 
 fn do_extra_bottle() {
@@ -668,9 +735,10 @@ fn next_after_win() {
 // Advances the background jobs by about JOB_SLICE: the level being brewed,
 // else a shuffle being dealt, else the board's search.
 fn step_jobs() {
-    if brewing && screen_id != Screen.Play {
+    if (brewing || varying) && screen_id != Screen.Play {
         // Left before it was done.
         brewing = false;
+        varying = false;
         pending_load = false;
         overlay = Overlay.None;
     }
@@ -678,6 +746,8 @@ fn step_jobs() {
     loop {
         if brewing {
             if gen_step(brew, JOB_NODES) { finish_brew(); }
+        } else if varying {
+            if variant_step(vary_job, JOB_NODES) { finish_variant(); }
         } else if screen_id != Screen.Play || pending_load {
             break;
         } else if shuffling {
@@ -1643,7 +1713,7 @@ fn handle_keys() {
         else if screen_id != Screen.Home { screen_id = Screen.Home; overlay = Overlay.None; finish_animations(); }
         else { gfx::quit(); }
     }
-    if screen_id != Screen.Play || pending_load { return; }
+    if screen_id != Screen.Play || pending_load || varying { return; }
     let ctrl = gfx::key_down("Left Ctrl") || gfx::key_down("Right Ctrl");
     if overlay == Overlay.Win && (gfx::key_pressed("N") || gfx::key_pressed("Return")) { next_after_win(); return; }
     if overlay == Overlay.Intro && (gfx::key_pressed("Return") || gfx::key_pressed("Space")) { close_intro(); return; }
@@ -1874,7 +1944,7 @@ fn main() {
         step_jobs();
         step_music(music_room_now(), dt);
         handle_keys();
-        if screen_id == Screen.Play && !pending_load { update_play(dt); }
+        if screen_id == Screen.Play && !pending_load && !varying { update_play(dt); }
         update_particles(dt);
         update_fx(dt);
         draw_frame(dt);

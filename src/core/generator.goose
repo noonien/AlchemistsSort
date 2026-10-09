@@ -41,9 +41,6 @@ fn modifier_count(p: Recipe) -> i64 {
     n
 }
 
-var DBG: i64[80] = [0; 80];
-var DBG_V = false;
-
 struct GenResult {
     board: Board,
     m: Measure = Measure {},
@@ -597,7 +594,6 @@ fn has_all(board: Board, p: Recipe) -> bool {
         if f == Feature.Murk || f == Feature.Tall { continue; }
         let n = wanted(p, f);
         if n > 0 && feature_count(board, f) < min(n, if f == Feature.Quicksilver || f == Feature.Drop { 1 } else { n }) {
-            DBG[60 + feature_index(f)]++; if DBG_V { print("    missing ", feature_name(f)); }
             return false;
         }
     }
@@ -631,14 +627,14 @@ let MAX_ATTEMPTS = 100;
 
 // What attempt `attempt` deals with, after `spent` solver positions: when
 // deals keep failing, ease off: the focus need not be required, then only
-// the focus and what it needs stay, then a color goes.
+// the focus and what it needs stay (and half the smoke), then a color goes.
 fn attempt_recipe(p: Recipe, attempt: i64, spent: i64) -> Recipe {
     var q = p;
     if attempt >= 24 || spent >= 40000 { q.focused = false; }
     if attempt >= 48 || spent >= 70000 {
         q.smoke = q.smoke / 2;
         for f in ALL_FEATURES {
-            if !p.focused || (f != p.focus && !needed_by(p.focus, f, p)) { want(q, f, 0); }
+            if p.focused && f != p.focus && !needed_by(p.focus, f, p) { want(q, f, 0); }
         }
     }
     if attempt >= 72 || spent >= 100000 {
@@ -742,7 +738,6 @@ fn gen_step(job: GenJob&, nodes: i64) -> bool {
                 var r = rng { job.seed * 0x9E3779B97F4A7C15 + (job.attempt as u64) * 0xD1B54A32D192ED03 + 17 };
                 job.dealt = deal(p, r);
                 if !deal_ok(job.dealt) || !has_all(job.dealt, p) {
-                    if !deal_ok(job.dealt) { DBG[0]++; if DBG_V { print("  ", job.attempt, " deal_ok ", validate(job.dealt)); } } else { DBG[1]++; if DBG_V { print("  ", job.attempt, " not placed"); } }
                     gen_next(job);
                     continue;
                 }
@@ -757,13 +752,11 @@ fn gen_step(job: GenJob&, nodes: i64) -> bool {
                 job.spent += spent;
                 if !over { continue; }
                 if !job.job.m.solved {
-                    DBG[2]++; if DBG_V { print("  ", job.attempt, " unsolved exhausted=", job.job.m.exhausted, " eff=", job.job.m.effort); }
                     gen_next(job);
                     continue;
                 }
                 let f, unused = unused_feature(uses_of(job.dealt, job.job.path[..]));
                 if unused {
-                    DBG[10 + feature_index(f)]++; if DBG_V { print("  ", job.attempt, " unused ", feature_name(f)); }
                     gen_next(job);
                     continue;
                 }
@@ -800,7 +793,7 @@ fn gen_step(job: GenJob&, nodes: i64) -> bool {
                 left -= spent;
                 job.spent += spent;
                 if !over { continue; }
-                if focus_required(base_score(job.m), job.job.m) { gen_valid(job); } else { DBG[3]++; DBG[40 + feature_index(job.recipe.focus)]++; if DBG_V { print("   focus ", feature_name(job.recipe.focus), " with ", base_score(job.m), " without ", base_score(job.job.m), " solved ", job.job.m.solved, " ", job.job.m.length, "/", job.m.length); } gen_next(job); }
+                if focus_required(base_score(job.m), job.job.m) { gen_valid(job); } else { gen_next(job); }
             },
         }
     }

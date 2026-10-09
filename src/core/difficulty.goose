@@ -514,7 +514,7 @@ fn without_feature(board: Board, f: Feature) -> Board {
             Athanor => {
                 // The gold already made, in a plain flask.
                 if x.body == Body.Athanor { x.body = Body.Plain; }
-                for k in x.n as i64 { if x.seg[k] == QUICKSILVER { x.seg[k] = GOLD as u8; } }
+                for k in x.n as i64 { if x.seg[k] == QUICKSILVER { x.seg[k] = GOLD; } }
             },
             Drop => {},
             Salamander, Tall => {},

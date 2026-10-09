@@ -66,7 +66,7 @@ them:
 | Tool | Key | What it does |
 |---|---|---|
 | Undo | `U`, `Ctrl+Z` | Step back, all the way to the start |
-| Restart | `R` | The same board, from the beginning |
+| Restart | `R` | The board again, from the beginning: a slight variant of it (see below) |
 | Shuffle | `S` | Re-deal the visible liquid, keeping the board solvable |
 | Extra flask | `F` | One more empty flask, for this attempt |
 | Hint | `H` | Highlight the solver's next move |
@@ -121,11 +121,20 @@ Goose in `src/core/levels.goose`, in a compact form close to how a level
 reads (`flask("GGBR").under_murk(3)`, `flask("BRGG").rime(4)`,
 `flask("RGBY").key_at(1, KeyColor.Brass)`, ...); the
 comment at the top of that file describes it. Generated levels come from
-`src/core/campaign.goose` (what each level asks for) and
-`src/core/generator.goose`, which deals a random board, adds the modifiers
-and keeps the deal only if the solver can win it. A seed plus a level shape
+`src/core/campaign.goose` (each level's recipe: its colors, spares,
+smoke, modifiers, focus and difficulty band) and
+`src/core/generator.goose`, which deals a random board, places each
+modifier where it can act, and keeps the deal only if the solver can win
+it, it scores in the band, and every modifier does something on the way
+([docs/generation.md](docs/generation.md)). A seed plus a level shape
 always gives the same board. Every hand-made level is checked and solved by
-the tests.
+the tests, its modifiers too.
+
+Each new attempt at a level (Restart, Retry, Replay, a later visit) plays a
+slight variant of it: the colors permuted and the layers hidden under smoke
+or in sealed and shrouded flasks dealt again, never what's in view, so the
+level plays the same but can't be learned by heart. The first attempt is
+the level itself.
 
 ## Code layout
 
@@ -137,8 +146,10 @@ nix/tests.nix           the unit tests, for `nix flake check`
 src/core/               the rules, with no drawing or input
   board.goose           bottles, pours, every modifier, win and loss, the grid and neighbors
   solver.goose          weighted A*, used by the generator, shuffle and hints
-  generator.goose       seeded level generation
-  campaign.goose        level numbers, tutorials, difficulty ramp
+  generator.goose       recipes and seeded level generation
+  difficulty.goose      a board's score, and whether every modifier on it matters
+  variation.goose       the variant each new attempt at a level plays
+  campaign.goose        level numbers, tutorials, each level's recipe and band
   levels.goose          the hand-made levels, built in
   tools.goose           shuffle and hint
   explain.goose         the board in words: the Grimoire, a flask's card, refusals, pour previews

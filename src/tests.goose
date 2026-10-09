@@ -11,6 +11,8 @@ import core.levels;
 import core.tools;
 import core.campaign;
 import core.explain;
+import core.difficulty;
+import core.variation;
 import app.shaders;
 import app.tunes;
 
@@ -818,7 +820,7 @@ fn test_solver() {
     let pointless = board_of(["RGRG", "GRG"]);
     check(has_move(pointless) && dead_end(pointless, 1000), "a dead end can still have pours");
     check(cornered(pointless) && !cornered(b), "cornered: few pours and no empty flask");
-    let big = generate(level_spec(59).params, level_spec(59).seed).board;
+    let big = generate(level_spec(59).recipe, level_spec(59).seed).board;
     check(!dead_end(big, 10), "running out of budget proves nothing");
     // The only way on is a pour that just moves a bottle, to melt the ice.
     var ice = board_of(["RR", "", "RR"]);
@@ -841,8 +843,8 @@ fn test_resumable() {
     boards.push(board_of(["RGBR", "GBRG", "BRGB", "", ""]));
     boards.push(board_of(["RGRG", "GRGR"]));
     boards.push(board_of(["RGRG", "GRG"]));
-    boards.push(generate(level_spec(59).params, level_spec(59).seed).board);
-    boards.push(generate(level_spec(44).params, level_spec(44).seed).board);
+    boards.push(generate(level_spec(59).recipe, level_spec(59).seed).board);
+    boards.push(generate(level_spec(44).recipe, level_spec(44).seed).board);
     var path: Move[>..] = [];
     var stepped: Move[>..] = [];
     for b in boards {
@@ -864,7 +866,7 @@ fn test_resumable() {
             check(s.expanded <= 3 || slices >= (s.expanded - 1) / 3, "three positions a slice");
         }
     }
-    let p = level_spec(70).params;
+    let p = level_spec(70).recipe;
     var job = gen_begin(p, 1234);
     while !gen_step(job, 10) {}
     let g = generate(p, 1234);
@@ -894,51 +896,79 @@ fn test_search_memory() {
 fn test_generator() {
     test("generator");
     for seed in 1..6 {
-        let g = generate(GenParams { colors: 5, empties: 2, partial: 2 }, seed as u64);
-        check(g.stats.solved, "generated levels are solvable");
+        let g = generate(Recipe { colors: 5, spares: 2, partial: 2 }, seed as u64);
+        check(g.m.solved, "generated levels are solvable");
         check(validate(g.board).len == 0, "and well formed");
         check(g.board.colors == 5, "with the colors asked for");
     }
-    let a = generate(GenParams { colors: 6, empties: 2 }, 99);
-    let b = generate(GenParams { colors: 6, empties: 2 }, 99);
+    let a = generate(Recipe { colors: 6, spares: 2 }, 99);
+    let b = generate(Recipe { colors: 6, spares: 2 }, 99);
     check(board_hash(a.board) == board_hash(b.board), "the same seed gives the same board");
     var path: Move[>..] = [];
-    let p = GenParams { colors: 6, empties: 2, murk: 2, rime: 1, seal: 1, vow: 1 };
+    var p = Recipe { colors: 6, spares: 2, smoke: 3 };
+    want(p, Feature.Rime, 1);
+    want(p, Feature.Seal, 1);
+    want(p, Feature.Vow, 1);
     let o = generate(p, 7);
-    check(o.stats.solved && solve(o.board, 100000, path).solved, "modifiers stay solvable");
+    check(o.m.solved && solve(o.board, 100000, path).solved, "modifiers stay solvable");
 
-    // Each modifier, alone or with what it needs, for a few seeds.
+    // Each modifier, alone or with what it needs, for a few seeds: it is on
+    // the board and the solution uses it.
     for which in 16 {
-        var q = GenParams { colors: 5, empties: 2 };
+        var q = Recipe { colors: 5, spares: 2 };
         var name = "";
         match which {
-            0 => { q.murk = 3; name = "murk"; },
-            1 => { q.seal = 2; name = "seal"; },
-            2 => { q.vow = 1; name = "vow"; },
+            0 => { q.smoke = 4; name = "murk"; },
+            1 => { want(q, Feature.Seal, 2); name = "seal"; },
+            2 => { want(q, Feature.Vow, 1); q.spares = 1; name = "vow"; },
             3 => { q.tall = 1; q.tall_rows = 2; name = "tall"; },
-            4 => { q.rime = 1; q.brazier = 1; name = "brazier"; },
-            5 => { q.quicksilver = true; name = "quicksilver"; },
-            6 => { q.siphon = 1; name = "siphon"; },
-            7 => { q.doors = 2; name = "doors"; },
-            8 => { q.shroud = 1; q.murk = 2; name = "shroud"; },
-            9 => { q.hourglass = 1; q.murk = 2; name = "hourglass"; },
-            10 => { q.vine = true; q.brazier = 1; name = "vine"; },
-            11 => { q.salamander = true; q.rime = 1; name = "salamander"; },
-            12 => { q.moonpetal = 1; name = "moonpetal"; },
-            13 => { q.athanor = true; name = "athanor"; },
-            14 => { q.curtains = 1; name = "curtain"; },
-            _ => { q.drop = true; q.catalyst = 1; q.lantern = 1; name = "drop and catalyst"; },
+            4 => { want(q, Feature.Rime, 1); want(q, Feature.Brazier, 1); q.thaw = 5; name = "brazier"; },
+            5 => { want(q, Feature.Quicksilver, 1); name = "quicksilver"; },
+            6 => { want(q, Feature.Siphon, 1); name = "siphon"; },
+            7 => { want(q, Feature.Keys, 2); name = "doors"; },
+            8 => { want(q, Feature.Shroud, 1); q.smoke = 2; name = "shroud"; },
+            9 => { want(q, Feature.Hourglass, 1); q.smoke = 2; name = "hourglass"; },
+            10 => { want(q, Feature.Vine, 1); name = "vine"; },
+            11 => { want(q, Feature.Salamander, 1); want(q, Feature.Rime, 1); q.thaw = 5; name = "salamander"; },
+            12 => { want(q, Feature.Moonpetal, 1); name = "moonpetal"; },
+            13 => { want(q, Feature.Athanor, 1); name = "athanor"; },
+            14 => { want(q, Feature.Curtain, 1); name = "curtain"; },
+            _ => {
+                want(q, Feature.Drop, 1);
+                want(q, Feature.Catalyst, 1);
+                want(q, Feature.Lantern, 1);
+                want(q, Feature.Hourglass, 1);
+                q.smoke = 3;
+                name = "drop and catalyst";
+            },
         }
         for seed in 1..4 {
             let g = generate(q, seed as u64 * 31);
-            check(g.stats.solved && g.attempts <= 400 && validate(g.board).len == 0, str(name, " is generated"));
+            check(g.m.solved && g.attempts <= MAX_ATTEMPTS && validate(g.board).len == 0, str(name, " is generated"));
             check(has_modifier(g.board, which), str(name, " is on the board, seed ", seed));
-            check(solve(g.board, 100000, path).solved, str(name, " can be won"));
+            let s = solve(g.board, 100000, path);
+            check(s.solved, str(name, " can be won"));
+            let f, unused = unused_feature(uses_of(g.board, path[..]));
+            check(!unused, str(name, ": every modifier does something, seed ", seed, " (", feature_name(f), ")"));
         }
         let x = generate(q, 5);
         let y = generate(q, 5);
         check(board_hash(x.board) == board_hash(y.board), str(name, ": the same seed gives the same board"));
     }
+
+    test("recipes");
+    for n in [4, 23, 57, 97] {
+        let s1 = level_spec(n);
+        let s2 = level_spec(n);
+        check(s1.recipe.colors == s2.recipe.colors && s1.recipe.smoke == s2.recipe.smoke && s1.recipe.mods == s2.recipe.mods &&
+              s1.recipe.band_lo == s2.recipe.band_lo && s1.recipe.focused == s2.recipe.focused, "a level's recipe is the same every time");
+    }
+    var narrow = Recipe { colors: 5, spares: 2, band_lo: 1000.0, band_hi: 2000.0 };
+    let far = generate(narrow, 3);
+    check(far.m.solved && !far.in_band && far.attempts <= BAND_ATTEMPTS + 1, "a band out of reach keeps the closest deal");
+    narrow.band_lo = -1e9;
+    let near = generate(narrow, 3);
+    check(near.in_band && near.attempts == near.valid_at, "a band within reach takes the first valid deal in it");
 }
 
 // Whether the generator's test case `which` put its modifier on the board.
@@ -957,7 +987,7 @@ fn has_modifier(board: Board, which: i64) -> bool {
             4 => b.fixture == Fixture.Brazier && by_ice,
             5 => tally[QUICKSILVER] == CAP,
             6 => b.body == Body.Siphon,
-            7 => board.door_count == 2 && b.key_color != KeyColor.None && layers_over_key(b) > 0,
+            7 => board.door_count == 2 && b.key_color != KeyColor.None && layers_over_key(b) > 0 && layers_over_key(b) <= 3,
             8 => b.cover == Cover.Shroud,
             9 => b.body == Body.Hourglass,
             10 => b.fixture == Fixture.VineRoot && tally[EMERALD] > 0,
@@ -1030,19 +1060,25 @@ fn test_campaign() {
         let h, found = campaign_hand_made(n);
         check(found && feature_on(h.board, f), str(feature_name(f), "'s tutorial uses it"));
     }
-    check(level_spec(1).hand_made && level_spec(2).mods.len == 0 && level_spec(2).params.murk == 0,
+    check(level_spec(1).hand_made && level_spec(2).mods.len == 0 && level_spec(2).recipe.smoke == 0,
           "levels 1 and 2 are plain");
-    check(level_spec(4).params.colors <= level_spec(44).params.colors &&
-          level_spec(44).params.colors <= level_spec(89).params.colors, "colors ramp up");
+    check(level_spec(4).recipe.colors <= level_spec(44).recipe.colors &&
+          level_spec(44).recipe.colors <= level_spec(89).recipe.colors, "colors ramp up");
 }
 
 // Every level from 1 to 120: the hand-made ones are there, and the rest are
-// generated solvable, quickly, with what the ramp asks for.
+// generated solvable, quickly, with what the ramp asks for, in their band
+// (or as close as the deals came), every modifier doing something and the
+// level's focus required.
 fn test_generated_levels() {
     test("generated levels");
     let t0 = clock();
     var worst = 0.0;
     var worst_level = 0;
+    var misses: i64[>..] = [];
+    var unfocused: i64[>..] = [];
+    var generated = 0;
+    print("  level  colors spares  score  length parking traps  band        modifiers");
     for n in 1..121 {
         let spec = level_spec(n);
         if spec.hand_made {
@@ -1052,21 +1088,41 @@ fn test_generated_levels() {
         }
         check(!spec.is_tutorial && !spec.is_finale, str("level ", n, ": tutorials and finales are hand-made"));
         let t = clock();
-        let g = generate(spec.params, spec.seed);
+        let g = generate(spec.recipe, spec.seed);
         let dt = clock() - t;
+        generated++;
         if dt > worst {
             worst = dt;
             worst_level = n;
         }
-        check(g.stats.solved && validate(g.board).len == 0, str("level ", n, " is solvable and well formed"));
-        check(g.attempts <= 8, str("level ", n, " brews in a few attempts"));
+        let p = spec.recipe;
+        var mods: u8[>..] = [];
+        for f in spec.mods { format(mods, feature_name(f), if contains(spec.mods, f) && p.focused && p.focus == f { "* " } else { " " }); }
+        print("  ", n, if n < 10 { "    " } else if n < 100 { "   " } else { "  " }, difficulty_name(spec.difficulty)[..1], "  ",
+              p.colors, "      ", p.spares, "      ", (g.m.score * 10.0) as i64 / 10.0, "   ", g.m.length, "     ", g.m.parking,
+              "      ", g.m.traps, "     ", p.band_lo as i64, "-", p.band_hi as i64, if g.in_band { "   " } else { " x " }, mods);
+        if !g.in_band { misses.push(n); }
+        check(g.m.solved && validate(g.board).len == 0, str("level ", n, " is solvable and well formed"));
+        // Six deals were enough when a deal only had to be solvable; now
+        // every modifier must matter and the focus be required, so more
+        // fail (cheaply: most fail the solve early or a use test). The
+        // first valid deal comes within 40, before the easing drops the
+        // focus check, and the band takes a few more at most.
+        check(g.valid_at <= 40, str("level ", n, " brews in a few attempts (", g.valid_at, ")"));
+        check(g.attempts <= max(BAND_ATTEMPTS, g.valid_at + 1), str("level ", n, " stops looking for its band in time"));
         check(g.board.count <= 18, str("level ", n, " fits the screen"));
+        var path: Move[>..] = [];
+        check(solve(g.board, p.budget, path).solved, str("level ", n, " can be won"));
+        let f, unused = unused_feature(uses_of(g.board, path[..]));
+        check(!unused, str("level ", n, ": its ", feature_name(f), " does something"));
+        if p.focused && !requires(g.board, p.focus, p.budget) { unfocused.push(n); }
         for f in spec.mods {
             check(introduced(f, n), str("level ", n, ": ", feature_name(f), " only after its tutorial"));
             check(feature_on(g.board, f), str("level ", n, " has its ", feature_name(f)));
         }
         let newest, any = newest_feature(n);
         check(!any || contains(spec.mods, newest), str("level ", n, " uses the newest modifier"));
+        check(!any || n >= GREAT_WORK || (p.focused && p.focus == newest), str("level ", n, " is about the newest modifier"));
         check(!tall_level(n) || feature_on(g.board, Feature.Tall), str("level ", n, " has a tall flask"));
         check(n < 3 || feature_on(g.board, Feature.Murk), str("level ", n, " has murk"));
         let ch = chapter_of(n);
@@ -1077,8 +1133,8 @@ fn test_generated_levels() {
             for f in spec.mods { if chapter_of(tutorial_level(f)) >= ch { only_earlier = false; } }
             check(only_earlier && earlier >= 2, str("level ", n, " warms up with two earlier modifiers"));
         } else if ch > 0 && ch < 6 && !tall_level(n) {
-            let want = if spec.difficulty == Difficulty.Normal { 1 } else { 2 };
-            check(earlier >= want, str("level ", n, " uses earlier chapters' modifiers"));
+            let want_n = if spec.difficulty == Difficulty.Normal { 1 } else { 2 };
+            check(earlier >= want_n, str("level ", n, " uses earlier chapters' modifiers"));
         } else if ch == 6 {
             var drawn = 0;
             for f in spec.mods { if f != Feature.Tall { drawn++; } }
@@ -1086,10 +1142,168 @@ fn test_generated_levels() {
         }
     }
     print("  levels 1-120 generated in ", clock() - t0, "s, slowest ", worst_level, " at ", worst, "s");
-    var job = gen_begin(level_spec(97).params, level_spec(97).seed);
+    print("  ", generated - misses.len, " of ", generated, " in their band; closest kept for ", misses);
+    print("  focus not required (dropped after many deals): ", unfocused);
+    check(misses.len * 5 <= generated, "most levels land in their band");
+    check(unfocused.len * 10 <= generated, "almost every level's focus is required");
+    // Difficulty ramps: chapter by chapter, Normal levels' scores climb, and
+    // Hard ones sit above the Normal ones of their chapter.
+    var last_normal = 0.0;
+    for c in 6 {
+        let ch = chapter_info(c);
+        var normal = 0.0;
+        var normals = 0;
+        var hard = 0.0;
+        var hards = 0;
+        for n in ch.first..ch.last + 1 {
+            let spec = level_spec(n);
+            if spec.hand_made { continue; }
+            let m = generate(spec.recipe, spec.seed).m;
+            if spec.difficulty == Difficulty.Normal { normal += m.score; normals++; } else { hard += m.score; hards++; }
+        }
+        normal /= max(1, normals);
+        hard /= max(1, hards);
+        check(hard > normal + 3.0, str(ch.name, ": Hard levels are clearly harder (", hard, " vs ", normal, ")"));
+        if c < 5 { check(normal > last_normal, str(ch.name, ": Normal levels ramp up (", normal, ")")); }
+        last_normal = normal;
+    }
+    var job = gen_begin(level_spec(97).recipe, level_spec(97).seed);
     while !gen_step(job, 10) {}
-    check(board_hash(job.result.board) == board_hash(generate(level_spec(97).params, level_spec(97).seed).board),
+    check(board_hash(job.result.board) == board_hash(generate(level_spec(97).recipe, level_spec(97).seed).board),
           "a level is the same board every time");
+}
+
+// --- difficulty and variants ---------------------------------------------------------
+
+fn test_difficulty() {
+    test("measuring");
+    check(log2_of(1) == 0.0 && log2_of(2) == 1.0 && log2_of(8) == 3.0 && log2_of(12) == 3.5, "log2, by halves");
+    let easy = board_of(["RRRG", "GGGR", "", ""]);
+    let hard = board_of(["RGBY", "GBYR", "BYRG", "YRGB", "", ""]);
+    let me = measure(easy, 20000, 1);
+    let mh = measure(hard, 20000, 1);
+    check(me.solved && mh.solved && mh.score > me.score + 5.0, "more colors, more to do: a higher score");
+    let mh2 = measure(hard, 20000, 1);
+    check(mh2.score == mh.score && mh2.traps == mh.traps, "the same board measures the same");
+    var smoky = hard;
+    smoky.bottles[0].murk = murk_below(3);
+    settle(smoky);
+    check(measure(smoky, 20000, 1).hidden > mh.hidden, "smoke counts as hidden");
+    check(mh.freedom > 0.0 && mh.length > 0, "freedom and length");
+    let dead = board_of(["RGRG", "GRGR"]);
+    check(!measure(dead, 1000, 1).solved, "a dead board doesn't measure as solved");
+
+    test("use tests");
+    // A seal the solution breaks; one it never needs to.
+    var b = board_of(["RGB", "GBRR", "BRG", "BG", ""]);
+    b.bottles[0].cover = Cover.Seal;
+    b.bottles[0].key = 7;
+    settle(b);
+    var path: Move[>..] = [];
+    check(solve(b, 20000, path).solved, "the sealed board can be won");
+    let u = uses_of(b, path[..]);
+    check(u.on[feature_index(Feature.Seal)] && u.used[feature_index(Feature.Seal)], "a seal the solution breaks is used");
+    var lamp = board_of(["RRRG", "GGG", "BBBB", "R", ""]);
+    lamp.bottles[2] = lantern(lamp.bottles[2]);
+    settle(lamp);
+    check(solve(lamp, 20000, path).solved, "a lantern that lights at the start");
+    let ul = uses_of(lamp, path[..]);
+    check(ul.on[feature_index(Feature.Lantern)] && !ul.used[feature_index(Feature.Lantern)], "a lantern with nothing to light does nothing");
+    let f, unused = unused_feature(ul);
+    check(unused && f == Feature.Lantern, "and is the one named");
+
+    test("focus");
+    let h, found = campaign_hand_made(36);
+    let open = without_feature(h.board, Feature.Keys);
+    var shut = false;
+    for i in open.count { if open.bottles[i].behind || open.bottles[i].key_color != KeyColor.None { shut = true; } }
+    check(!shut, "without its keys, every door stands open");
+    let v, vfound = campaign_hand_made(11);
+    check(requires(v.board, Feature.Vow, 100000), "level 11 needs its vow flask");
+}
+
+// Whether `b` is `a` with its colors permuted (one to one) wherever `keep`
+// says, and every modifier, key and smoke as it was.
+fn same_but_colors(a: Board, b: Board, hidden_ok: bool) -> bool {
+    if a.count != b.count || a.door_count != b.door_count || a.salamander != b.salamander { return false; }
+    var map: i64[MAX_LIQUID + 1] = [0; MAX_LIQUID + 1];
+    var back: i64[MAX_LIQUID + 1] = [0; MAX_LIQUID + 1];
+    for i in a.count {
+        let x = a.bottles[i];
+        let y = b.bottles[i];
+        if x.n != y.n || x.cap != y.cap || x.murk != y.murk || x.cover != y.cover || x.body != y.body ||
+           x.fixture != y.fixture || x.keyed != y.keyed || x.key_color != y.key_color || x.door != y.door ||
+           x.thaw != y.thaw || x.flip_every != y.flip_every || x.spread_every != y.spread_every { return false; }
+        for k in x.n as i64 {
+            if hidden_ok && hidden_slot(a, i, k) { continue; }
+            let c: i64 = x.seg[k];
+            let d: i64 = y.seg[k];
+            if map[c] == 0 && back[d] == 0 { map[c] = d; back[d] = c; }
+            if map[c] != d || back[d] != c { return false; }
+        }
+    }
+    true
+}
+
+fn test_variants() {
+    test("variants");
+    let t0 = clock();
+    var worst = 0.0;
+    var reshuffled = 0;
+    var total = 0;
+    for n in [4, 7, 19, 23, 38, 47, 53, 62, 67, 74, 82, 89, 99, 105, 3, 6, 36, 51, 63] {
+        let spec = level_spec(n);
+        var board = Board { .. };
+        var named: u8[>..] = [];
+        if spec.hand_made {
+            let h, found = campaign_hand_made(n);
+            board = h.board;
+            named.append(h.info.hint);
+        } else {
+            board = generate(spec.recipe, spec.seed).board;
+        }
+        let first = variant(board, spec.seed, 0, named[..]);
+        check(board_hash(first) == board_hash(board), str("level ", n, ": the first attempt is the level itself"));
+        let base = base_score(measure(board, VARY_BUDGET, 1));
+        for attempt in 1..4 {
+            let t = clock();
+            var job = variant_begin(board, spec.seed, attempt, named[..]);
+            while !variant_step(job, 1000) {}
+            worst = max(worst, clock() - t);
+            let v = job.result;
+            total++;
+            if job.reshuffled { reshuffled++; }
+            check(board_hash(v) == board_hash(variant(board, spec.seed, attempt, named[..])), "a variant is the same every time");
+            check(validate(v).len == 0, str("level ", n, " attempt ", attempt, ": well formed"));
+            check(same_but_colors(board, v, true), str("level ", n, " attempt ", attempt, ": the visible layers and modifiers stay"));
+            check(job.reshuffled || same_but_colors(board, v, false), "the fallback is the recolor alone");
+            var path: Move[>..] = [];
+            let s = solve(v, VARY_BUDGET, path);
+            check(s.solved, str("level ", n, " attempt ", attempt, ": it can be won"));
+            let m = measure(v, VARY_BUDGET, 1);
+            check(abs(base_score(m) - base) <= VARY_SHARE * abs(base) + 0.001, str("level ", n, " attempt ", attempt, ": as hard (", base_score(m), " vs ", base, ")"));
+            let f, unused = unused_feature(uses_of(v, path[..]));
+            check(!unused, str("level ", n, " attempt ", attempt, ": its ", feature_name(f), " still does something"));
+            if spec.hand_made {
+                // Colors the hint names stay.
+                for c in 1..MAX_COLORS + 1 {
+                    if !fixed_color(board, c, named[..]) { continue; }
+                    for i in board.count {
+                        for k in board.bottles[i].n as i64 {
+                            if board.bottles[i].seg[k] == c && !hidden_slot(board, i, k) {
+                                check(v.bottles[i].seg[k] == c, str("level ", n, ": ", COLOR_NAMES[c], " is named, so it stays"));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    var differ = 0;
+    let b19 = generate(level_spec(19).recipe, level_spec(19).seed).board;
+    for a in 1..5 { if board_hash(variant(b19, level_spec(19).seed, a, "")) != board_hash(b19) { differ++; } }
+    check(differ == 4, "every later attempt differs from the level");
+    print("  ", total, " variants, ", reshuffled, " reshuffled, slowest ", worst, "s, all in ", clock() - t0, "s");
 }
 
 // Old saves kept the next level from before the chapters.
@@ -1186,11 +1400,11 @@ fn shows(number: i64, f: PathFacts) -> bool {
         66 => saw(EventKind.SalamanderHop) && f.heat_ice,
         71 => saw(EventKind.Lit) && f.into_moonpetal,
         78 => saw(EventKind.Transmuted),
-        86 => saw(EventKind.CatalystFired) && saw(EventKind.Flipped),
+        86 => saw(EventKind.CatalystFired) && saw(EventKind.Flipped) && saw(EventKind.Lit),
         // The finales: the interactions are the point.
         15 => saw(EventKind.SealBroken) && saw(EventKind.Vowed),
         30 => f.heat_ice && f.heat_seal,
-        45 => f.siphon_quicksilver,
+        45 => f.siphon_quicksilver && saw(EventKind.DoorOpened),
         60 => saw(EventKind.Lit) && saw(EventKind.ShroudLifted) && saw(EventKind.Flipped),
         75 => saw(EventKind.TendrilBurned) && saw(EventKind.VineWithered) && saw(EventKind.Lit) && f.into_moonpetal,
         90 => f.drop_key && saw(EventKind.CatalystFired) && saw(EventKind.Transmuted) && saw(EventKind.ShroudLifted) &&
@@ -1201,7 +1415,7 @@ fn shows(number: i64, f: PathFacts) -> bool {
 
 // The level without the modifier it teaches, where it cannot be won without
 // it: quicksilver as an ordinary color, a siphon or an hourglass made plain,
-// the catalyst taken away, the vow flask shut (an empty vow need not be used,
+// the vow flask shut (an empty vow need not be used,
 // so it is there to be the spare the level needs).
 fn without_lesson(number: i64, board: Board) -> Board, bool {
     var b = board;
@@ -1211,8 +1425,9 @@ fn without_lesson(number: i64, board: Board) -> Board, bool {
         if number == 26 { for k in x.n as i64 { if x.seg[k] == QUICKSILVER { x.seg[k] = 6; any = true; } } }
         if number == 33 && x.body == Body.Siphon { x.body = Body.Plain; any = true; }
         if number == 56 && x.body == Body.Hourglass { x.body = Body.Plain; any = true; }
-        if number == 86 && x.fixture == Fixture.Catalyst { x.fixture = Fixture.None; any = true; }
         if (number == 11 || number == 15) && x.body == Body.Vow { x.done = true; any = true; }
+        // Without its key, the door stays shut for good.
+        if (number == 36 || number == 45) && x.key_color != KeyColor.None { x.key_color = KeyColor.None; x.keyed = 0; any = true; }
     }
     return b, any;
 }
@@ -1237,6 +1452,9 @@ fn test_levels() {
         let s = solve(h.board, 100000, moves);
         check(s.solved && s.expanded <= 30000, str(name, " can be won"));
         check(shows(h.number, path_facts(h.board, moves)), str(name, ": the solution uses what it teaches"));
+        let f, unused = unused_feature(uses_of(h.board, moves[..]));
+        check(!unused, str(name, ": its ", feature_name(f), " does something"));
+        if h.number == 86 { check(requires(h.board, Feature.Catalyst, 100000), "the catalyst is required"); }
         let plain, any = without_lesson(h.number, h.board);
         if any { check(solve(plain, 100000, moves).exhausted, str(name, " cannot be won without it")); }
     }
@@ -1501,6 +1719,8 @@ fn main() {
     test_tools();
     test_campaign();
     test_generated_levels();
+    test_difficulty();
+    test_variants();
     test_saves();
     test_tables();
     test_explain();
