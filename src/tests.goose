@@ -1714,7 +1714,7 @@ fn test_music() {
         check(db(sqrt(end_sum / (TRACK_RATE / 5))) < -40.0, str(path, " fades out to silence"));
     }
     check(hi - lo < 3.0, str("the tracks are equally loud, within ", hi - lo, " dB"));
-    check(music_gain(0) == 0.0 && abs(music_gain(100) - 1.0) < 1e-9 && music_gain(MUSIC_DEFAULT) > 0.1 && music_gain(MUSIC_DEFAULT) < 0.2,
+    check(music_gain(0) == 0.0 && abs(music_gain(100) - 1.0) < 1e-9 && music_gain(MUSIC_DEFAULT) > 0.5 && music_gain(MUSIC_DEFAULT) < 0.6,
           "the volume's ends and its first place");
     var even = true;
     for p in 1..101 { if music_gain(p) <= music_gain(p - 1) { even = false; } }
@@ -1723,20 +1723,24 @@ fn test_music() {
     check(track_name(TITLE_TRACK) == "title_screen", "the title theme");
 }
 
-// A save written and read back is the same; one from before the music's
-// volume gets the slider's first place, or none if its music was off.
+// A save written and read back is the same; the music's switch keeps the
+// volume while it is off, and one from before the switch that turned the
+// music off with a volume of 0 reads as switched off.
 fn test_save_text() {
     test("saves");
-    var s = Save { level: 37, sound: false, music_volume: 64, color_safe: true, seed_like: 55, last_seed: 99, window_w: 800, window_h: 1200 };
+    var s = Save { level: 37, sound: false, music: false, music_volume: 64, color_safe: true, seed_like: 55, last_seed: 99, window_w: 800, window_h: 1200 };
     let back = parse_save(save_text(s));
-    check(back.level == 37 && !back.sound && back.music_volume == 64 && back.color_safe && back.seed_like == 55 &&
+    check(back.level == 37 && !back.sound && !back.music && back.music_volume == 64 && back.color_safe && back.seed_like == 55 &&
           back.last_seed == 99 && back.window_w == 800 && back.window_h == 1200, "a save reads back as it was written");
-    s.music_volume = 0;
-    check(parse_save(save_text(s)).music_volume == 0, "the music off reads back off");
-    check(parse_save("version=2\nlevel=5\nmusic=1\n").music_volume == MUSIC_DEFAULT, "an old save's music is at the first place");
-    check(parse_save("version=2\nlevel=5\nmusic=0\n").music_volume == 0, "an old save's music off stays off");
-    check(parse_save("version=2\nlevel=5\n").music_volume == MUSIC_DEFAULT && parse_save("").music_volume == MUSIC_DEFAULT,
-          "a save without it gets the first place");
+    check(Save {}.music && Save {}.music_volume == MUSIC_DEFAULT, "a new save has the music on, at the first place");
+    let on = parse_save("version=2\nlevel=5\nmusic=1\n");
+    check(on.music && on.music_volume == MUSIC_DEFAULT, "an old save's music is on, at the first place");
+    let off = parse_save("version=2\nlevel=5\nmusic=0\n");
+    check(!off.music && off.music_volume == MUSIC_DEFAULT, "an old save's music off stays off");
+    let zero = parse_save("version=2\nmusic_volume=0\n");
+    check(!zero.music && zero.music_volume == MUSIC_DEFAULT, "a volume of 0 from before the switch is the switch off");
+    check(parse_save("version=2\nlevel=5\n").music && parse_save("version=2\nlevel=5\n").music_volume == MUSIC_DEFAULT &&
+          parse_save("").music_volume == MUSIC_DEFAULT, "a save without it gets the first place");
     check(parse_save("version=2\nmusic_volume=250\n").music_volume == 100, "the volume is kept in range");
 }
 

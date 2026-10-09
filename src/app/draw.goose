@@ -156,6 +156,24 @@ fn candle(out: Inst[>..]&, base: float2, height: f32, seed: f32) {
     out.push(i);
 }
 
+// A widget's plate (Shape.Plate): `style` 0 a tablet, 1 a banner, 2 a slot,
+// 3 a panel; `enamel` its color (its alpha fades it all). hover 0..1 lights
+// it, -1 greys it as disabled; `rim` is the gilt rim's width, `pressed`
+// 0..1 how far it is pushed in.
+fn plate(out: Inst[>..]&, center: float2, half: float2, style: i64, enamel: float4, hover: f32, rim: f32, pressed: f32) {
+    var i = inst(Shape.Plate, center, half, enamel);
+    i.p0 = float4 { style, hover, rim, pressed };
+    out.push(i);
+}
+
+// A round widget (Shape.Bezel), r its radius: `style` 0 enamel in a gilt
+// ring, 1 a gilt bead; the rest as for a plate.
+fn bezel(out: Inst[>..]&, center: float2, r: f32, style: i64, enamel: float4, hover: f32, rim: f32, pressed: f32) {
+    var i = inst(Shape.Bezel, center, float2 { r, r }, enamel);
+    i.p0 = float4 { style, hover, rim, pressed };
+    out.push(i);
+}
+
 // Turns an instance's lengths in canvas units into pixels, in place: its
 // position and size, and the parameters that are lengths.
 fn scale_inst(i: Inst&, scale: f32, offset: float2) {
@@ -164,6 +182,7 @@ fn scale_inst(i: Inst&, scale: f32, offset: float2) {
     let shape = (i.misc.x + 0.5) as! i64;
     if shape == shape_index(Shape.Rect) || shape == shape_index(Shape.Wood) { i.p0.x *= scale; i.p0.y *= scale; }
     if shape == shape_index(Shape.Ring) { i.p0.x *= scale; }
+    if shape == shape_index(Shape.Plate) || shape == shape_index(Shape.Bezel) { i.p0.z *= scale; }
     if shape == shape_index(Shape.Stream) || shape == shape_index(Shape.Beam) || shape == shape_index(Shape.Heat) ||
        shape == shape_index(Shape.GildPath) {
         i.p0 = i.p0 * float4 { scale, scale, scale, scale };

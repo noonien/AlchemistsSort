@@ -398,7 +398,7 @@ fn draw_card(out: Inst[>..]&) {
 
     // Size the card for its words, then put it where it covers least of
     // the flask and the flasks tied to it: beside it, above or below.
-    let edge: f32 = 14.0;
+    let edge: f32 = 20.0;
     let a = slot_anchors(i);
     let w: f32 = 280.0;
     let tw = w - edge * 2.0;
@@ -440,8 +440,7 @@ fn draw_card(out: Inst[>..]&) {
         }
     }
     glow(out, c + v2(0.0, 8.0), half + v2(18.0, 18.0), 0.6, float4 { 0.0, 0.0, 0.0, 0.45 * fade });
-    gradient_rect(out, c, half, 14.0, float4 { 0.24, 0.17, 0.33, 0.97 * fade }, float4 { 0.15, 0.10, 0.22, 0.97 * fade });
-    frame_rect(out, c, half, 14.0, 2.0, gold(0.7 * fade));
+    plate(out, c, half, 3, with_alpha(VELVET, fade), 0.0, 3.0, 0.0);
     let x0 = c.x - half.x + edge;
     var y = c.y - half.y + edge + 10.0;
     text(1, x0, y, flask_card.title, TextStyle.Small, gold(fade), Align.Left);

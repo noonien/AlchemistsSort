@@ -12,7 +12,8 @@ struct Save {
     version: i64 = SAVE_VERSION,
     level: i64 = 1,             // the next level to play
     sound: bool = true,
-    music_volume: i64 = 30,     // percent; 0 is no music
+    music: bool = true,
+    music_volume: i64 = 70,     // percent, kept while the music is off
     color_safe: bool = false,   // color-blind palette and symbols
     seed_like: i64 = 20,        // custom seed boards look like this level
     last_seed: i64 = 1234,
@@ -64,12 +65,12 @@ fn load_save() -> Save {
     parse_save(text)
 }
 
-// A save from its text. Saves from before the music's volume had a switch
-// instead: off is 0, on the slider's first place.
+// A save from its text. Saves from before the music had a switch of its own
+// besides the volume turned it off with a volume of 0.
 fn parse_save(text: const u8[:]) -> Save {
     var s = Save {};
     s.version = 1;
-    var music_off = false;
+    var switched = false;
     var volume = -1;
     each_split(text, '\n') {
         let eq = find(it, "=");
@@ -80,7 +81,7 @@ fn parse_save(text: const u8[:]) -> Save {
                 if k == "version" { s.version = v; }
                 else if k == "level" { s.level = max(1, v); }
                 else if k == "sound" { s.sound = v != 0; }
-                else if k == "music" { music_off = v == 0; }
+                else if k == "music" { s.music = v != 0; switched = true; }
                 else if k == "music_volume" { volume = clamp(v, 0, 100); }
                 else if k == "color_safe" { s.color_safe = v != 0; }
                 else if k == "seed_like" { s.seed_like = clamp(v, 1, 999); }
@@ -90,7 +91,8 @@ fn parse_save(text: const u8[:]) -> Save {
             }
         }
     };
-    s.music_volume = if volume >= 0 { volume } else if music_off { 0 } else { 30 };
+    if volume == 0 && !switched { s.music = false; }
+    s.music_volume = if volume > 0 { volume } else { 70 };
     // Before the chapters, levels were numbered differently: start the
     // player at the beginning of the chapter their old level falls in.
     if s.version < SAVE_VERSION {
@@ -102,7 +104,7 @@ fn parse_save(text: const u8[:]) -> Save {
 
 fn save_text(s: Save) -> u8[>..] {
     str("version=", SAVE_VERSION, "\nlevel=", s.level, "\nsound=", if s.sound { 1 } else { 0 },
-        "\nmusic_volume=", s.music_volume,
+        "\nmusic=", if s.music { 1 } else { 0 }, "\nmusic_volume=", s.music_volume,
         "\ncolor_safe=", if s.color_safe { 1 } else { 0 },
         "\nseed_like=", s.seed_like, "\nlast_seed=", s.last_seed,
         "\nwindow_w=", s.window_w, "\nwindow_h=", s.window_h, "\n")

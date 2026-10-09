@@ -12,7 +12,7 @@ let MUSIC_ROOMS = 6;
 let TITLE_TRACK = MUSIC_ROOMS;  // the title screen's, and the map's
 let MUSIC_TRACKS = MUSIC_ROOMS + 1;
 let TRACK_RATE = 44100;
-let MUSIC_DEFAULT = 30;         // the volume slider's first place, percent
+let MUSIC_DEFAULT = 70;         // the volume slider's first place, percent
 
 extern "alch_dec_open" fn dec_open(data: const u8[:]) -> i64;
 extern "alch_dec_rate" fn dec_rate(d: i64) -> i64;
@@ -36,7 +36,7 @@ fn music_room(level: i64, chapter_theme: i64, chapter_first: i64) -> i64 {
 // The music's gain at `percent` on the slider, even in loudness rather than
 // in amplitude: 33 dB a decade, so that, as loudness halves about every
 // 10 dB, half way along sounds about half as loud. 100% is the tracks at
-// their full level, which sits under the sound effects; 30% is 17 dB below.
+// their full level, which sits under the sound effects; 70% is 5 dB below.
 fn music_gain(percent: i64) -> f64 {
     if percent <= 0 { return 0.0; }
     pow(min(percent, 100) / 100.0, 1.66)

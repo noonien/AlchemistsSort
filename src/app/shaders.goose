@@ -64,9 +64,13 @@ enum Shape {
     GildPath,   // a gilt line along a curve, faint ink dots past its head; p0: start, control;
                 // p1: end, width, head 0..1
     Plinth,     // the ledge a flask stands on in a level; p0: theme, seed
+    Plate,      // a widget's gilt-rimmed plate of enamel; color: the enamel; p0: style (0 a tablet,
+                // 1 a banner, 2 a slot sunk in, 3 a panel), hover 0..1 (-1: disabled), rim width, pressed
+    Bezel,      // a round widget: p0: style (0 enamel in a gilt ring, 1 a gilt bead), hover 0..1
+                // (-1: disabled), rim width, pressed; color: the enamel
 }
 
-let ALL_SHAPES: const Shape[50] = [
+let ALL_SHAPES: const Shape[52] = [
     Shape.Rect, Shape.Glow, Shape.FlaskBack, Shape.Liquid, Shape.Glass, Shape.Stream, Shape.Symbol,
     Shape.Spark, Shape.Ice, Shape.Cloth, Shape.Wax, Shape.Vines, Shape.Tap, Shape.Lantern, Shape.Wood,
     Shape.Backdrop, Shape.Icon, Shape.Seal, Shape.Ring, Shape.Candle, Shape.Beam, Shape.Glyph, Shape.Stone,
@@ -74,7 +78,7 @@ let ALL_SHAPES: const Shape[50] = [
     Shape.Frame, Shape.Dial, Shape.Furnace, Shape.Bloom, Shape.Brazier, Shape.Roots, Shape.Door,
     Shape.Salamander, Shape.Heat, Shape.Shard, Shape.Key,
     Shape.Sanctum, Shape.Astrolabe, Shape.Wisp, Shape.Flourish, Shape.Parchment, Shape.Medallion, Shape.GildPath,
-    Shape.Plinth,
+    Shape.Plinth, Shape.Plate, Shape.Bezel,
 ];
 
 fn shape_index(s: Shape) -> i64 {
@@ -86,7 +90,7 @@ fn shape_index(s: Shape) -> i64 {
         Vial => 28, Smoke => 29, Ribbon => 30, Frame => 31, Dial => 32, Furnace => 33, Bloom => 34,
         Brazier => 35, Roots => 36, Door => 37, Salamander => 38, Heat => 39, Shard => 40, Key => 41,
         Sanctum => 42, Astrolabe => 43, Wisp => 44, Flourish => 45, Parchment => 46, Medallion => 47,
-        GildPath => 48, Plinth => 49,
+        GildPath => 48, Plinth => 49, Plate => 50, Bezel => 51,
     }
 }
 
@@ -107,7 +111,7 @@ fn shape_define(s: Shape) -> const u8[:] {
         Salamander => "SHAPE_SALAMANDER", Heat => "SHAPE_HEAT", Shard => "SHAPE_SHARD", Key => "SHAPE_KEY",
         Sanctum => "SHAPE_SANCTUM", Astrolabe => "SHAPE_ASTROLABE", Wisp => "SHAPE_WISP",
         Flourish => "SHAPE_FLOURISH", Parchment => "SHAPE_PARCHMENT", Medallion => "SHAPE_MEDALLION",
-        GildPath => "SHAPE_GILDPATH", Plinth => "SHAPE_PLINTH",
+        GildPath => "SHAPE_GILDPATH", Plinth => "SHAPE_PLINTH", Plate => "SHAPE_PLATE", Bezel => "SHAPE_BEZEL",
     }
 }
 
@@ -232,6 +236,8 @@ let FRAGMENT_SHADER = """
     #define SHAPE_MEDALLION 47
     #define SHAPE_GILDPATH 48
     #define SHAPE_PLINTH 49
+    #define SHAPE_PLATE 50
+    #define SHAPE_BEZEL 51
     #define ICON_UNDO 0
     #define ICON_RESTART 1
     #define ICON_SHUFFLE 2
@@ -1818,6 +1824,163 @@ let FRAGMENT_SHADER = """
         return vec4(c, fill_aa(d * r));
     }
 
+    // --- the widgets: plates and bezels ---------------------------------------------
+    // Buttons, panels, switches and badges are made as the room's things
+    // are: enamel fired in a gilt rim that stands up from it, lit from above
+    // and a little from the left by the candles.
+
+    // Pixels per canvas unit, so a widget's lines and grain keep their size
+    // on the canvas whatever the window's.
+    float unit_px() { return max(min(screen.x / 540.0, screen.y / 960.0), 0.05); }
+
+    // A plate's outline: 0 a tablet, its ends drawn to a blunt point; 1 a
+    // banner, its ends forked; 2 a slot; 3 a panel.
+    float widget_sd(vec2 p, vec2 h, int style, float s) {
+        if (style == 0) {
+            float L = min(h.y * 0.6, h.x * 0.3);
+            vec2 n = normalize(vec2(h.y, L));
+            return max(sd_box(p, h), dot(vec2(abs(p.x) - (h.x - L), abs(p.y) - h.y), n));
+        }
+        if (style == 1) {
+            float notch = h.y * 0.7;
+            float cut = sd_triangle(vec2(abs(p.x), p.y), vec2(h.x + 1.0, -h.y - 1.0), vec2(h.x - notch, 0.0),
+                                    vec2(h.x + 1.0, h.y + 1.0));
+            return max(sd_box(p, h), -cut);
+        }
+        if (style == 2) return sd_round_box(p, h, vec4(min(h.y, 12.0 * s)));
+        return sd_round_box(p, h, vec4(16.0 * s));
+    }
+
+    // The gilt of a rim `rim` pixels wide, a rounded bead: e is the depth
+    // into it from its outer edge, lit how much its outward side faces the
+    // light. Dulled to old bronze when off.
+    vec3 gilt_rim(float e, float rim, float lit, float hover, float off) {
+        float across = clamp(e / rim, 0.0, 1.0);
+        vec3 c = gilt(clamp(-lit * (1.0 - 2.0 * across) * 1.7, -1.0, 1.0)) +
+                 vec3(1.0, 0.92, 0.75) * 0.16 * exp(-pow((across - 0.4) * 4.0, 2.0));
+        // A dark hairline at its outer edge, where it meets what it stands on.
+        c *= mix(0.4, 1.0, smoothstep(0.0, 1.2 * unit_px(), e));
+        c *= 1.0 + 0.22 * hover;
+        return mix(c, vec3(dot(c, vec3(0.35, 0.45, 0.2))) * vec3(0.8, 0.72, 0.62) * 0.75, off);
+    }
+
+    // The plate (SHAPE_PLATE): the rim, a dark groove inside it, then the
+    // enamel, lighter at the top, mottled as fired glass is and shadowed
+    // under the rim; a fine gilt line inset along the outline, with a
+    // lozenge at each end of a long tablet and a bead in each corner of a
+    // panel. A tablet and a banner are glazed, a gloss across their top;
+    // a slot is sunk, deeper in shadow. hover brings a candle near, warming
+    // it from below; pressed pushes it in.
+    vec4 widget_plate(vec2 p, vec2 h, int style, vec4 tint, float hover, float rim, float press) {
+        float s = unit_px();
+        float d = widget_sd(p, h, style, s);
+        if (d > 1.0) return vec4(0.0);
+        vec2 g = vec2(widget_sd(p + vec2(1.0, 0.0), h, style, s), widget_sd(p + vec2(0.0, 1.0), h, style, s)) - d;
+        vec2 n = g / max(length(g), 1e-4);
+        float lit = dot(n, vec2(-0.35, -0.94));
+        float off = step(hover, -0.5);
+        hover = max(hover, 0.0);
+        float e = -d;
+        float inner = e - rim;
+        vec2 cv = p / s;
+        bool sunk = style == 2;
+
+        vec3 c = mix(tint.rgb * 1.4 + 0.025, tint.rgb * 0.6, clamp(p.y / (2.0 * h.y) + 0.5, 0.0, 1.0));
+        float grain = noise(cv * 0.09 + h.x * 0.13) * 0.6 + noise(cv * 0.3) * 0.4;
+        c *= 0.88 + 0.22 * grain;
+        if (style == 3) {
+            // A panel's velvet: a faint nap, and the candlelight on its upper half.
+            c *= 0.94 + 0.12 * noise(vec2(cv.x * 0.7, cv.y * 0.04));
+            c += light.rgb * 0.06 * exp(-length((p + vec2(0.0, h.y * 0.9)) / vec2(h.x * 1.1, h.y)) * 2.0);
+        }
+        float sh = (sunk ? 8.0 : 4.5) * s * (0.6 + 0.9 * max(-n.y, 0.0));
+        c *= mix(sunk ? 0.3 : 0.55, 1.0, smoothstep(0.0, sh, inner));
+        if (style < 2) {
+            float gy = (p.y + h.y * 0.45) / max(h.y * 0.3, 1.0);
+            float gx = 1.0 - smoothstep(h.x * 0.5, h.x * 0.95, abs(p.x));
+            c += vec3(1.0, 0.95, 0.85) * exp(-gy * gy) * gx * 0.12 * (1.0 - 0.7 * press);
+        }
+        c += light.rgb * vec3(1.0, 0.78, 0.5) * exp(-length((p - vec2(0.0, h.y * 0.9)) / vec2(h.x * 0.8, h.y * 1.4)) * 1.6) *
+             hover * 0.4;
+        c *= 1.0 - 0.18 * press;
+        c = mix(c, vec3(dot(c, vec3(0.3, 0.5, 0.2))) * 0.8, off * 0.8);
+
+        // The fine line inside, and its ornaments.
+        if (style != 2) {
+            float inset = rim + (style == 3 ? 7.0 : 2.5) * s;
+            float fl = abs(d + inset) - 0.6 * s;
+            if (style == 3) {
+                vec2 ci = abs(p) - (h - vec2(inset));
+                float R = 10.0 * s;
+                fl = abs(max(sd_box(p, h - vec2(inset)), -(length(ci) - R))) - 0.6 * s;
+                fl = min(fl, length(ci) - 2.6 * s);
+                fl = min(fl, max(abs(length(ci) - R * 0.5) - 0.5 * s, max(ci.x, ci.y)));
+                vec2 m = vec2(p.x, abs(p.y) - (h.y - inset));
+                fl = min(fl, (abs(m.x) * 0.6 + abs(m.y) - 3.0 * s) * 0.85);
+            } else if (style == 0 && h.x > 3.2 * h.y) {
+                float L = min(h.y * 0.6, h.x * 0.3);
+                vec2 m = vec2(abs(p.x) - (h.x - L * 0.55 - inset * 1.7), p.y);
+                fl = min(fl, (abs(m.x) * 0.55 + abs(m.y) - 3.4 * s) * 0.85);
+                fl = min(fl, length(m + vec2(9.0 * s, 0.0)) - 1.5 * s);
+                fl = min(fl, length(m + vec2(14.0 * s, 0.0)) - 1.0 * s);
+            }
+            vec3 lc = gilt(p.y / h.y * 0.8);
+            lc = mix(lc, vec3(dot(lc, vec3(0.35, 0.45, 0.2))) * 0.7, off);
+            c = mix(c, lc, fill_aa(fl) * (style == 3 ? 0.75 : 0.65));
+        }
+        // The groove, then the rim over it.
+        c *= 1.0 - 0.5 * fill_aa(abs(inner) - 0.7 * s);
+        c = mix(c, gilt_rim(e, rim, sunk ? -lit : lit, hover, off), fill_aa(inner));
+        return vec4(c, fill_aa(d) * tint.a);
+    }
+
+    // The bezel (SHAPE_BEZEL): style 0 a cabochon of enamel in a gilt ring
+    // engraved with an astrolabe's ticks, glossed high on the left; style 1
+    // a gilt bead, a switch's knob.
+    vec4 widget_bezel(vec2 p, float r, int style, vec4 tint, float hover, float rim, float press) {
+        float s = unit_px();
+        float l = length(p);
+        float d = l - r;
+        if (d > 1.0) return vec4(0.0);
+        vec2 q = p / r;
+        float off = step(hover, -0.5);
+        hover = max(hover, 0.0);
+        if (style == 1) {
+            vec3 N = vec3(q, sqrt(max(1.0 - dot(q, q), 0.0)));
+            float diff = max(dot(N, normalize(vec3(-0.4, -0.75, 0.55))), 0.0);
+            vec3 c = mix(vec3(0.42, 0.25, 0.08), vec3(1.0, 0.85, 0.52), diff);
+            c += vec3(1.0, 0.97, 0.9) * exp(-pow(length(q - vec2(-0.3, -0.4)) / 0.25, 2.0)) * 0.6;
+            c *= (1.0 + 0.15 * hover) * tint.rgb;
+            c *= 1.0 - 0.3 * fill_aa(abs(d + 0.8 * s) - 0.6 * s);
+            return vec4(c, fill_aa(d) * tint.a);
+        }
+        vec2 n = p / max(l, 1e-3);
+        float lit = dot(n, vec2(-0.35, -0.94));
+        float e = -d;
+        float inner = e - rim;
+        vec3 c = mix(tint.rgb * 1.5 + 0.03, tint.rgb * 0.55, clamp(q.y * 0.5 + 0.5, 0.0, 1.0));
+        vec2 cv = p / s;
+        c *= 0.86 + 0.28 * (noise(cv * 0.12 + r) * 0.6 + noise(cv * 0.37) * 0.4);
+        // Flecks of gold in it, as lapis has.
+        c = mix(c, vec3(0.95, 0.78, 0.42), dots(cv * 0.32 + r, 0.16) * step(0.8, hash12(floor(cv * 0.32 + r))) * 0.45);
+        c *= mix(0.45, 1.0, smoothstep(0.0, (3.0 + 4.0 * max(-n.y, 0.0)) * s, inner));
+        c += vec3(1.0, 0.95, 0.85) * exp(-pow(length((q - vec2(-0.2, -0.45)) * vec2(1.0, 1.8)) / 0.32, 2.0)) * 0.16 *
+             (1.0 - 0.6 * press);
+        c += light.rgb * vec3(1.0, 0.78, 0.5) * exp(-length(q - vec2(0.0, 0.75)) * 2.2) * hover * 0.5;
+        c *= 1.0 - 0.18 * press;
+        c = mix(c, vec3(dot(c, vec3(0.3, 0.5, 0.2))) * 0.8, off * 0.8);
+        vec3 rc = gilt_rim(e, rim, lit, hover, off);
+        if (r > 15.0 * s) {
+            float count = 4.0 * floor(r / (3.2 * s));
+            float a = atan(p.y, p.x) * count / 6.2831853;
+            float tick = abs(fract(a) - 0.5) * 6.2831853 / count * l - 0.45 * s;
+            rc *= 1.0 - 0.55 * fill_aa(tick) * (1.0 - smoothstep(rim * 0.35, rim * 0.6, e));
+        }
+        c *= 1.0 - 0.5 * fill_aa(abs(inner) - 0.7 * s);
+        c = mix(c, rc, fill_aa(inner));
+        return vec4(c, fill_aa(d) * tint.a);
+    }
+
     void main() {
         int kind = int(v_misc.x + 0.5);
         vec2 p = v_local;
@@ -3095,6 +3258,10 @@ let FRAGMENT_SHADER = """
         } else if (kind == SHAPE_PLINTH) {              // the ledge a flask stands on
             col = plinth(p, h, int(v_p0.x + 0.5), v_p0.y, t);
             col.a *= v_color.a;
+        } else if (kind == SHAPE_PLATE) {               // a widget's plate
+            col = widget_plate(p, h, int(v_p0.x + 0.5), v_color, v_p0.y, v_p0.z, v_p0.w);
+        } else if (kind == SHAPE_BEZEL) {               // a round widget
+            col = widget_bezel(p, min(h.x, h.y), int(v_p0.x + 0.5), v_color, v_p0.y, v_p0.z, v_p0.w);
         } else if (kind == SHAPE_GILDPATH) {            // a gilt line along a curve, ink dots past its head
             vec2 bz = sd_bezier(p, v_p0.xy, v_p0.zw, v_p1.xy);
             float w = v_p1.z;

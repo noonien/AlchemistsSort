@@ -287,7 +287,7 @@ fn draw_home(out: Inst[>..]&) {
     let ch = chapter_of(save.level);
     text(0, VW * 0.5, 672.0, str(chapter_info(ch).name, "  ·  Level ", save.level), TextStyle.Small,
          white(0.75), Align.Center);
-    if button(out, 0, v2(VW * 0.5, 728.0), v2(130.0, 30.0), "Play", float4 { 0.2, 0.55, 0.38, 1.0 }, true) {
+    if button(out, 0, v2(VW * 0.5, 728.0), v2(130.0, 30.0), "Play", ENAMEL_EMERALD, true) {
         open_map();
     }
     let y: f32 = 836.0;
@@ -366,13 +366,15 @@ fn arrow_button(out: Inst[>..]&, center: float2, right: bool, enabled: bool) -> 
     let hover = in_rect(pointer, center, v2(r, r)) && enabled;
     let k = press_squash(center);
     let rr = r * (1.0 - 0.1 * k);
-    if hover { glow(out, center, v2(r + 16.0, r + 16.0), 0.8, gold(0.2)); }
-    glow(out, center + v2(0.0, 4.0), v2(r + 6.0, r + 6.0), 0.6, float4 { 0.0, 0.0, 0.0, 0.4 });
-    let base = if enabled { float4 { 0.30, 0.20, 0.42, 1.0 } } else { float4 { 0.22, 0.2, 0.26, 0.6 } };
-    gradient_rect(out, center, v2(rr, rr), rr, mix4(base, white(1.0), if hover { 0.25 } else { 0.1 }),
-                  mix4(base, float4 { 0.0, 0.0, 0.0, 1.0 }, 0.3));
-    ring(out, center, rr, 2.5, gold(if enabled { 0.8 } else { 0.3 }));
-    var i = inst(Shape.Icon, center, v2(rr * 0.5, rr * 0.5), if enabled { gold(1.0) } else { white(0.3) });
+    if hover { glow(out, center + v2(0.0, 3.0), v2(r + 20.0, r + 20.0), 1.0, float4 { 1.0, 0.7, 0.35, 0.22 }); }
+    glow(out, center + v2(0.0, 5.0), v2(r + 7.0, r + 7.0), 0.6, float4 { 0.0, 0.0, 0.0, if enabled { 0.45 } else { 0.2 } });
+    bezel(out, center, rr, 0, if enabled { ENAMEL_LAPIS } else { with_alpha(ENAMEL_SLATE, 0.6) }, if !enabled { -1.0 } else if hover { 1.0 } else { 0.0 },
+          3.4, max(k, 0.0));
+    var sh = inst(Shape.Icon, center + v2(0.0, 1.4), v2(rr * 0.5, rr * 0.5), cut(if enabled { 1.0 } else { 0.4 }));
+    sh.p0 = float4 { icon_index(Icon.Back), 0.0, 0.0, 0.0 };
+    if right { sh.misc.y = PI; }
+    if enabled { out.push(sh); }
+    var i = inst(Shape.Icon, center, v2(rr * 0.5, rr * 0.5), if enabled { gold(1.0) } else { float4 { 0.62, 0.58, 0.52, 0.4 } });
     i.p0 = float4 { icon_index(Icon.Back), 0.0, 0.0, 0.0 };
     if right { i.misc.y = PI; }
     out.push(i);
@@ -536,7 +538,7 @@ fn draw_map(out: Inst[>..]&) {
     if arrow_button(out, v2(VW - 62.0, POTION_AT.y), true, map_page + 1 < chapter_count()) || gfx::key_pressed("Right") {
         turn_map_page(min(chapter_count() - 1, map_page + 1));
     }
-    if button(out, 0, v2(VW * 0.5, 880.0), v2(130.0, 28.0), str("Level ", save.level), float4 { 0.2, 0.55, 0.38, 1.0 }, true) {
+    if button(out, 0, v2(VW * 0.5, 880.0), v2(130.0, 28.0), str("Level ", save.level), ENAMEL_EMERALD, true) {
         start_campaign(save.level);
     }
     if now < message_until { text(0, VW * 0.5, 932.0, message, TextStyle.Small, MAP_INK, Align.Center); }

@@ -115,8 +115,9 @@ through heat, light, flow, flip, growth and transmutation, are in
 | The Athanor | 76–90 | Athanor (78), Philosopher's Drop (81), Catalyst (86) |
 | The Great Work | 91+ | three or four modifiers from everything |
 
-Settings has sound, the music's volume (a slider, 30% at first; at 0 the
-music stops; on the Settings screen the arrow keys move it too), a
+Settings has sound, the music (a switch, and a slider for its volume, 70%
+at first, which keeps its place while the music is off; on the Settings
+screen the arrow keys move it too), a
 color-blind palette that adds a symbol to every color, and a progress
 reset. The title screen, the map and the other menus play the title theme,
 and each chapter's room its own track; each plays through, rests a few

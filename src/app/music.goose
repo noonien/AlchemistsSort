@@ -1,8 +1,8 @@
 // The background music: a track for each room, and the title theme on the
 // title screen and the map (tracks.goose). A track plays through, rests a
 // few seconds and plays again from the top. A change of room or screen
-// crossfades to the new track; the volume slider in Settings sets the level,
-// and at 0 the music stops. The player (src/c/stream.h) decodes and mixes a
+// crossfades to the new track; Settings has a switch for the music and a
+// slider for its level, and either one off or at 0 stops it. The player (src/c/stream.h) decodes and mixes a
 // little ahead each frame, so no track is ever held whole.
 
 import std;
@@ -22,6 +22,7 @@ extern "alch_music_pump" fn music_pump(dt: f64);
 
 var music_ready = false;        // set when audio is on and the player is open
 var music_level = MUSIC_DEFAULT;    // the slider, percent
+var music_on = true;            // the switch
 var music_dir: u8[>..];
 var music_now = -1;             // the track playing, or -1
 var music_player = -1;          // its player
@@ -37,7 +38,7 @@ fn init_music(dir: const u8[:]) {
 // Once a frame: plays `track`, crossfading from what played before.
 fn step_music(track: i64, dt: f64) {
     if !music_ready { return; }
-    let want = if music_level > 0 { track } else { -1 };
+    let want = if music_on && music_level > 0 { track } else { -1 };
     if want != music_now {
         if music_player >= 0 { music_fade(music_player, 0.0, CROSSFADE, true); }
         music_player = -1;

@@ -1388,10 +1388,10 @@ fn draw_intro(out: Inst[>..]&) {
 
     // The tag on the top edge, the name, and a rule.
     let tag = if spec.is_tutorial { str("New modifier") } else { level_title() };
-    let tw = text_width(TextStyle.Tiny, tag) * 0.5 + 16.0;
-    rect(out, v2(c.x, top), v2(tw, 13.0), 13.0, float4 { 0.36, 0.25, 0.12, 1.0 });
-    frame_rect(out, v2(c.x, top), v2(tw, 13.0), 13.0, 1.5, gold(0.9));
-    text(1, c.x, top, tag, TextStyle.Tiny, gold(a), Align.Center);
+    let tw = text_width(TextStyle.Tiny, tag) * 0.5 + 24.0;
+    plate(out, v2(c.x, top), v2(tw, 13.0), 1, ENAMEL_AMETHYST, 0.0, 1.8, 0.0);
+    text(1, c.x, top + 1.2, tag, TextStyle.Tiny, cut(a), Align.Center);
+    text(1, c.x, top, tag, TextStyle.Tiny, engraved(a), Align.Center);
     let title = if spec.is_tutorial { str(feature_name(spec.tutorial)) }
                 else if info.name.len > 0 { str(info.name) } else { str(level_title()) };
     text_shadowed(1, c.x, top + 46.0, title, TextStyle.Heading, gold(a), Align.Center);
@@ -1433,47 +1433,66 @@ fn draw_intro(out: Inst[>..]&) {
     for k in mark..out.len { out[k].color.w *= a; }
 
     if button(out, 1, v2(c.x, top + h - 46.0), v2(110.0, 26.0), if spec.is_tutorial { "Show me" } else { "Got it" },
-              float4 { 0.2, 0.55, 0.38, 1.0 }, true) {
+              ENAMEL_EMERALD, true) {
         close_intro();
     }
 }
 
 // --- buttons ---------------------------------------------------------------------------
 
+// The plates' enamels, jewels to sit with the gilt: emerald for the way on
+// (Play, Brew, Next), amethyst for the rest (Back, Close, Undo) and garnet
+// for what can't be taken back; the bezels' lapis.
+let ENAMEL_EMERALD = float4 { 0.05, 0.33, 0.25, 1.0 };
+let ENAMEL_AMETHYST = float4 { 0.23, 0.13, 0.33, 1.0 };
+let ENAMEL_GARNET = float4 { 0.46, 0.07, 0.12, 1.0 };
+let ENAMEL_LAPIS = float4 { 0.09, 0.11, 0.26, 1.0 };
+let ENAMEL_SLATE = float4 { 0.17, 0.16, 0.20, 1.0 };
+let VELVET = float4 { 0.15, 0.09, 0.20, 0.98 };
+// Lettering on enamel: warm gilt, and the dark it is cut into.
+fn engraved(a: f32) -> float4 { float4 { 1.0, 0.9, 0.68, a } }
+fn cut(a: f32) -> float4 { float4 { 0.02, 0.01, 0.0, 0.6 * a } }
+
+// A plate of enamel in a gilt rim, its label engraved on it; a candle's
+// warmth under it while hovered, and squashed when pressed.
 fn button(out: Inst[>..]&, layer: i64, center: float2, half: float2, label: const u8[:],
           color: float4, enabled: bool) -> bool {
     let hover = in_rect(pointer, center, half) && enabled;
-    let base = if enabled { color } else { float4 { 0.35, 0.33, 0.4, 1.0 } };
-    let top = mix4(base, white(1.0), if hover { 0.28 } else { 0.15 });
     // Squashed when pressed, springing back (fx.goose).
     let k = press_squash(center);
     let sq = v2(half.x * (1.0 + 0.05 * k), half.y * (1.0 - 0.14 * k));
-    if hover { glow(out, center, half + v2(22.0, 18.0), 0.8, gold(0.16)); }
-    glow(out, center + v2(0.0, 5.0), sq + v2(6.0, 6.0), 0.6, float4 { 0.0, 0.0, 0.0, 0.35 });
-    gradient_rect(out, center, sq, min(sq.y, 18.0), top, mix4(base, float4 { 0.0, 0.0, 0.0, 1.0 }, 0.25));
-    frame_rect(out, center, sq, min(sq.y, 18.0), 2.0, gold(if hover { 0.95 } else { 0.6 }));
-    text(layer, center.x, center.y, label, TextStyle.Label, white(if enabled { 1.0 } else { 0.5 }), Align.Center);
+    if hover { glow(out, center + v2(0.0, 4.0), half + v2(30.0, 22.0), 1.0, float4 { 1.0, 0.7, 0.35, 0.2 }); }
+    glow(out, center + v2(0.0, 6.0), sq + v2(10.0, 8.0), 0.6, float4 { 0.0, 0.0, 0.0, 0.45 });
+    plate(out, center, sq, 0, if enabled { color } else { ENAMEL_SLATE }, if !enabled { -1.0 } else if hover { 1.0 } else { 0.0 },
+          3.0, max(k, 0.0));
+    let a: f32 = if enabled { 1.0 } else { 0.45 };
+    text(layer, center.x, center.y + 1.6, label, TextStyle.Label, cut(a), Align.Center);
+    text(layer, center.x, center.y, label, TextStyle.Label, if hover { float4 { 1.0, 0.95, 0.8, 1.0 } } else { engraved(a) },
+         Align.Center);
     let hit = enabled && clicked(center, half);
     if hit { note_press(center); }
     hit
 }
 
+// A round button: lapis in a gilt bezel, its icon in gilt, its label under it.
 fn round_button(out: Inst[>..]&, layer: i64, center: float2, r: f32, which: Icon, label: const u8[:],
                 badge: i64, enabled: bool) -> bool {
     let hover = in_rect(pointer, center, v2(r, r)) && enabled;
-    let rr = r * (1.0 - 0.1 * press_squash(center));
-    if hover { glow(out, center, v2(r + 16.0, r + 16.0), 0.8, gold(0.2)); }
-    glow(out, center + v2(0.0, 4.0), v2(r + 6.0, r + 6.0), 0.6, float4 { 0.0, 0.0, 0.0, 0.4 });
-    let base = if enabled { float4 { 0.30, 0.20, 0.42, 1.0 } } else { float4 { 0.22, 0.2, 0.26, 1.0 } };
-    gradient_rect(out, center, v2(rr, rr), rr, mix4(base, white(1.0), if hover { 0.25 } else { 0.1 }),
-                  mix4(base, float4 { 0.0, 0.0, 0.0, 1.0 }, 0.3));
-    ring(out, center, rr, 2.5, gold(if hover { 1.0 } else { 0.7 }));
-    icon(out, center, rr * 0.55, which, if enabled { gold(1.0) } else { white(0.35) });
-    if label.len > 0 { text(layer, center.x, center.y + r + 14.0, label, TextStyle.Tiny, white(0.85), Align.Center); }
+    let k = press_squash(center);
+    let rr = r * (1.0 - 0.1 * k);
+    if hover { glow(out, center + v2(0.0, 3.0), v2(r + 20.0, r + 20.0), 1.0, float4 { 1.0, 0.7, 0.35, 0.22 }); }
+    glow(out, center + v2(0.0, 5.0), v2(r + 7.0, r + 7.0), 0.6, float4 { 0.0, 0.0, 0.0, 0.45 });
+    bezel(out, center, rr, 0, if enabled { ENAMEL_LAPIS } else { ENAMEL_SLATE }, if !enabled { -1.0 } else if hover { 1.0 } else { 0.0 },
+          max(3.0, r * 0.13), max(k, 0.0));
+    let ir = rr * 0.5;
+    icon(out, center + v2(0.0, 1.4), ir, which, cut(if enabled { 1.0 } else { 0.5 }));
+    icon(out, center, ir, which, if enabled { gold(1.0) } else { float4 { 0.62, 0.58, 0.52, 0.6 } });
+    if label.len > 0 { text_shadowed(layer, center.x, center.y + r + 14.0, label, TextStyle.Tiny, engraved(if enabled { 0.9 } else { 0.5 }), Align.Center); }
     if badge > 0 {
-        let bp = center + v2(r * 0.72, -r * 0.72);
-        rect(out, bp, v2(12.0, 11.0), 11.0, float4 { 0.85, 0.25, 0.3, 1.0 });
-        text(layer, bp.x, bp.y, str(badge), TextStyle.Tiny, white(1.0), Align.Center);
+        let bp = center + v2(r * 0.74, -r * 0.74);
+        glow(out, bp + v2(0.0, 2.0), v2(14.0, 14.0), 0.6, float4 { 0.0, 0.0, 0.0, 0.4 });
+        bezel(out, bp, 11.0, 0, ENAMEL_GARNET, 0.0, 1.8, 0.0);
+        text(layer, bp.x, bp.y, str(badge), TextStyle.Tiny, engraved(1.0), Align.Center);
     }
     let hit = enabled && clicked(center, v2(r, r));
     if hit { note_press(center); }
@@ -1491,17 +1510,20 @@ fn thinking(out: Inst[>..]&, center: float2, r: f32) {
     }
 }
 
+// A panel: plum velvet in a gilt frame, a fine line inside it that bows in
+// round a bead at each corner.
 fn panel(out: Inst[>..]&, center: float2, half: float2) {
-    glow(out, center + v2(0.0, 10.0), half + v2(30.0, 30.0), 0.5, float4 { 0.0, 0.0, 0.0, 0.5 });
-    gradient_rect(out, center, half, 22.0, float4 { 0.24, 0.17, 0.33, 0.98 }, float4 { 0.15, 0.10, 0.22, 0.98 });
-    frame_rect(out, center, half, 22.0, 2.5, gold(0.75));
-    frame_rect(out, center, half - v2(7.0, 7.0), 16.0, 1.0, gold(0.3));
+    glow(out, center + v2(0.0, 12.0), half + v2(34.0, 34.0), 0.5, float4 { 0.0, 0.0, 0.0, 0.55 });
+    plate(out, center, half, 3, VELVET, 0.0, 4.5, 0.0);
 }
 
+// A little banner with forked ends, in the color's enamel.
 fn badge_pill(out: Inst[>..]&, layer: i64, center: float2, label: const u8[:], color: float4) {
-    let w = text_width(TextStyle.Tiny, label) * 0.5 + 12.0;
-    rect(out, center, v2(w, 12.0), 12.0, color);
-    text(layer, center.x, center.y, label, TextStyle.Tiny, white(1.0), Align.Center);
+    let w = text_width(TextStyle.Tiny, label) * 0.5 + 20.0;
+    glow(out, center + v2(0.0, 3.0), v2(w + 4.0, 14.0), 0.6, float4 { 0.0, 0.0, 0.0, 0.4 });
+    plate(out, center, v2(w, 12.0), 1, mix4(color, float4 { 0.0, 0.0, 0.0, 1.0 }, 0.35), 0.0, 1.6, 0.0);
+    text(layer, center.x, center.y + 1.2, label, TextStyle.Tiny, cut(1.0), Align.Center);
+    text(layer, center.x, center.y, label, TextStyle.Tiny, engraved(1.0), Align.Center);
 }
 
 // --- screens ------------------------------------------------------------------------------
@@ -1568,6 +1590,7 @@ fn draw_play(out: Inst[>..]&) {
         let lh = line_height(TextStyle.Small);
         let c = v2(VW * 0.5, 800.0 - (h - lh) * 0.5);
         rect(out, c, v2(w, h * 0.5 + 6.0), 17.0, float4 { 0.05, 0.03, 0.1, 0.85 * a });
+        frame_rect(out, c, v2(w, h * 0.5 + 6.0), 17.0, 1.0, gold(0.35 * a));
         text_block(0, VW * 0.5, c.y - (h - lh) * 0.5, wrap, message, TextStyle.Small, white(a), Align.Center, true);
     }
 
@@ -1647,44 +1670,44 @@ fn draw_overlay(out: Inst[>..]&) {
              TextStyle.Heading, white(1.0), Align.Center);
         text_wrapped(1, c.x, c.y - 10.0, 380.0, tools_summary(), TextStyle.Small, white(0.8));
         let next_label = if mode == PlayMode.Campaign { "Next Level" } else if mode == PlayMode.Seed { "Next Seed" } else { "Done" };
-        if button(out, 1, c + v2(0.0, 70.0), v2(150.0, 28.0), next_label, float4 { 0.2, 0.55, 0.38, 1.0 }, true) {
+        if button(out, 1, c + v2(0.0, 70.0), v2(150.0, 28.0), next_label, ENAMEL_EMERALD, true) {
             next_after_win();
         }
-        if button(out, 1, c + v2(-78.0, 140.0), v2(70.0, 24.0), "Replay", float4 { 0.35, 0.25, 0.5, 1.0 }, true) {
+        if button(out, 1, c + v2(-78.0, 140.0), v2(70.0, 24.0), "Replay", ENAMEL_AMETHYST, true) {
             do_restart();
             used = Counters {};
         }
-        if button(out, 1, c + v2(78.0, 140.0), v2(70.0, 24.0), "Home", float4 { 0.35, 0.25, 0.5, 1.0 }, true) {
+        if button(out, 1, c + v2(78.0, 140.0), v2(70.0, 24.0), "Home", ENAMEL_AMETHYST, true) {
             screen_id = Screen.Home;
             overlay = Overlay.None;
         }
     } else if overlay == Overlay.Lose {
         let c = v2(VW * 0.5, VH * 0.45);
-        panel(out, c, v2(210.0, 170.0));
+        panel(out, c, v2(210.0, 180.0));
         let title = if dead_end_shown { "Dead End" } else { "No Moves Left" };
         let why = if dead_end_shown { "Pours are left, but none of them can win this board. Retry, or keep going with a tool." }
                   else { "Every flask is stuck. Retry the same board, or keep going with a tool." };
         text_shadowed(1, c.x, c.y - 120.0, title, TextStyle.Heading, gold(1.0), Align.Center);
         text_wrapped(1, c.x, c.y - 70.0, 360.0, why, TextStyle.Small, white(0.85));
-        if button(out, 1, c + v2(0.0, 10.0), v2(140.0, 26.0), "Retry", float4 { 0.2, 0.55, 0.38, 1.0 }, true) {
+        if button(out, 1, c + v2(0.0, 10.0), v2(140.0, 26.0), "Retry", ENAMEL_EMERALD, true) {
             do_restart();
         }
-        if button(out, 1, c + v2(-75.0, 75.0), v2(68.0, 24.0), "Undo", float4 { 0.35, 0.25, 0.5, 1.0 }, history.len > 0) {
+        if button(out, 1, c + v2(-75.0, 75.0), v2(68.0, 24.0), "Undo", ENAMEL_AMETHYST, history.len > 0) {
             do_undo();
         }
-        if button(out, 1, c + v2(75.0, 75.0), v2(68.0, 24.0), "+Flask", float4 { 0.35, 0.25, 0.5, 1.0 }, true) {
+        if button(out, 1, c + v2(75.0, 75.0), v2(68.0, 24.0), "+Flask", ENAMEL_AMETHYST, true) {
             do_extra_bottle();
         }
         if dead_end_shown {
-            if button(out, 1, c + v2(-75.0, 132.0), v2(68.0, 22.0), "Home", float4 { 0.3, 0.22, 0.4, 1.0 }, true) {
+            if button(out, 1, c + v2(-75.0, 132.0), v2(68.0, 22.0), "Home", ENAMEL_AMETHYST, true) {
                 screen_id = Screen.Home;
                 overlay = Overlay.None;
             }
-            if button(out, 1, c + v2(75.0, 132.0), v2(68.0, 22.0), "Continue", float4 { 0.3, 0.22, 0.4, 1.0 }, true) {
+            if button(out, 1, c + v2(75.0, 132.0), v2(68.0, 22.0), "Continue", ENAMEL_AMETHYST, true) {
                 dead_end_waved = true;
                 overlay = Overlay.None;
             }
-        } else if button(out, 1, c + v2(0.0, 132.0), v2(68.0, 22.0), "Home", float4 { 0.3, 0.22, 0.4, 1.0 }, true) {
+        } else if button(out, 1, c + v2(0.0, 132.0), v2(68.0, 22.0), "Home", ENAMEL_AMETHYST, true) {
             screen_id = Screen.Home;
             overlay = Overlay.None;
         }
@@ -1695,10 +1718,10 @@ fn draw_overlay(out: Inst[>..]&) {
         draw_grimoire(out);
     } else if overlay == Overlay.Settings {
         let c = v2(VW * 0.5, VH * 0.45);
-        panel(out, c, v2(220.0, 190.0));
-        text_shadowed(1, c.x, c.y - 145.0, "Settings", TextStyle.Heading, gold(1.0), Align.Center);
-        settings_toggles(out, 1, c.y - 80.0);
-        if button(out, 1, c + v2(0.0, 145.0), v2(90.0, 26.0), "Close", float4 { 0.35, 0.25, 0.5, 1.0 }, true) {
+        panel(out, c, v2(220.0, 200.0));
+        text_shadowed(1, c.x, c.y - 150.0, "Settings", TextStyle.Heading, gold(1.0), Align.Center);
+        settings_toggles(out, 1, c.y - 85.0);
+        if button(out, 1, c + v2(0.0, 152.0), v2(90.0, 26.0), "Close", ENAMEL_AMETHYST, true) {
             overlay = Overlay.None;
         }
     } else if overlay == Overlay.Reset {
@@ -1706,13 +1729,13 @@ fn draw_overlay(out: Inst[>..]&) {
         panel(out, c, v2(210.0, 120.0));
         text_shadowed(1, c.x, c.y - 70.0, "Reset progress?", TextStyle.Label, gold(1.0), Align.Center);
         text(1, c.x, c.y - 30.0, "You will start again at level 1.", TextStyle.Small, white(0.85), Align.Center);
-        if button(out, 1, c + v2(-80.0, 50.0), v2(70.0, 24.0), "Reset", float4 { 0.7, 0.2, 0.25, 1.0 }, true) {
+        if button(out, 1, c + v2(-80.0, 50.0), v2(70.0, 24.0), "Reset", ENAMEL_GARNET, true) {
             save.level = 1;
             write_save(save);
             overlay = Overlay.None;
             say("Progress reset.", 2.0);
         }
-        if button(out, 1, c + v2(80.0, 50.0), v2(70.0, 24.0), "Cancel", float4 { 0.35, 0.25, 0.5, 1.0 }, true) {
+        if button(out, 1, c + v2(80.0, 50.0), v2(70.0, 24.0), "Cancel", ENAMEL_AMETHYST, true) {
             overlay = Overlay.None;
         }
     }
@@ -1734,25 +1757,33 @@ fn close_intro() {
 
 fn toggle_row(out: Inst[>..]&, layer: i64, y: f32, label: const u8[:], on: bool) -> bool {
     text(layer, 90.0, y, label, TextStyle.Body, white(0.92), Align.Left);
-    let c = v2(VW - 110.0, y);
-    let track = if on { float4 { 0.2, 0.6, 0.4, 1.0 } } else { float4 { 0.3, 0.27, 0.36, 1.0 } };
-    rect(out, c, v2(34.0, 17.0), 17.0, track);
-    let knob = c + v2(if on { 17.0 } else { -17.0 }, 0.0);
-    rect(out, knob, v2(14.0, 14.0), 14.0, white(0.95));
+    draw_switch(out, y, on);
     clicked(v2(VW * 0.5, y), v2(VW * 0.42, 22.0))
 }
 
-// A slider in a row like the toggles', from 0 to 100: its track, the part
-// filled up to the value, the knob, and the value. A press on the row takes
-// the knob there and it follows the pointer (a finger or the mouse) until
-// let go; music_slid is set on the frame it is let go. Returns the value.
+// A row's switch, at its right end.
+fn draw_switch(out: Inst[>..]&, y: f32, on: bool) {
+    let c = v2(VW - 110.0, y);
+    plate(out, c, v2(34.0, 16.0), 2, if on { float4 { 0.08, 0.48, 0.34, 1.0 } } else { float4 { 0.08, 0.06, 0.11, 1.0 } },
+          0.0, 2.2, 0.0);
+    let knob = c + v2(if on { 17.0 } else { -17.0 }, 0.0);
+    glow(out, knob + v2(0.0, 3.0), v2(15.0, 15.0), 0.6, float4 { 0.0, 0.0, 0.0, 0.5 });
+    bezel(out, knob, 12.5, 1, white(1.0), 0.0, 0.0, 0.0);
+}
+
+// A slider in a row like the toggles', from 0 to 100, left of the row's
+// switch: its track, the part filled up to the value, the knob, and the
+// value, dimmed while the switch is off. A press on the slider takes the
+// knob there and it follows the pointer (a finger or the mouse) until let
+// go; music_slid is set on the frame it is let go. Returns the value.
 var slider_held = false;
 var music_slid = false;
 let SLIDER_X0: f32 = 210.0;
-let SLIDER_X1: f32 = VW - 93.0;
+let SLIDER_X1: f32 = VW - 172.0;
 
-fn slider_row(out: Inst[>..]&, layer: i64, y: f32, label: const u8[:], value: i64) -> i64 {
+fn slider_row(out: Inst[>..]&, layer: i64, y: f32, label: const u8[:], value: i64, on: bool) -> i64 {
     text(layer, 90.0, y, label, TextStyle.Body, white(0.92), Align.Left);
+    let dim: f32 = if on { 1.0 } else { 0.45 };
     var v = value;
     music_slid = false;
     let mid = v2((SLIDER_X0 + SLIDER_X1) * 0.5, y);
@@ -1775,13 +1806,17 @@ fn slider_row(out: Inst[>..]&, layer: i64, y: f32, label: const u8[:], value: i6
         }
     }
     let at = SLIDER_X0 + (SLIDER_X1 - SLIDER_X0) * (v / 100.0);
-    rect(out, mid, v2((SLIDER_X1 - SLIDER_X0) * 0.5, 4.0), 4.0, float4 { 0.3, 0.27, 0.36, 1.0 });
+    // A slot, gilt filling it up to the knob, the knob a gilt bead.
+    plate(out, mid, v2((SLIDER_X1 - SLIDER_X0) * 0.5 + 4.0, 6.0), 2, float4 { 0.08, 0.06, 0.11, 1.0 }, 0.0, 1.6, 0.0);
     if v > 0 {
-        rect(out, v2((SLIDER_X0 + at) * 0.5, y), v2((at - SLIDER_X0) * 0.5, 4.0), 4.0, float4 { 0.2, 0.6, 0.4, 1.0 });
+        let fill = v2((SLIDER_X0 + at) * 0.5, y);
+        let fh = v2((at - SLIDER_X0) * 0.5 + 1.5, 2.6);
+        glow(out, fill, fh + v2(6.0, 6.0), 1.0, float4 { 1.0, 0.7, 0.3, 0.18 * dim });
+        gradient_rect(out, fill, fh, 2.6, float4 { 1.0, 0.86, 0.52, dim }, float4 { 0.62, 0.38, 0.12, dim });
     }
-    rect(out, v2(at, y), v2(10.0, 10.0), 10.0, white(0.95));
-    let shown: u8[>..] = if v == 0 { "off" } else { str(v, "%") };
-    text(layer, SLIDER_X0 - 14.0, y, shown, TextStyle.Small, white(0.75), Align.Right);
+    glow(out, v2(at, y + 3.0), v2(13.0, 13.0), 0.6, float4 { 0.0, 0.0, 0.0, 0.5 });
+    bezel(out, v2(at, y), 10.5, 1, float4 { 1.0, 1.0, 1.0, if on { 1.0 } else { 0.8 } }, 0.0, 0.0, 0.0);
+    text(layer, SLIDER_X0 - 14.0, y, str(v, "%"), TextStyle.Small, white(0.75 * dim), Align.Right);
     v
 }
 
@@ -1805,12 +1840,19 @@ fn settings_toggles(out: Inst[>..]&, layer: i64, y: f32) {
         write_save(save);
         play(Sfx.Tool);
     }
-    let level = slider_row(out, layer, y + 50.0, "Music", save.music_volume);
+    let level = slider_row(out, layer, y + 50.0, "Music", save.music_volume, save.music);
     if level != save.music_volume {
         save.music_volume = level;
         music_level = level;
     }
     if music_slid { write_save(save); }
+    draw_switch(out, y + 50.0, save.music);
+    if clicked(v2(VW - 110.0, y + 50.0), v2(48.0, 22.0)) {
+        save.music = !save.music;
+        music_on = save.music;
+        write_save(save);
+        play(Sfx.Tool);
+    }
     if toggle_row(out, layer, y + 100.0, "Color-blind palette", save.color_safe) {
         save.color_safe = !save.color_safe;
         write_save(save);
@@ -1832,7 +1874,7 @@ fn draw_settings(out: Inst[>..]&) {
     text_shadowed(0, VW * 0.5, 90.0, "Settings", TextStyle.Heading, gold(1.0), Align.Center);
     panel(out, v2(VW * 0.5, 330.0), v2(220.0, 170.0));
     settings_toggles(out, 0, 190.0);
-    if button(out, 0, v2(VW * 0.5, 440.0), v2(130.0, 26.0), "Reset Progress", float4 { 0.6, 0.2, 0.25, 1.0 }, true) {
+    if button(out, 0, v2(VW * 0.5, 440.0), v2(130.0, 26.0), "Reset Progress", ENAMEL_GARNET, true) {
         overlay = Overlay.Reset;
         overlay_t = now;
     }
@@ -1841,7 +1883,7 @@ fn draw_settings(out: Inst[>..]&) {
     text_wrapped(0, VW * 0.5, 660.0, 440.0,
                  "Keys: U undo, R restart, S shuffle, F extra flask, H hint, G grimoire, O settings, Esc back. Hold a flask (or right-click it) to read it.",
                  TextStyle.Tiny, white(0.55));
-    if button(out, 0, v2(VW * 0.5, 850.0), v2(90.0, 26.0), "Back", float4 { 0.35, 0.25, 0.5, 1.0 }, true) {
+    if button(out, 0, v2(VW * 0.5, 850.0), v2(90.0, 26.0), "Back", ENAMEL_AMETHYST, true) {
         screen_id = Screen.Home;
     }
 }
@@ -1857,8 +1899,7 @@ fn draw_seed(out: Inst[>..]&) {
     text_shadowed(0, VW * 0.5, 90.0, "Brew from a Seed", TextStyle.Heading, gold(1.0), Align.Center);
     panel(out, v2(VW * 0.5, 360.0), v2(220.0, 200.0));
     text(0, VW * 0.5, 210.0, "Seed (type digits)", TextStyle.Small, white(0.75), Align.Center);
-    rect(out, v2(VW * 0.5, 255.0), v2(160.0, 26.0), 10.0, float4 { 0.06, 0.04, 0.1, 0.9 });
-    frame_rect(out, v2(VW * 0.5, 255.0), v2(160.0, 26.0), 10.0, 1.5, gold(0.6));
+    plate(out, v2(VW * 0.5, 255.0), v2(160.0, 26.0), 2, float4 { 0.07, 0.05, 0.10, 1.0 }, 0.0, 2.5, 0.0);
     let caret = if (now * 2.0) as! i64 % 2 == 0 { "|" } else { "" };
     text(0, VW * 0.5, 255.0, str(seed_text, caret), TextStyle.Label, white(1.0), Align.Center);
     for e in gfx::events() {
@@ -1869,7 +1910,7 @@ fn draw_seed(out: Inst[>..]&) {
             seed_text.pop();
         }
     }
-    if button(out, 0, v2(VW * 0.5, 310.0), v2(90.0, 20.0), "Random", float4 { 0.35, 0.25, 0.5, 1.0 }, true) {
+    if button(out, 0, v2(VW * 0.5, 310.0), v2(90.0, 20.0), "Random", ENAMEL_AMETHYST, true) {
         seed_text.clear();
         format(seed_text, random_seed() % 1000000);
     }
@@ -1877,26 +1918,26 @@ fn draw_seed(out: Inst[>..]&) {
     text(0, VW * 0.5, 405.0, str(save.seed_like), TextStyle.Heading, white(1.0), Align.Center);
     let d = difficulty_of(save.seed_like);
     badge_pill(out, 0, v2(VW * 0.5, 440.0), difficulty_name(d), difficulty_color(d));
-    if button(out, 0, v2(VW * 0.5 - 95.0, 405.0), v2(26.0, 20.0), "-", float4 { 0.3, 0.22, 0.4, 1.0 }, save.seed_like > 1) {
+    if button(out, 0, v2(VW * 0.5 - 95.0, 405.0), v2(26.0, 20.0), "-", ENAMEL_AMETHYST, save.seed_like > 1) {
         save.seed_like = max(1, save.seed_like - 1);
     }
-    if button(out, 0, v2(VW * 0.5 + 95.0, 405.0), v2(26.0, 20.0), "+", float4 { 0.3, 0.22, 0.4, 1.0 }, true) {
+    if button(out, 0, v2(VW * 0.5 + 95.0, 405.0), v2(26.0, 20.0), "+", ENAMEL_AMETHYST, true) {
         save.seed_like = min(999, save.seed_like + 1);
     }
-    if button(out, 0, v2(VW * 0.5 - 150.0, 405.0), v2(26.0, 20.0), "-10", float4 { 0.3, 0.22, 0.4, 1.0 }, save.seed_like > 10) {
+    if button(out, 0, v2(VW * 0.5 - 150.0, 405.0), v2(26.0, 20.0), "-10", ENAMEL_AMETHYST, save.seed_like > 10) {
         save.seed_like = max(1, save.seed_like - 10);
     }
-    if button(out, 0, v2(VW * 0.5 + 150.0, 405.0), v2(26.0, 20.0), "+10", float4 { 0.3, 0.22, 0.4, 1.0 }, true) {
+    if button(out, 0, v2(VW * 0.5 + 150.0, 405.0), v2(26.0, 20.0), "+10", ENAMEL_AMETHYST, true) {
         save.seed_like = min(999, save.seed_like + 10);
     }
     text_wrapped(0, VW * 0.5, 475.0, 400.0,
                  "The same seed and level always brew the same board.", TextStyle.Tiny, white(0.55));
-    if button(out, 0, v2(VW * 0.5, 530.0), v2(120.0, 28.0), "Brew", float4 { 0.2, 0.55, 0.38, 1.0 }, seed_text.len > 0) {
+    if button(out, 0, v2(VW * 0.5, 530.0), v2(120.0, 28.0), "Brew", ENAMEL_EMERALD, seed_text.len > 0) {
         save.last_seed = seed_value() as! i64;
         write_save(save);
         start_seed(seed_value(), save.seed_like);
     }
-    if button(out, 0, v2(VW * 0.5, 850.0), v2(90.0, 26.0), "Back", float4 { 0.35, 0.25, 0.5, 1.0 }, true) {
+    if button(out, 0, v2(VW * 0.5, 850.0), v2(90.0, 26.0), "Back", ENAMEL_AMETHYST, true) {
         write_save(save);
         screen_id = Screen.Home;
     }
@@ -2109,6 +2150,7 @@ fn main() {
     if export_to.len > 0 { exit(if export_music(export_to, music_from) { 0 } else { 1 }); }
     save = load_save();
     sound_on = save.sound;
+    music_on = save.music;
     music_level = save.music_volume;
 
     // The window opens as it was last left (or as --size asks); screenshots
