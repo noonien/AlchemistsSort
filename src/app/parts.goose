@@ -75,6 +75,14 @@ fn segment_center(half: float2, k: i64) -> float2 {
     float2 { 0.0, base + hx * LIQUID_W * FLASK_E - (k + 0.5) * seg }
 }
 
+// The middle of the liquid's surface with `fill` layers in a flask of
+// `cap`, relative to the flask's middle, as the shader draws it upright.
+fn surface_mid(half: float2, cap: i64, fill: f32) -> float2 {
+    let hx = half.x;
+    let seg = (half.y * 2.0 - hx * SHADER_EXTRA) / max(cap, CAP);
+    float2 { 0.0, half.y - hx * FLASK_E * FLASK_BODY - hx * 0.05 - fill * seg }
+}
+
 // A point in the flask's frame (an anchor plus an offset), on the screen.
 fn at(a: Anchors, local: float2) -> float2 {
     let y = local.y * a.squash;
@@ -209,6 +217,7 @@ struct StandLook {
     flare: f32 = 0.0,       // a brazier's or hearth's sudden heat, a lantern's flash
     wither: f32 = 0.0,      // a vine root dying
     lit: f32 = -1.0,        // a lantern's light, -1 for the flask's own state
+    dial: f32 = -1.0,       // an hourglass's dial filling again as it turns over, 0..1; -1 when not
 }
 
 // Behind the flask: a brazier's flames, an athanor's hearth, the hourglass's
@@ -266,12 +275,17 @@ fn draw_stand_front(out: Inst[>..]&, i: i64, b: Bottle, a: Anchors, look: StandL
             // On the stand's post, clear of the glass and of the next column.
             let c = at(a, float2 { hx * 1.2, 0.0 });
             let every: i64 = b.flip_every;
-            let left = max(0, every - b.flip_count);
+            var left: f32 = max(0, every - b.flip_count);
+            // Run out, it fills again pip by pip as the flask turns over.
+            if look.dial >= 0.0 && left == 0.0 {
+                left = every * look.dial;
+                glow(out, c, float2 { hx * 0.9, hx * 0.9 }, 1.0, float4 { 1.0, 0.8, 0.4, 0.6 * sin(look.dial * 3.14159) });
+            }
             var d = inst(Shape.Dial, c, float2 { hx * 0.36, hx * 0.36 }, rgba(1.0, 1.0, 1.0, 1.0));
             d.p0 = float4 { b.flip_every, left, 0.0, 0.0 };
             d.misc.z = hx * 0.3;
             out.push(d);
-            text(parts_layer, c.x, c.y + 0.5, str(left), TextStyle.Tiny, PARCHMENT_INK, Align.Center);
+            text(parts_layer, c.x, c.y + 0.5, str((left + 0.5) as! i64), TextStyle.Tiny, PARCHMENT_INK, Align.Center);
         },
         Athanor => {
             var f = inst(Shape.Furnace, base + float2 { 0.0, hx * 0.22 }, float2 { hx * 1.2, hx * 0.3 }, rgba(1.0, 1.0, 1.0, 1.0));

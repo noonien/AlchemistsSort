@@ -1109,34 +1109,71 @@ let FRAGMENT_SHADER = """
             c = mix(c, v_color.rgb * 0.4, open);
             col = vec4(c, min(1.0, v_color.a * (1.0 + 0.4 * open)) * fill_aa(d + 1.0));
         } else if (kind == SHAPE_LIQUID) {                 // liquid
-            // p1.w: the cap, plus a sixteenth of how many segments have
-            // drained out of the bottom (a siphon pouring from its tap).
-            float cap = max(floor(v_p1.w), 4.0);
-            float drain = fract(v_p1.w) * 16.0;
+            // p1.w: the cap, plus a 32nd of how many layers have drained out
+            // of the bottom (a siphon pouring from its tap), offset by a half;
+            // less than none lifts the liquid off the bottom. Negative, the
+            // liquid turns with the glass (an hourglass turning over);
+            // otherwise its levels stay level however the flask is turned.
+            float cap = max(floor(abs(v_p1.w)), 4.0);
+            float drain = (fract(abs(v_p1.w)) - 0.5) * 32.0;
+            bool rigid = v_p1.w < 0.0;
             float seg = (2.0 * h.y - FLASK_EXTRA * h.x) / cap;
             float w = liquid_w(h);
             float ry = w * FLASK_E;
             float base = liquid_base(h);
             float nx = p.x / w;
+            float lifted = max(-drain, 0.0) * seg;
             if (abs(nx) < 1.0 && v_p1.x > 0.001) {
                 float s = sqrt(1.0 - nx * nx);
-                float tilt = clamp(tan(v_misc.y), -2.6, 2.6);
-                // How high above the bottom is the point of the column's front
-                // seen here; a level stays level when the flask tips.
-                float lvl = base - p.y + ry * s - tilt * p.x;
+                float ang = rigid ? 0.0 : v_misc.y;
+                float ca = cos(ang);
+                float sa = sin(ang);
+                float S = clamp(sa / max(ca, 0.05), -6.0, 6.0);
+                float AS = max(abs(S), 1e-4);
+                float xm = S < 0.0 ? -p.x : p.x;
+                // Upright, a point's level is its height above the bottom, plus
+                // the curve of the column's front. Tipped, the levels stay level:
+                // m is the level of the line through the point, and v the
+                // liquid (in layers) under that line, so the layers keep their
+                // amounts and the liquid gathers in the lower end.
+                float u = base - p.y;
+                float m = u - S * p.x;
+                // The line's stretch across the column, and the front curve over it.
+                float lo = max(-w, -m / AS);
+                float hr = max((w - lo) * 0.5, 0.01);
+                float sx = (xm - (w + lo) * 0.5) / hr;
+                float sg = sqrt(max(0.0, 1.0 - sx * sx));
+                float ms = m + ry * sg / ca;
+                float wedge = AS * w;
+                float area = ms >= wedge ? 2.0 * w * ms : (ms > -wedge ? (ms + wedge) * (ms + wedge) / (2.0 * AS) : 0.0);
+                float v = area / (2.0 * w * seg);
+                float lvl = v * seg;
+                // Across a level line, layers per pixel: for the lines between them.
+                float per_px = (ms >= wedge ? 1.0 : max((ms + wedge) / (2.0 * w * AS), 0.05)) / ca;
+                // The surface: the level of the liquid's amount, a slow idle
+                // drift, the slosh's tilt, and ripples from where a stream lands.
                 float fill = v_p1.x * seg;
-                // The surface: a slow idle drift, the slosh's tilt, and ripples
-                // spreading from where a stream lands.
+                float fa = fill * 2.0 * w;
+                float msurf = fa >= 2.0 * AS * w * w ? fa / (2.0 * w) : sqrt(2.0 * AS * fa) - wedge;
                 float seed = v_color.g;
                 float drift = h.x * 0.035 * (0.6 * sin(nx * 1.7 + t * 1.1 + seed * 6.3) +
                                              0.4 * sin(nx * 3.9 - t * 1.6 + seed * 2.1));
                 float rx = (p.x - v_color.b * h.x) / h.x;
                 float ripple = v_p1.z * h.x * 0.09 * sin(rx * 7.0 - t * 15.0) * exp(-abs(rx) * 1.1);
-                float surface = fill + drift + v_color.r * p.x + ripple;
-                // Upright, the top is seen from above: the surface's ellipse.
-                float top_d = sd_ellipse(vec2(p.x, p.y - (base - surface)), vec2(w, ry));
-                bool on_top = tilt == 0.0 && lvl >= surface && top_d < 0.5;
-                if (lvl > -0.5 && (lvl < surface || on_top)) {
+                float wob = drift + v_color.r * p.x + ripple;
+                float surface = msurf + wob;
+                // The surface is seen from above: an ellipse across the column,
+                // between the front curve and the back one. Tipped, it is
+                // as long as the level line's stretch across the column.
+                float back = m - ry * sg / ca;
+                float top_d = max(surface - ms, back - surface) * ca;
+                if (AS < 1e-3) top_d = sd_ellipse(vec2(p.x, p.y - (base - surface)), vec2(w, ry));
+                bool on_top = ms >= surface && top_d < 0.5;
+                // Inside the glass: above the bottom's curve (or the lifted
+                // liquid's), below the rim.
+                float bottom = u + ry * s - lifted;
+                bool inside = bottom > -0.5 && p.y > flask_top(h) - 0.5;
+                if (inside && (ms < surface || on_top)) {
                     float n = ceil(v_p1.x + drain - 0.001);
                     float fi = on_top ? n - 1.0 : clamp(floor(max(lvl, 0.0) / seg + drain), 0.0, n - 1.0);
                     float ci = layer_color(fi);
@@ -1145,30 +1182,31 @@ let FRAGMENT_SHADER = """
                     if (hidden) {
                         // Murk: colorless smoke curling inside, one band however deep.
                         vec2 sq = p / h.x;
-                        vec2 wq = vec2(noise(sq * 1.6 + vec2(t * 0.18, 0.0)), noise(sq * 1.6 + vec2(5.2, -t * 0.15)));
-                        float n2 = noise(sq * 2.8 + wq * 2.2 + vec2(-t * 0.25, t * 0.1));
-                        float wisp = noise(sq * vec2(6.0, 3.0) + wq * 3.0 + vec2(t * 0.3, 0.0));
+                        vec2 wq2 = vec2(noise(sq * 1.6 + vec2(t * 0.18, 0.0)), noise(sq * 1.6 + vec2(5.2, -t * 0.15)));
+                        float n2 = noise(sq * 2.8 + wq2 * 2.2 + vec2(-t * 0.25, t * 0.1));
+                        float wisp = noise(sq * vec2(6.0, 3.0) + wq2 * 3.0 + vec2(t * 0.3, 0.0));
                         c = mix(vec3(0.15, 0.13, 0.19), vec3(0.36, 0.33, 0.42), smoothstep(0.2, 0.9, n2));
                         c += vec3(0.07) * smoothstep(0.55, 0.85, wisp) * smoothstep(0.3, 0.6, n2);
                     } else {
                         c = personality(c, int(ci + 0.5), p / h.x + vec2(seed * 3.0, 0.0), t);
                         if (int(ci + 0.5) == 17 && !on_top) {
                             // The Drop: a pearl in its own glow.
-                            vec2 dq = vec2(p.x, (fi + 0.5 - drain) * seg - lvl) / (seg * 0.55);
-                            float dd = length(vec2(dq.x * (1.0 + max(0.0, -dq.y) * 0.9), dq.y - 0.15)) - 0.5;
-                            float a0 = dq.x * 2.0 + dq.y * 1.5 + t * 0.8;
+                            vec2 pq = vec2(p.x, (fi + 0.5 - drain) * seg - lvl) / (seg * 0.55);
+                            float dd = length(vec2(pq.x * (1.0 + max(0.0, -pq.y) * 0.9), pq.y - 0.15)) - 0.5;
+                            float a0 = pq.x * 2.0 + pq.y * 1.5 + t * 0.8;
                             vec3 iri = 0.5 + 0.5 * vec3(sin(a0), sin(a0 + 2.1), sin(a0 + 4.2));
                             vec3 pearl = mix(vec3(0.97, 0.98, 1.0), iri, 0.25 + 0.4 * smoothstep(-0.3, 0.0, dd));
-                            pearl += vec3(1.0) * exp(-length(dq - vec2(-0.15, -0.05)) * 9.0);
+                            pearl += vec3(1.0) * exp(-length(pq - vec2(-0.15, -0.05)) * 9.0);
                             c += vec3(0.5, 0.85, 0.8) * exp(-max(dd, 0.0) * 4.0) * 0.35;
                             c = mix(c, pearl, fill_aa(dd * seg * 0.55));
                         }
                     }
-                    float a = clamp((1.0 - abs(nx)) * w, 0.0, 1.0) * clamp(lvl + 0.5, 0.0, 1.0);
+                    float a = clamp((1.0 - abs(nx)) * w, 0.0, 1.0) * clamp(bottom + 0.5, 0.0, 1.0) *
+                              clamp(p.y - flask_top(h) + 0.5, 0.0, 1.0);
                     if (on_top) {
                         // The surface catches the light: brighter, with a bright edge
                         // and the room's glow across it.
-                        c = c * 1.12 + vec3(0.05) + light.rgb * 0.06 * (0.5 - (p.y - (base - surface)) / ry);
+                        c = c * 1.12 + vec3(0.05) + light.rgb * 0.06 * (0.5 - (surface - m) * ca / ry);
                         c += vec3(0.28) * (1.0 - smoothstep(0.0, 2.2, -top_d));
                         a *= fill_aa(top_d);
                     } else {
@@ -1178,17 +1216,17 @@ let FRAGMENT_SHADER = """
                         // A darker line where one liquid meets another, curving
                         // round the column (smoke is all one); a run of one color
                         // reads as a single band.
-                        float edge = abs(lvl - (fi + 1.0 - drain) * seg);
+                        float edge = abs(v + drain - (fi + 1.0)) / per_px * seg;
                         bool next_same = (layer_murky(fi + 1.0) ? hidden : !hidden) && (hidden || layer_color(fi + 1.0) == ci);
                         if (fi + 1.0 < v_p1.x + drain - 0.01 && !next_same) c *= 1.0 - 0.22 * (1.0 - smoothstep(0.0, 1.6, edge));
-                        float surf = surface - lvl;
+                        float surf = (surface - ms) * ca;
                         c += vec3(0.2) * (1.0 - smoothstep(0.0, 2.0, surf));
-                        if (tilt != 0.0) a *= clamp(surf + 0.5, 0.0, 1.0);
+                        a *= clamp(surf + 0.5, 0.0, 1.0);
                         // Now and then a bubble rises from the bottom.
                         float period = 7.0 + fract(seed * 7.13) * 5.0;
                         float cyc = t / period + seed;
                         float rise = 2.4 / period;
-                        if (fract(cyc) < rise && tilt == 0.0 && fill > seg * 0.6) {
+                        if (fract(cyc) < rise && v_misc.y == 0.0 && lifted == 0.0 && fill > seg * 0.6) {
                             float k = fract(cyc) / rise;
                             vec2 bc = vec2((hash12(vec2(floor(cyc), seed * 13.0)) - 0.5) * w * 0.9 +
                                            sin(k * 9.0) * h.x * 0.06, base + ry * 0.6 - k * (fill - h.x * 0.1));

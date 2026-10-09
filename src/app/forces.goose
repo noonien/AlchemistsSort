@@ -34,10 +34,13 @@ struct Beat {
     applied: bool = false,
     quiet: bool = false,    // one of a group that another plays the sound of
     by_pour: bool = false,  // SealBroken: by the liquid poured onto it
-    mask: i64 = 0,          // MurkCleared: the layers cleared
+    mask: i64 = 0,          // MurkCleared: the layers cleared; Lit: the flasks its light changes
     n0: i64 = 0,            // Overflowed: the twin's layers before
     color: i64 = 0,         // the liquid it is about
     alt: Bottle,            // Flipped: the stack turned over, before quicksilver sinks
+    gap: i64 = 0,           // Flipped: the empty layers the liquid falls through once it is over
+    steps: i64 = 0,         // Flipped: the steps quicksilver takes running back down
+    cues: i64 = 0,          // the moments in it already played, one bit each
 }
 
 var beats: Beat[..40];
@@ -139,6 +142,122 @@ fn heat_result(kind: EventKind) -> bool {
     kind == EventKind.TendrilBurned
 }
 
+// Whether heat pulse k of a pour does anything to its flask: the effect
+// that follows it, or ice it melts a pour's worth. Ice is there if it
+// still is after the pour, or if a later pulse thaws it.
+fn heat_reaches(r: PourResult, k: i64) -> bool {
+    let e = r.events[k];
+    if k + 1 < r.events.len {
+        let n = r.events[k + 1];
+        if heat_result(n.kind) && n.bottle == e.bottle && n.from == e.from { return true; }
+    }
+    if board.bottles[e.bottle].cover == Cover.Rime { return true; }
+    for l in k + 1..r.events.len {
+        let n = r.events[l];
+        if n.kind == EventKind.Thawed && n.bottle == e.bottle && n.from >= 0 { return true; }
+    }
+    false
+}
+
+// The flasks a lantern lighting (event k) changes, one bit each: the smoke
+// it clears and the shrouds it lifts, and the moonpetals if it is the
+// board's first light.
+fn light_reach(before: Board, r: PourResult, k: i64) -> i64 {
+    let e = r.events[k];
+    var mask = 0;
+    for l in k + 1..r.events.len {
+        let n = r.events[l];
+        if (n.kind == EventKind.MurkCleared || n.kind == EventKind.ShroudLifted) && n.from == e.bottle {
+            mask |= 1 << n.bottle;
+        }
+    }
+    var first = !any_lantern_lit(before);
+    for l in k { if r.events[l].kind == EventKind.Lit { first = false; } }
+    if first {
+        for j in before.count { if before.bottles[j].body == Body.Moonpetal { mask |= 1 << j; } }
+    }
+    mask
+}
+
+// An hourglass turning over, in seconds from its start: a little lean back,
+// the turn on its pivots past upside down and back, the liquid falling
+// through the empty end, then quicksilver running down a step at a time.
+let FLIP_BACK: f64 = 0.16;
+let FLIP_OVER: f64 = 0.62;
+let FLIP_REST: f64 = 0.95;
+let FLIP_STEP: f64 = 0.16;
+let FLIP_LEAN: f64 = 0.16;
+let FLIP_SWING: f64 = 0.18;
+
+// How far it has turned, in radians.
+fn flip_turn(t: f64) -> f32 {
+    if t < FLIP_BACK { return -FLIP_LEAN as f32 * ease(t / FLIP_BACK); }
+    if t < FLIP_OVER {
+        let u = ease((t - FLIP_BACK) / (FLIP_OVER - FLIP_BACK)) as f64;
+        return (-FLIP_LEAN + (PI + FLIP_SWING + FLIP_LEAN) * u) as f32;
+    }
+    if t < FLIP_REST {
+        let u = (t - FLIP_OVER) / (FLIP_REST - FLIP_OVER);
+        return (PI + FLIP_SWING * cos(u * PI * 1.5) * (1.0 - u) * (1.0 - u)) as f32;
+    }
+    PI
+}
+
+fn flip_fall_at() -> f64 { FLIP_OVER - 0.1 }
+fn flip_fall_time(gap: i64) -> f64 { if gap <= 0 { 0.0 } else { 0.12 + 0.05 * sqrt(gap as f64) } }
+fn flip_sink_at(gap: i64) -> f64 { max(flip_fall_at() + flip_fall_time(gap), FLIP_REST - 0.1) + 0.05 }
+fn flip_span(gap: i64, steps: i64) -> f64 { flip_sink_at(gap) + steps * FLIP_STEP + 0.12 }
+
+// One step of quicksilver running down: each silver layer with another
+// liquid right under it changes places with it, smoke and all.
+fn sink_step(b: Bottle) -> Bottle, bool {
+    var s = b;
+    var moved = false;
+    let n: i64 = b.n;
+    var k = 1;
+    while k < n {
+        if s.seg[k] == QUICKSILVER && s.seg[k - 1] != QUICKSILVER {
+            s.seg[k] = s.seg[k - 1];
+            s.seg[k - 1] = QUICKSILVER;
+            let m: i64 = s.murk;
+            let lo = (m >> (k - 1)) & 1;
+            let hi = (m >> k) & 1;
+            s.murk = ((m & ~(3 << (k - 1))) | (lo << k) | (hi << (k - 1))) as u16;
+            moved = true;
+            k += 2;
+        } else {
+            k++;
+        }
+    }
+    return s, moved;
+}
+
+// The stack turned over, before quicksilver runs down.
+fn turned(s: Bottle) -> Bottle {
+    var alt = s;
+    let n: i64 = s.n;
+    var murk = 0;
+    for k in n {
+        alt.seg[k] = s.seg[n - 1 - k];
+        if murky(s, n - 1 - k) { murk |= 1 << k; }
+    }
+    alt.murk = murk as u16;
+    alt
+}
+
+// The steps quicksilver takes to run down a stack, and where it ends.
+fn sink_steps(s: Bottle) -> i64, Bottle {
+    var st = s;
+    var steps = 0;
+    while steps < MAX_CAP {
+        let next, moved = sink_step(st);
+        if !moved { break; }
+        st = next;
+        steps++;
+    }
+    return steps, st;
+}
+
 // The board just after a pour's liquid moved, before anything it set off:
 // what landed in the destination and what went on into its twin. A seal
 // on the destination stays until its own event breaks it.
@@ -168,8 +287,11 @@ fn schedule_pour(before: Board, from: i64, to: i64, r: PourResult, t0: f64) {
     var light_src = -1;
     var light_at = 0.0;
     var transmuted = false;
+    var sim = mid;          // the stacks as flips leave them, for their timing
     for e, k in r.events {
         if beats.len >= 40 { break; }
+        // Heat that changes nothing where it lands isn't shown going there.
+        if e.kind == EventKind.HeatPulse && !heat_reaches(r, k) { continue; }
         let span, delay0 = beat_span(e.kind);
         var delay = delay0;
         var b = Beat { kind: e.kind, bottle: e.bottle, from: e.from, span: span, alt: mid.bottles[0] };
@@ -209,16 +331,29 @@ fn schedule_pour(before: Board, from: i64, to: i64, r: PourResult, t0: f64) {
             b.at = light_at + 0.3;
             cursor = max(cursor, b.at + 0.25);
         } else if e.kind == EventKind.MurkCleared && e.from < 0 {
-            b.at = cursor;
+            // The flask poured from clears once it is back in its place.
+            b.at = if e.bottle == from { max(cursor, land + T_BACK) } else { cursor };
         } else {
+            if e.kind == EventKind.Flipped {
+                // It takes as long as the liquid has to fall and quicksilver
+                // to run; its change shows at the end.
+                let s = sim.bottles[e.bottle];
+                let steps, sunk = sink_steps(turned(s));
+                sim.bottles[e.bottle] = sunk;
+                b.gap = s.cap - s.n;
+                b.steps = steps;
+                b.span = flip_span(b.gap, b.steps);
+                delay = b.span;
+            }
             b.at = cursor;
             cursor += match e.kind {
-                Lit => 0.45, Flipped => 1.0, VineSpread => 0.75, VineWithered => 0.65, SalamanderHop => 0.55,
+                Lit => 0.45, Flipped => b.span, VineSpread => 0.75, VineWithered => 0.65, SalamanderHop => 0.55,
                 CatalystFired => 0.6, Completed => 0.12, _ => 0.3,
             };
             if e.kind == EventKind.Lit {
                 light_src = e.bottle;
                 light_at = b.at;
+                b.mask = light_reach(before, r, k);
             }
         }
         if e.kind != EventKind.HeatPulse && !heat_follow { heat_src = -2; }
@@ -248,7 +383,10 @@ fn update_beats() {
         for i in shown.count {
             var s .= shown.bottles[i];
             if s.cover == Cover.Rime && s.thaw > 1 { s.thaw--; }
+            // An hourglass about to turn over shows its time is up; its dial
+            // fills again as it turns.
             s.flip_count = board.bottles[i].flip_count;
+            if beat_waiting(EventKind.Flipped, i) && s.flip_count == 0 { s.flip_count = s.flip_every; }
             if board.bottles[i].fixture == Fixture.VineRoot { s.spread_count = board.bottles[i].spread_count; }
         }
     }
@@ -258,12 +396,36 @@ fn update_beats() {
             b.started = true;
             start_beat(b);
         }
+        if b.kind == EventKind.Flipped && b.started && !b.applied { flip_cues(b); }
         if !b.applied && now >= b.apply_at { apply_beat(b, true); }
         if !b.applied || now < b.at + b.span { done = false; }
     }
     if done && landing_at < 0.0 {
         beats.clear();
         shown = board;
+    }
+}
+
+// The sounds and settling of an hourglass turning over, each once: the
+// whoosh as it swings, the liquid landing at the bottom, each step
+// quicksilver takes running down.
+fn flip_cues(b: Beat&) {
+    let t = now - b.at;
+    fn cue(bit: i64, at: f64) -> bool {
+        if t < at || (b.cues >> bit) & 1 != 0 { return false; }
+        b.cues |= 1 << bit;
+        true
+    }
+    if cue(0, FLIP_BACK) { play(Sfx.Whoosh); }
+    if cue(1, flip_fall_at() + flip_fall_time(b.gap)) {
+        slosh(b.bottle, 0.3);
+        if b.gap > 0 { play_pitched(Sfx.Pour, 0.7, 0.35); }
+    }
+    for k in b.steps {
+        if cue(2 + k, flip_sink_at(b.gap) + (k + 1) * FLIP_STEP) {
+            slosh(b.bottle, 0.12);
+            play_pitched(Sfx.Chime, 1.8, 0.2);
+        }
     }
 }
 
@@ -320,18 +482,9 @@ fn start_beat(b: Beat&) {
         Lit => play(Sfx.Chime),
         ShroudLifted => play(Sfx.Reveal),
         Flipped => {
-            play(Sfx.Whoosh);
             // The stack turned over, before quicksilver runs back down.
-            let s = shown.bottles[i];
-            var alt = s;
-            let n: i64 = s.n;
-            var murk = 0;
-            for k in n {
-                alt.seg[k] = s.seg[n - 1 - k];
-                if murky(s, n - 1 - k) { murk |= 1 << k; }
-            }
-            alt.murk = murk as u16;
-            b.alt = alt;
+            b.alt = turned(shown.bottles[i]);
+            play_pitched(Sfx.Tool, 0.6, 0.35);
         },
         VineSpread => play(Sfx.Rustle),
         VineWithered => play_pitched(Sfx.Rustle, 0.7, 0.8),
@@ -393,6 +546,7 @@ fn apply_beat(b: Beat&, live: bool) {
             s.seg = alt.seg;
             s.murk = alt.murk;
             sink_quicksilver(s);
+            s.flip_count = board.bottles[i].flip_count;
         },
         VineSpread => { s.cover = Cover.Vine; },
         VineWithered => {
@@ -478,21 +632,68 @@ fn stand_look(i: i64) -> StandLook {
         }
     }
     if b.fixture == Fixture.VineRoot { l.wither = withering(); }
+    if b.body == Body.Hourglass { l.dial = flip_pose(i).dial; }
     l
 }
 
-// How an hourglass turning over is drawn: its squash, and the stack to show.
-fn flip_view(i: i64, b: Bottle) -> f32, Bottle {
-    for e in beats {
-        if e.kind != EventKind.Flipped || e.bottle != i || !e.started { continue; }
-        let k = (now - e.at) / e.span;
-        if k >= 1.0 { continue; }
-        if k < 0.45 { return cos(ease(k / 0.45) * PI * 0.5), b; }
-        let up = sin(ease((k - 0.45) / 0.3) * PI * 0.5);
-        if k < 0.75 { return max(up, 0.02), e.alt; }
-        return 1.0, b;
+// How open the moonpetals are: shut until a lantern is lit, opening as the
+// first light comes.
+fn petals_open() -> f32 {
+    var open: f32 = 0.0;
+    for j in shown.count {
+        let b = shown.bottles[j];
+        if b.fixture != Fixture.Lantern || !b.lit { continue; }
+        let k = beat_k(EventKind.Lit, j);
+        open = max(open, if k < 0.0 { 1.0 } else { ease((k as f64 - 0.3) / 0.5) });
     }
-    return 1.0, b;
+    open
+}
+
+// How an hourglass turning over is drawn this moment.
+struct FlipPose {
+    on: bool = false,
+    t: f64 = 0.0,           // seconds into it
+    turn: f32 = 0.0,        // radians turned
+    lift: f32 = 0.0,        // once it is over, the liquid held off the bottom, in layers
+    stack: Bottle,          // once it is over: the stack turned over, quicksilver running down
+    next: Bottle,           // the step quicksilver is taking, shown over it by `fade`
+    fade: f32 = 0.0,
+    step: i64 = -1,         // which step that is
+    dial: f32 = -1.0,       // the dial filling up again, 0..1
+    hop: f32 = 0.0,         // a salamander on it jumping clear, 0..1..0
+}
+
+fn flip_pose(i: i64) -> FlipPose {
+    var f = FlipPose { stack: shown.bottles[i], next: shown.bottles[i] };
+    for e in beats {
+        if e.kind != EventKind.Flipped || e.bottle != i || !e.started || e.applied { continue; }
+        let t = now - e.at;
+        f.on = true;
+        f.t = t;
+        f.turn = flip_turn(t);
+        let fall = clamp((t - flip_fall_at()) / max(flip_fall_time(e.gap), 0.01), 0.0, 1.0);
+        f.lift = (e.gap * (1.0 - fall * fall)) as f32;
+        let st = (t - flip_sink_at(e.gap)) / FLIP_STEP;
+        var s = e.alt;
+        var k = 0;
+        while k < e.steps && st >= k + 1.0 {
+            let next, moved = sink_step(s);
+            s = next;
+            k++;
+        }
+        f.stack = s;
+        f.next = s;
+        if k < e.steps && st > 0.0 {
+            let next, moved = sink_step(s);
+            f.next = next;
+            f.fade = ease((st - k - 0.25) / 0.5);
+            f.step = k;
+        }
+        f.dial = clamp((t - FLIP_OVER + 0.1) / 0.45, 0.0, 1.0) as f32;
+        f.hop = sin(clamp(t / FLIP_REST, 0.0, 1.0) * PI) as f32;
+        return f;
+    }
+    f
 }
 
 // A twin's fill while liquid comes through the tube.
@@ -589,7 +790,7 @@ fn draw_beats(out: Inst[>..]&) {
                     out.push(sm);
                 }
             },
-            Flipped => draw_flip(out, e, k),
+            Flipped => draw_flip(out, e),
             VineSpread => if !e.applied { draw_vine_reach(out, e, k / 0.45); },
             VineWithered => if e.applied {
                 // The root crumbles away.
@@ -679,7 +880,8 @@ fn draw_heat(out: Inst[>..]&, e: Beat, k: f32) {
 }
 
 // A lantern lights: it flares, and beams sweep to the flasks its light
-// reaches (its own and its neighbors).
+// changes (e.mask): smoke it clears, a shroud it lifts, moonpetals opening
+// to the board's first light.
 fn draw_light(out: Inst[>..]&, e: Beat, k: f32) {
     let i = e.bottle;
     let a = stand_anchors(i);
@@ -687,9 +889,8 @@ fn draw_light(out: Inst[>..]&, e: Beat, k: f32) {
     let src = lantern_pos(a);
     let fade = 1.0 - clamp((k - 0.6) / 0.4, 0.0, 1.0);
     glow(out, src, v2(hx * 3.5, hx * 3.5), 1.0, float4 { 1.0, 0.85, 0.5, 0.5 * (1.0 - k) });
-    var reach: i64[..7] = [i];
-    for j in neighbors(shown, i) { reach.push(j); }
-    for j in reach {
+    for j in shown.count {
+        if (e.mask >> j) & 1 == 0 { continue; }
         let aj = slot_anchors(j);
         let to = at(aj, aj.body);
         let ctrl = v2((src.x + to.x) * 0.5, (src.y + to.y) * 0.5 - hx * 0.4);
@@ -699,26 +900,20 @@ fn draw_light(out: Inst[>..]&, e: Beat, k: f32) {
     }
 }
 
-// An hourglass turning over: the squash is done by the flask's drawing;
-// here quicksilver runs back down once it is upright.
-fn draw_flip(out: Inst[>..]&, e: Beat, k: f32) {
-    if k < 0.72 || k > 0.98 { return; }
+// An hourglass turning over: the flask is drawn turning (main.goose's
+// draw_turning); here a glint on each quicksilver layer running down a step.
+fn draw_flip(out: Inst[>..]&, e: Beat) {
     let i = e.bottle;
+    let f = flip_pose(i);
+    if f.step < 0 { return; }
     let a = slot_anchors(i);
-    let s = shown.bottles[i];
-    let alt = e.alt;
-    let run = clamp((k - 0.72) / 0.24, 0.0, 1.0);
-    var to_k = 0;
-    for kk in alt.n as i64 {
-        if alt.seg[kk] != QUICKSILVER { continue; }
-        let from_c = a.center + segment_center(a.half, kk);
-        let to_c = a.center + segment_center(a.half, to_k);
-        to_k++;
-        let p = lerp2(from_c, to_c, ease(run));
-        glow(out, p, v2(a.hx * 0.45, a.hx * 0.32), 0.6, float4 { 0.9, 0.93, 1.0, 0.9 * (1.0 - run * 0.6) });
-        glow(out, p + v2(-a.hx * 0.12, -a.hx * 0.08), v2(a.hx * 0.12, a.hx * 0.08), 0.5, white(0.9));
+    for kk in f.stack.n as i64 {
+        if kk == 0 || f.stack.seg[kk] != QUICKSILVER || f.next.seg[kk - 1] != QUICKSILVER || f.stack.seg[kk - 1] == QUICKSILVER { continue; }
+        let p = lerp2(a.center + segment_center(a.half, kk), a.center + segment_center(a.half, kk - 1), f.fade);
+        let glint = sin(f.fade * PI);
+        glow(out, p, v2(a.hx * 0.55, a.hx * 0.3), 0.6, float4 { 0.9, 0.93, 1.0, 0.7 * glint });
+        glow(out, p + v2(-a.hx * 0.12, -a.hx * 0.08), v2(a.hx * 0.12, a.hx * 0.08), 0.5, white(0.9 * glint));
     }
-    if run >= 0.99 { slosh(i, 0.25); }
 }
 
 // A vine reaching across from the flask next to the new tendril.

@@ -355,4 +355,8 @@ functions.
   (A2); completion drops a stopper in and slides a label on (A5); every
   force has a visible effect (heat shimmer, light beams, the flip, the
   salamander's hop, vines growing and burning, the athanor's gold flash,
-  the catalyst's rune burst).
+  the catalyst's rune burst). Heat and light are shown going only to flasks
+  they change. A tipped flask's liquid stays level and leaves over the lip;
+  an hourglass turns over on its pivots and its liquid falls back down.
+  Whatever moves (a flask being poured from, an hourglass turning, the
+  forces) is drawn over the board's words, so labels stay in view.

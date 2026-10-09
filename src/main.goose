@@ -164,6 +164,8 @@ var script_hold = false;
 var pointer = float2_0;
 
 var board_layer = Layer { buffer: gfx::Buffer { 0 } };
+var motion_layer = Layer { buffer: gfx::Buffer { 0 } };
+var motion: Inst[>..] = [];     // what moves over the board, drawn over its words
 var overlay_layer = Layer { buffer: gfx::Buffer { 0 } };
 var look: Look;
 
@@ -747,9 +749,11 @@ fn update_play(dt: f32) {
 
 // --- drawing the board ---------------------------------------------------------------
 
-// `drain` segments have run out of the bottom: the rest shows slid down.
+// `drain` segments have run out of the bottom: the rest shows slid down
+// (less than none: the liquid is held that far off the bottom). `rigid`
+// turns the liquid with the glass instead of keeping it level.
 fn liquid_inst(n: i64, b: Bottle, pos: float2, half: float2, angle: f32, fill: f32, murk: f32, wave: f32,
-               drain: f32) -> Inst {
+               drain: f32, rigid: bool) -> Inst {
     var i = inst(Shape.Liquid, pos, half, liquid_fx(n));
     // Four layers to a number, five bits each, bottom first.
     fn four(k: i64) -> f32 {
@@ -758,7 +762,8 @@ fn liquid_inst(n: i64, b: Bottle, pos: float2, half: float2, angle: f32, fill: f
         v
     }
     i.p0 = float4 { four(0), four(4), four(8), four(12) };
-    i.p1 = float4 { fill, murk, wave, b.cap + clamp(drain, 0.0, 15.9) / 16.0 };
+    let w = b.cap + 0.5 + clamp(drain, -15.9, 15.9) / 32.0;
+    i.p1 = float4 { fill, murk, wave, if rigid { -w } else { w } };
     i.misc.y = angle;
     i
 }
@@ -766,47 +771,54 @@ fn liquid_inst(n: i64, b: Bottle, pos: float2, half: float2, angle: f32, fill: f
 // One flask with its contents and whatever is on or over it.
 fn draw_flask(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: float2, angle: f32, fill: f32,
               wave: f32, glow_amount: f32, glow_color: float4, overlays: bool) {
-    draw_flask_squashed(out, i, b, pos, half, angle, 1.0, fill, 0.0, wave, glow_amount, glow_color, overlays);
+    draw_flask_drained(out, i, b, pos, half, angle, fill, 0.0, wave, glow_amount, glow_color, overlays);
 }
 
-// The same, squashed upright by `squash` (an hourglass turning over), with
-// `drain` segments run out of its bottom (a siphon pouring). Its parts are
-// drawn in parts.goose, the forces' moments in forces.goose.
-fn draw_flask_squashed(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: float2, angle: f32, squash: f32,
-                       fill: f32, drain: f32, wave: f32, glow_amount: f32, glow_color: float4, overlays: bool) {
-    let a = flask_anchors(pos, half, angle, squash);
-    let open: f32 = if i >= 0 && any_lantern_lit(shown) { 1.0 } else { 0.0 };
-    draw_body_back(out, b, a, open);
-    var back = inst(Shape.FlaskBack, pos, half, float4 { 0.12, 0.10, 0.18, 0.45 });
+// The inside of a flask, behind its liquid; `alpha` fades it.
+fn flask_back(out: Inst[>..]&, pos: float2, half: float2, angle: f32, alpha: f32) {
+    var back = inst(Shape.FlaskBack, pos, half, float4 { 0.12, 0.10, 0.18, 0.45 * alpha });
     back.misc.y = angle;
-    back.misc.w = squash;
     out.push(back);
+}
+
+// A flask's glass, over its liquid: an athanor's is warmed by its hearth, a
+// tall flask's tinted with the one color it takes, and a lantern's light
+// warms what it falls on.
+fn flask_glass(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: float2, angle: f32, alpha: f32,
+               glow_amount: f32, glow_color: float4) {
+    var tint = if b.body == Body.Athanor { float4 { 1.0, 0.8, 0.6, 1.0 } } else { float4 { 0.86, 0.92, 1.0, 1.0 } };
+    if tall_color(b) > 0 { tint = mix4(tint, palette_color(tall_color(b), save.color_safe), 0.85); }
+    if in_lantern_light(i) { tint = mix4(tint, float4 { 1.0, 0.76, 0.42, 1.0 }, 0.65); }
+    tint.w = alpha;
+    var glass = inst(Shape.Glass, pos, half, tint);
+    glass.misc.y = angle;
+    glass.misc.z = 18.0;
+    glass.p0 = float4 { glow_amount, 0.0, 0.0, 0.0 };
+    glass.p1 = glow_color;
+    out.push(glass);
+}
+
+// The same, with `drain` segments run out of its bottom (a siphon pouring).
+// Its parts are drawn in parts.goose, the forces' moments in forces.goose.
+fn draw_flask_drained(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: float2, angle: f32, fill: f32,
+                      drain: f32, wave: f32, glow_amount: f32, glow_color: float4, overlays: bool) {
+    let a = flask_anchors(pos, half, angle, 1.0);
+    let open: f32 = if i >= 0 { petals_open() } else { 0.0 };
+    draw_body_back(out, b, a, open);
+    flask_back(out, pos, half, angle, 1.0);
     // A shroud hides the flask entirely; a seal hides what is in it.
     let shrouded = overlays && b.cover == Cover.Shroud;
     let sealed = overlays && b.cover == Cover.Seal;
     if !shrouded && fill > 0.0 {
         let murk: f32 = if sealed { (1 << b.cap) - 1 } else { b.murk };
-        var l = liquid_inst(i, b, pos, half, angle, fill, murk, wave, drain);
-        l.misc.w = squash;
-        out.push(l);
+        out.push(liquid_inst(i, b, pos, half, angle, fill, murk, wave, drain, false));
     }
-    // An athanor's glass is warmed by its hearth; a tall flask's is tinted
-    // with the one color it takes.
-    var tint = if b.body == Body.Athanor { float4 { 1.0, 0.8, 0.6, 1.0 } } else { float4 { 0.86, 0.92, 1.0, 1.0 } };
-    if tall_color(b) > 0 { tint = mix4(tint, palette_color(tall_color(b), save.color_safe), 0.85); }
-    if in_lantern_light(i) { tint = mix4(tint, float4 { 1.0, 0.76, 0.42, 1.0 }, 0.65); }
-    var glass = inst(Shape.Glass, pos, half, tint);
-    glass.misc.y = angle;
-    glass.misc.z = 18.0;
-    glass.misc.w = squash;
-    glass.p0 = float4 { glow_amount, 0.0, 0.0, 0.0 };
-    glass.p1 = glow_color;
-    out.push(glass);
-    if squash == 1.0 { draw_body(out, i, b, a, open, save.color_safe); }
+    flask_glass(out, i, b, pos, half, angle, 1.0, glow_amount, glow_color);
+    draw_body(out, i, b, a, open, save.color_safe);
     if !overlays || angle != 0.0 { return; }
 
     // Color-blind symbols on what is in view, and "?" on murk in that mode.
-    if !shrouded && !sealed && save.color_safe && squash == 1.0 {
+    if !shrouded && !sealed && save.color_safe {
         for k in b.n as i64 {
             let c = at(a, segment_center(half, k));
             if murky(b, k) {
@@ -836,9 +848,15 @@ fn in_lantern_light(i: i64) -> bool {
     false
 }
 
+// The board. What moves over it -- the flasks being poured from, an
+// hourglass turning over, the forces at work -- goes in `motion`, drawn
+// over the board's words, so a flask passing by covers a label instead of
+// showing it through.
 fn draw_board(out: Inst[>..]&) {
     var moving: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
     for a in pours { if a.active { moving[a.from] = true; } }
+    var turning: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
+    for i in shown.count { turning[i] = flip_pose(i).on; }
     fn place(i: i64) -> Anchors { if moving[i] { stand_anchors(i) } else { slot_anchors(i) } }
     // Each flask's soft shadow on the table.
     for i in shown.count {
@@ -879,20 +897,23 @@ fn draw_board(out: Inst[>..]&) {
     }
     // Back to front: what stands behind each flask, and the flask. What
     // stands in front of them goes over them all, since a row's foot is
-    // behind the rims of the row in front. Then the flasks moving.
+    // behind the rims of the row in front. Then what moves.
     for i in drawing {
         if i >= shown.count { continue; }
         draw_stand_back(out, i, shown.bottles[i], stand_anchors(i), stand_look(i));
-        if !moving[i] { draw_resting(out, i); }
+        if !moving[i] && !turning[i] { draw_resting(out, i); }
     }
     for i in drawing {
         if i < shown.count { draw_stand_front(out, i, shown.bottles[i], stand_anchors(i), stand_look(i)); }
     }
+    for i in drawing {
+        if i < shown.count && turning[i] { draw_turning(motion, i, flip_pose(i)); }
+    }
     for a in pours {
         if !a.active { continue; }
-        draw_pouring(out, a);
+        draw_pouring(motion, a);
     }
-    draw_beats(out);
+    draw_beats(motion);
 }
 
 // A flask at rest (or lifted, or being poured into).
@@ -915,8 +936,6 @@ fn draw_resting(out: Inst[>..]&, i: i64) {
         }
     }
     fill = overflow_fill(i, fill);
-    let squash, view = flip_view(i, b);
-    b = view;
     let pos = rest_pos(i);
     var g: f32 = 0.0;
     var gc = gold(1.0);
@@ -930,16 +949,42 @@ fn draw_resting(out: Inst[>..]&, i: i64) {
         g = max(g, (1.0 - since / 1.2) as f32 * 1.4);
         gc = palette_color(flask_color(b), save.color_safe);
     }
-    draw_flask_squashed(out, i, b, pos, slots[i].half, 0.0, squash, fill, 0.0, wave, g, gc, true);
+    draw_flask(out, i, b, pos, slots[i].half, 0.0, fill, wave, g, gc, true);
     if (i == hint_from || i == hint_to) && now < hint_until {
         let label = if i == hint_from { "from" } else { "to" };
         text_shadowed(0, pos.x, pos.y - slots[i].half.y - 18.0, label, TextStyle.Small, white(0.95), Align.Center);
     }
 }
 
-// The source of a pour: lifted over the target, tipped, emptied, put back.
-// A siphon isn't tipped: it is held with its tap over the target and its
-// bottom run drains out of the tap.
+// How far a flask holding `fill` layers is tipped for its surface to just
+// reach the lip, as the liquid shader keeps the surface level: while the
+// liquid still covers the bottom the slope takes what the column lacks,
+// after that the liquid is a wedge in the lower corner.
+fn brim_tilt(half: float2, cap: i64, fill: f32) -> f32 {
+    let hx = half.x;
+    let seg = (half.y * 2.0 - hx * SHADER_EXTRA) / max(cap, CAP);
+    let w = hx * LIQUID_W;
+    let l = half.y * 2.0 - hx * (FLASK_E * FLASK_BODY + 0.05 + FLASK_E);    // the liquid's bottom to the rim
+    let v = max(fill, 0.05) * seg;
+    var slope = (l - v) / w;
+    if v < l * 0.5 { slope = l * l / (4.0 * w * v); }
+    min(atan(slope), 1.4)
+}
+
+// How full flask `to` shows while a pour fills it.
+fn filling(a: PourAnim) -> f32 {
+    let t = now - a.t0;
+    let n0: f32 = a.dst_before.n;
+    let n1: f32 = a.dst_after.n;
+    if t < T_LIFT { return n0; }
+    if covered(a.dst_before) && a.amount == 0 { return n1; }
+    n0 + (n1 - n0) * ease((t - T_LIFT) / T_POUR)
+}
+
+// The source of a pour: lifted over the target and tipped until its
+// surface reaches the lip, then tipped further as it empties, so the
+// liquid leaves over the lip; then put back. A siphon isn't tipped: it is
+// held with its tap over the target and its bottom run drains out of the tap.
 fn draw_pouring(out: Inst[>..]&, a: PourAnim) {
     if a.src_before.body == Body.Siphon {
         draw_siphoning(out, a);
@@ -951,44 +996,49 @@ fn draw_pouring(out: Inst[>..]&, a: PourAnim) {
     let thalf = slots[a.to].half;
     let side: f32 = if home.x <= target.x { 1.0 } else { -1.0 };
     let t = now - a.t0;
-    let tilt_full: f32 = 1.25;
-    let lip_target = v2(target.x - side * thalf.x * 0.15, target.y - thalf.y - half.x * 0.6);
-    // The center that puts the tipped lip over the target's mouth.
-    fn center_for(angle: f32) -> float2 {
+    let cap: i64 = a.src_before.cap;
+    let n0: f32 = a.src_before.n;
+    let tilt0 = max(brim_tilt(half, cap, n0), 0.3);
+    let tilt1 = max(brim_tilt(half, cap, n0 - a.amount), tilt0);
+    let lip_target = v2(target.x - side * thalf.x * 0.1, target.y - thalf.y - half.x * 0.5);
+    // The lip it pours over, in its own frame.
+    let lip_local = v2(side * half.x * 0.96, -half.y + half.x * FLASK_E);
+    fn lip_at(center: float2, angle: f32) -> float2 {
         let s = sin(angle);
         let c = cos(angle);
-        v2(lip_target.x - s * half.y, lip_target.y + c * half.y)
+        center + v2(c * lip_local.x - s * lip_local.y, s * lip_local.x + c * lip_local.y)
     }
+    // The center that puts the tipped lip over the target's mouth.
+    fn center_for(angle: f32) -> float2 { lip_target - (lip_at(v2(0.0, 0.0), angle)) }
     var pos = home;
     var angle: f32 = 0.0;
-    var fill: f32 = a.src_before.n;
+    var fill: f32 = n0;
     var shown_src = a.src_before;
     var stream = false;
     var stream_a: f32 = 0.0;
     if t < T_LIFT {
         let k = ease(t / T_LIFT);
-        angle = side * tilt_full * 0.55 * k;
-        pos = lerp2(home - v2(0.0, half.x * 1.2), center_for(angle), k);
+        angle = side * tilt0 * k;
+        pos = lerp2(home - v2(0.0, half.x * 1.2), center_for(side * tilt0), k);
     } else if t < T_LIFT + T_POUR {
         let k = ease((t - T_LIFT) / T_POUR);
-        angle = side * (tilt_full * 0.55 + tilt_full * 0.45 * k);
+        fill = n0 - a.amount * k;
+        angle = side * max(brim_tilt(half, cap, fill), tilt0);
         pos = center_for(angle);
-        fill = a.src_before.n - a.amount * k;
         stream = a.amount > 0;
         stream_a = min(1.0, min((t - T_LIFT) / 0.08, (T_LIFT + T_POUR - t) / 0.08)) as f32;
     } else {
         let k = ease((t - T_LIFT - T_POUR) / T_BACK);
-        angle = side * tilt_full * (1.0 - k);
-        pos = lerp2(center_for(side * tilt_full), home, k);
+        angle = side * tilt1 * (1.0 - k);
+        pos = lerp2(center_for(side * tilt1), home, k);
         shown_src = shown.bottles[a.from];
         fill = shown_src.n;
     }
     if stream {
         // The stream leaves the lip moving forward and arcs down under
-        // gravity, splashing where it lands.
-        let lip = v2(pos.x + sin(angle) * half.y, pos.y - cos(angle) * half.y);
-        let dst_fill = a.dst_after.n;
-        let surface = target.y + segment_center(thalf, max(0, dst_fill - 1)).y - thalf.x * 0.6;
+        // gravity into the middle of the rising surface, splashing there.
+        let lip = lip_at(pos, angle);
+        let surface = target.y + surface_mid(thalf, a.dst_after.cap, filling(a)).y;
         let land = v2(target.x + side * thalf.x * 0.2, max(surface, lip.y + 6.0));
         let reach = ease((t - T_LIFT) / 0.12);
         let end = lerp2(lip, land, reach);
@@ -1033,9 +1083,9 @@ fn draw_siphoning(out: Inst[>..]&, a: PourAnim) {
         fill = shown_src.n;
     }
     if stream_a > 0.0 {
-        // Straight down out of the tap, splashing where it lands.
+        // Straight down out of the tap into the rising surface, splashing there.
         let spout = pos + spout0;
-        let surface = target.y + segment_center(thalf, max(0, a.dst_after.n - 1)).y - thalf.x * 0.6;
+        let surface = target.y + surface_mid(thalf, a.dst_after.cap, filling(a)).y;
         let land = v2(spout.x, max(surface, spout.y + 6.0));
         let end = lerp2(spout, land, ease((t - T_LIFT) / 0.12));
         let color = palette_color(a.color, save.color_safe);
@@ -1043,11 +1093,44 @@ fn draw_siphoning(out: Inst[>..]&, a: PourAnim) {
         glow(out, end, v2(half.x * 0.4, half.x * 0.16), 0.8, with_alpha(color, 0.5 * stream_a));
         if end.y >= land.y - 0.5 && rand.rand_int(3) != 0 { splash(end, color, 1.0); }
     }
-    draw_flask_squashed(out, a.from, shown_src, pos, half, 0.0, 1.0, fill, drain, if stream_a > 0.0 { 0.3 } else { 0.0 },
-                        0.0, gold(1.0), false);
+    draw_flask_drained(out, a.from, shown_src, pos, half, 0.0, fill, drain, if stream_a > 0.0 { 0.3 } else { 0.0 },
+                       0.0, gold(1.0), false);
     if a.from == shown.salamander && !hop_flying() {
         let an = flask_anchors(pos, half, 0.0, 1.0);
         draw_salamander(out, at(an, an.lip), half.x, 0.0, salamander_facing, 0.0, 0.0);
+    }
+}
+
+// An hourglass turning over on its stand's pivots, at its middle. The glass
+// turns as one cylinder; as it passes level its open end crossfades back to
+// the top, and from there it is drawn the other way round: the stack turned
+// over, held at the far end until it falls, then quicksilver running down.
+// Until then the liquid turns with the glass.
+fn draw_turning(out: Inst[>..]&, i: i64, f: FlipPose) {
+    let b = shown.bottles[i];
+    let pos = rest_pos(i);
+    let half = slots[i].half;
+    let over = clamp((f.turn - PI * 0.5) / 0.5 + 0.5, 0.0, 1.0);
+    let back_turn = f.turn - PI;
+    if over < 1.0 { flask_back(out, pos, half, f.turn, 1.0 - over); }
+    if over > 0.0 { flask_back(out, pos, half, back_turn, over); }
+    if f.turn < PI * 0.5 {
+        if b.n > 0 { out.push(liquid_inst(i, b, pos, half, f.turn, b.n, b.murk, 0.0, 0.0, true)); }
+    } else if b.n > 0 {
+        let fill = f.stack.n + f.lift;
+        out.push(liquid_inst(i, f.stack, pos, half, back_turn, fill, f.stack.murk, 0.0, -f.lift, true));
+        if f.fade > 0.0 {
+            var l = liquid_inst(i, f.next, pos, half, back_turn, fill, f.next.murk, 0.0, -f.lift, true);
+            l.color.w = f.fade;
+            out.push(l);
+        }
+    }
+    if over < 1.0 { flask_glass(out, i, b, pos, half, f.turn, 1.0 - over, 0.0, gold(1.0)); }
+    if over > 0.0 { flask_glass(out, i, b, pos, half, back_turn, over, 0.0, gold(1.0)); }
+    // A salamander on it hops clear and lands back on the rim.
+    if i == shown.salamander && !hop_flying() {
+        let a = slot_anchors(i);
+        draw_salamander(out, at(a, a.lip) - v2(0.0, a.hx * 1.4 * f.hop), half.x, 0.0, salamander_facing, f.hop, 0.0);
     }
 }
 
@@ -1565,6 +1648,7 @@ fn draw_frame(dt: f32) {
     var base: Inst[>..] = [];
     var top: Inst[>..] = [];
     var ink: Inst[>..] = [];
+    motion.clear();
     let theme = current_theme();
     look.light = scene_light(theme, now);
     // The room (scene.goose); no clicks while the ink moves between screens.
@@ -1591,12 +1675,14 @@ fn draw_frame(dt: f32) {
     draw_particles(top);
     draw_transition(ink);
     to_screen(base);
+    to_screen(motion);
     to_screen(top);
     to_screen(ink);
     look.screen = float4 { screen_px.x, screen_px.y, (now % 1000.0) as f32, if save.color_safe { 1.0 } else { 0.0 } };
     fill_palette(look, save.color_safe);
     flush_layer(board_layer, base, look, true);
     end_text(0);
+    if motion.len > 0 { flush_layer(motion_layer, motion, look, false); }
     flush_layer(overlay_layer, top, look, false);
     end_text(1);
     if ink.len > 0 { flush_layer(ink_layer, ink, look, false); }
@@ -1642,6 +1728,8 @@ fn main() {
     var start_seed_value: i64 = -1;
     var like = 20;
     var start_hand_level = -1;
+    var shots_from = -1;
+    var shots_every = 1;
     var clicks_script: Scripted[>..] = [];
     let argv = args();
     var a = 1;
@@ -1654,6 +1742,12 @@ fn main() {
         else if opt == "--seed" && has_value { let n, ok = parse_int(argv[a + 1]); if ok { start_seed_value = n; } a++; }
         else if opt == "--like" && has_value { let n, ok = parse_int(argv[a + 1]); if ok { like = n; } a++; }
         else if opt == "--hand" && has_value { let n, ok = parse_int(argv[a + 1]); if ok { start_hand_level = n; } a++; }
+        else if opt == "--shots" && a + 2 < argv.len {
+            let f, okf = parse_int(argv[a + 1]);
+            let k, okk = parse_int(argv[a + 2]);
+            if okf && okk { shots_from = f; shots_every = max(1, k); }
+            a += 2;
+        }
         else if opt == "--autoplay" { autoplay = true; }
         else if opt == "--export-music" && has_value { exit(if export_music(argv[a + 1]) { 0 } else { 1 }); }
         else if (opt == "--click" || opt == "--hold") && a + 2 < argv.len {
@@ -1671,6 +1765,7 @@ fn main() {
                   --autoplay     let the hint solver play
                   --click X Y    (testing) click at canvas point X, Y; one every 20 frames after frame 10
                   --hold X Y     (testing) press there and keep holding, in the same turn as the clicks
+                  --shots F K    (testing) with --screenshot P, also save P-<frame>.png every K frames from frame F
                   --export-music DIR   write each room's music loop to DIR as a WAV file
                 """);
             return;
@@ -1726,6 +1821,9 @@ fn main() {
         draw_frame(dt);
         update_transition();
         drawn++;
+        if shots_from >= 0 && shot.len > 0 && drawn >= shots_from && (drawn - shots_from) % shots_every == 0 {
+            gfx::screenshot(str(shot, "-", drawn, ".png"));
+        }
         // When nothing moves, draw a few frames a second instead of sixty:
         // with software rendering every frame costs real CPU.
         if frames < 0 && !lively() { sleep_ms(70); }
