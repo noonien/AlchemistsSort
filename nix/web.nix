@@ -68,6 +68,11 @@ stdenv.mkDerivation {
       -sFORCE_FILESYSTEM -lidbfs.js --pre-js web/pre.js --shell-file web/shell.html \
       --preload-file site/data@/data
 
+    # The loading screen's flask fills by the bytes read of these two.
+    substituteInPlace out/index.html \
+      --replace-fail '@WASM_BYTES@' "$(stat -c %s out/index.wasm)" \
+      --replace-fail '@DATA_BYTES@' "$(stat -c %s out/index.data)"
+
     runHook postBuild
   '';
 

@@ -8,30 +8,147 @@
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #0d0a17; }
     canvas { display: block; touch-action: none; outline: none; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
-    #status {
-      position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
-      color: #f9d173; font: 600 18px/1.4 Georgia, serif; text-align: center; padding: 16px;
-      pointer-events: none;
+
+    /* The loading screen: a flask that fills as the game downloads. */
+    #loading {
+      position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 18px; padding: 16px; text-align: center; color: #f9d173; font: 600 18px/1.4 Georgia, serif;
+      background: radial-gradient(ellipse at 50% 55%, #2a1c3a 0%, #120d1f 55%, #0d0a17 100%);
+      transition: opacity 0.6s ease;
     }
+    #loading.done { opacity: 0; pointer-events: none; }
+    #loading h1 {
+      margin: 0; font: 700 30px/1.15 Georgia, serif; letter-spacing: 0.08em; font-variant: small-caps;
+      color: #f9d173; text-shadow: 0 2px 12px rgba(249, 209, 115, 0.25);
+    }
+    #flask { width: 132px; height: 170px; overflow: visible; }
+    #flask .glass { fill: rgba(255, 255, 255, 0.05); stroke: rgba(255, 240, 220, 0.75); stroke-width: 3; }
+    #flask .glow { fill: #ff7a4a; opacity: 0.18; filter: blur(14px); animation: glow 2.4s ease-in-out infinite; }
+    #level { transition: transform 0.35s ease-out; }
+    #wave { animation: wave 2.2s linear infinite; }
+    .bubble { fill: rgba(255, 230, 220, 0.7); animation: rise 2.6s ease-in infinite; opacity: 0; }
+    .bubble:nth-child(2) { animation-delay: 0.9s; animation-duration: 3.1s; }
+    .bubble:nth-child(3) { animation-delay: 1.7s; animation-duration: 2.3s; }
+    @keyframes wave { from { transform: translateX(0); } to { transform: translateX(-60px); } }
+    @keyframes rise { 0% { opacity: 0; transform: translateY(0); } 15% { opacity: 1; } 100% { opacity: 0; transform: translateY(-60px); } }
+    @keyframes glow { 50% { opacity: 0.3; } }
+    #status { min-height: 1.4em; }
+    #detail { font: 14px/1.4 Georgia, serif; color: rgba(249, 209, 115, 0.6); min-height: 1.4em; }
+    #loading.failed #flask { opacity: 0.35; }
+    #loading.failed { pointer-events: auto; }
   </style>
 </head>
 <body>
   <canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
-  <div id="status">Brewing…</div>
+  <div id="loading">
+    <h1>Alchemist's Sort</h1>
+    <svg id="flask" viewBox="0 0 120 160" aria-hidden="true">
+      <defs>
+        <clipPath id="inside"><path d="M48 8 h24 v46 a42 42 0 1 1 -24 0 z"/></clipPath>
+        <linearGradient id="potion" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#ff6a7a"/><stop offset="1" stop-color="#b8204a"/>
+        </linearGradient>
+      </defs>
+      <ellipse class="glow" cx="60" cy="118" rx="46" ry="30"/>
+      <g clip-path="url(#inside)">
+        <g id="level" style="transform: translateY(132px)">
+          <path id="wave" fill="url(#potion)"
+                d="M0 6 q15 -6 30 0 t30 0 t30 0 t30 0 t30 0 t30 0 V200 H0 z"/>
+          <g transform="translate(0 20)">
+            <circle class="bubble" cx="52" cy="40" r="3"/>
+            <circle class="bubble" cx="70" cy="46" r="2.2"/>
+            <circle class="bubble" cx="60" cy="52" r="2.6"/>
+          </g>
+        </g>
+      </g>
+      <path class="glass" d="M48 8 h24 v46 a42 42 0 1 1 -24 0 z"/>
+      <path d="M44 6 h32" stroke="rgba(255,240,220,0.75)" stroke-width="5" stroke-linecap="round"/>
+    </svg>
+    <div id="status">Gathering ingredients…</div>
+    <div id="detail"></div>
+  </div>
   <script>
+    const loading = document.getElementById('loading');
     const status = document.getElementById('status');
+    const detail = document.getElementById('detail');
+    const level = document.getElementById('level');
+
+    // The flask fills with the bytes downloaded of the game and its data.
+    // The build writes in the files' sizes, since a server that compresses
+    // them reports the compressed length, not what the browser reads.
+    const expected = { wasm: Number('@WASM_BYTES@') || 0, data: Number('@DATA_BYTES@') || 0 };
+    const got = { wasm: 0, data: 0 };
+    const total = { wasm: expected.wasm, data: expected.data };
+    let failed = false;
+
+    function mb(n) { return (n / 1048576).toFixed(1); }
+    function show() {
+      if (failed) return;
+      const sum = got.wasm + got.data;
+      const all = Math.max(total.wasm + total.data, sum, 1);
+      const t = Math.min(sum / all, 1);
+      // The liquid's surface runs from just above the flask's bottom (132) to
+      // its neck (40).
+      level.style.transform = 'translateY(' + (132 - 92 * t) + 'px)';
+      if (sum > 0) detail.textContent = mb(sum) + ' / ' + mb(all) + ' MB';
+      if (t >= 1) { status.textContent = 'Stirring…'; detail.textContent = ''; }
+    }
+    function fail(text) {
+      failed = true;
+      loading.classList.remove('done');
+      loading.classList.add('failed');
+      status.textContent = text;
+      detail.textContent = '';
+    }
+
+    // Count the bytes of the game's .wasm and .data as they arrive.
+    const realFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      const kind = /\.wasm(\?|$)/.test(url) ? 'wasm' : /\.data(\?|$)/.test(url) ? 'data' : null;
+      const response = await realFetch(input, init);
+      if (!kind || !response.ok || !response.body) return response;
+      if (!expected[kind]) total[kind] = Number(response.headers.get('content-length')) || 0;
+      const reader = response.body.getReader();
+      const counted = new ReadableStream({
+        async pull(controller) {
+          const { done, value } = await reader.read();
+          if (done) { controller.close(); return; }
+          got[kind] += value.byteLength;
+          show();
+          controller.enqueue(value);
+        },
+        cancel(reason) { reader.cancel(reason); },
+      });
+      return new Response(counted, { status: response.status, statusText: response.statusText, headers: response.headers });
+    };
+
     var Module = {
       canvas: document.getElementById('canvas'),
-      setStatus: (text) => { status.textContent = text || ''; },
-      monitorRunDependencies: () => {},
-      onRuntimeInitialized: () => { status.textContent = ''; },
-      onAbort: (what) => {
-        status.textContent = 'The game stopped: ' + what;
-        status.style.pointerEvents = 'auto';
+      // Emscripten reports the data's download as "Downloading data... (n/m)",
+      // in case it was fetched some way the counter above did not see.
+      setStatus: (text) => {
+        const m = /\((\d+)\/(\d+)\)/.exec(text || '');
+        if (m && got.data === 0) {
+          total.data = expected.data || Number(m[2]);
+          got.data = Number(m[1]);
+          show();
+        }
       },
+      monitorRunDependencies: () => {},
+      // The canvas shows the game after its first frames; then the flask fades.
+      onRuntimeInitialized: () => {
+        got.wasm = Math.max(got.wasm, total.wasm);
+        got.data = Math.max(got.data, total.data);
+        show();
+        requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => {
+          if (!failed) loading.classList.add('done');
+        })));
+      },
+      onAbort: (what) => fail('The game stopped: ' + what),
     };
     if (!document.createElement('canvas').getContext('webgl2')) {
-      status.textContent = 'This browser has no WebGL 2, which the game needs.';
+      fail('This browser has no WebGL 2, which the game needs.');
     }
   </script>
   {{{ SCRIPT }}}
