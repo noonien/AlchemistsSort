@@ -6,11 +6,12 @@ import .board;
 import .solver;
 
 // Visible liquid that a shuffle may move: in bottles with no cover on
-// them, not sealed, not a vow (whose color is fixed once chosen), clear of
-// murk, and not quicksilver (which has to stay sunk) or the Drop.
+// them, not behind a shut door, not sealed, not a vow (whose color is fixed
+// once chosen), without a buried key (which stays as deep as it is), clear
+// of murk, and not quicksilver (which has to stay sunk) or the Drop.
 fn shuffle_slot(b: Bottle, k: i64) -> bool {
-    k < b.n && !b.done && !covered(b) && b.body != Body.Vow && !murky(b, k) &&
-        b.seg[k] != QUICKSILVER && b.seg[k] != DROP
+    k < b.n && !b.done && !covered(b) && !b.behind && b.body != Body.Vow && b.key_color == KeyColor.None &&
+        !murky(b, k) && b.seg[k] != QUICKSILVER && b.seg[k] != DROP
 }
 
 // A shuffle as a job that runs a slice at a time, as the game wants: it tries

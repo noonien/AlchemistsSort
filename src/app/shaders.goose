@@ -17,7 +17,7 @@ enum Shape {
     Symbol,     // color-blind symbol; p0.x: which
     Spark,      // four-pointed star
     Ice,        // a shell of rime over a flask; p0: thickness 0..1, shatter 0..1, seed
-    Cloth,      // a shroud draped over a flask, embroidered with stars
+    Cloth,      // a shroud draped over a flask, embroidered with stars; p0.x 1: a curtain on a rod instead
     Wax,        // a wax seal over the neck; color: the key; p0: softened 0..1, crack 0..1, seed
     Vines,      // a vine wrapped round a flask; p0: grown 0..1, withered 0..1, burnt 0..1, seed
     Tap,        // a siphon's brass tap
@@ -46,20 +46,20 @@ enum Shape {
     Bloom,      // a moonpetal's petals; p0: open 0..1, 0 behind the flask or 1 the bud on its neck
     Brazier,    // p0: 0 the flames behind the flask or 1 the bowl in front, flare
     Roots,      // a creeping vine's roots and seed pod; p0: withered, ripeness 0..1, seed
-    Tube,       // a twin's glass tube along a curve; p0: start, control; p1: end, width, liquid head;
-                // color: the liquid passing
+    Door,       // a door before a few flasks: planks, iron straps; color: the wood; p1: the keyhole's metal
     Salamander, // the fire lizard; p0: seed, facing (1 right, -1 left), leap 0..1, glow
     Heat,       // a heat pulse along a curve; p0: start, control; p1: end, width, head
     Shard,      // a flying bit; p0.x: 0 ice, 1 wax, 2 leaf, 3 ember
+    Key,        // a key, its bow on the left; color: its metal; p0.x: glint 0..1
 }
 
-let ALL_SHAPES: const Shape[41] = [
+let ALL_SHAPES: const Shape[42] = [
     Shape.Rect, Shape.Glow, Shape.FlaskBack, Shape.Liquid, Shape.Glass, Shape.Stream, Shape.Symbol,
     Shape.Spark, Shape.Ice, Shape.Cloth, Shape.Wax, Shape.Vines, Shape.Tap, Shape.Lantern, Shape.Wood,
     Shape.Backdrop, Shape.Icon, Shape.Seal, Shape.Ring, Shape.Candle, Shape.Beam, Shape.Glyph, Shape.Stone,
     Shape.Ink, Shape.Alembic, Shape.Steam, Shape.Label, Shape.Pebble, Shape.Vial, Shape.Smoke, Shape.Ribbon,
-    Shape.Frame, Shape.Dial, Shape.Furnace, Shape.Bloom, Shape.Brazier, Shape.Roots, Shape.Tube,
-    Shape.Salamander, Shape.Heat, Shape.Shard,
+    Shape.Frame, Shape.Dial, Shape.Furnace, Shape.Bloom, Shape.Brazier, Shape.Roots, Shape.Door,
+    Shape.Salamander, Shape.Heat, Shape.Shard, Shape.Key,
 ];
 
 fn shape_index(s: Shape) -> i64 {
@@ -69,7 +69,7 @@ fn shape_index(s: Shape) -> i64 {
         Wood => 14, Backdrop => 15, Icon => 16, Seal => 17, Ring => 18, Candle => 19, Beam => 20,
         Glyph => 21, Stone => 22, Ink => 23, Alembic => 24, Steam => 25, Label => 26, Pebble => 27,
         Vial => 28, Smoke => 29, Ribbon => 30, Frame => 31, Dial => 32, Furnace => 33, Bloom => 34,
-        Brazier => 35, Roots => 36, Tube => 37, Salamander => 38, Heat => 39, Shard => 40,
+        Brazier => 35, Roots => 36, Door => 37, Salamander => 38, Heat => 39, Shard => 40, Key => 41,
     }
 }
 
@@ -86,8 +86,8 @@ fn shape_define(s: Shape) -> const u8[:] {
         Alembic => "SHAPE_ALEMBIC", Steam => "SHAPE_STEAM", Label => "SHAPE_LABEL",
         Pebble => "SHAPE_PEBBLE", Vial => "SHAPE_VIAL", Smoke => "SHAPE_SMOKE", Ribbon => "SHAPE_RIBBON",
         Frame => "SHAPE_FRAME", Dial => "SHAPE_DIAL", Furnace => "SHAPE_FURNACE", Bloom => "SHAPE_BLOOM",
-        Brazier => "SHAPE_BRAZIER", Roots => "SHAPE_ROOTS", Tube => "SHAPE_TUBE",
-        Salamander => "SHAPE_SALAMANDER", Heat => "SHAPE_HEAT", Shard => "SHAPE_SHARD",
+        Brazier => "SHAPE_BRAZIER", Roots => "SHAPE_ROOTS", Door => "SHAPE_DOOR",
+        Salamander => "SHAPE_SALAMANDER", Heat => "SHAPE_HEAT", Shard => "SHAPE_SHARD", Key => "SHAPE_KEY",
     }
 }
 
@@ -95,14 +95,14 @@ fn shape_define(s: Shape) -> const u8[:] {
 enum Icon {
     Undo, Restart, Shuffle, Bottle, Hint, Home, Gear, SoundOn, SoundOff, Play, Eye, Seed, Book, Back, Check, Map,
     // What a pour sets off, what ties two flasks, and what can't take a pour.
-    Lock, Flame, Flake, Unseal, Flip, Leaf, Wither, Sun, Gold, Overflow, Hop, Rune, Close,
+    Lock, Flame, Flake, Unseal, Flip, Leaf, Wither, Sun, Gold, Key, Hop, Rune, Close,
 }
 
 let ALL_ICONS: const Icon[29] = [
     Icon.Undo, Icon.Restart, Icon.Shuffle, Icon.Bottle, Icon.Hint, Icon.Home, Icon.Gear, Icon.SoundOn,
     Icon.SoundOff, Icon.Play, Icon.Eye, Icon.Seed, Icon.Book, Icon.Back, Icon.Check, Icon.Map,
     Icon.Lock, Icon.Flame, Icon.Flake, Icon.Unseal, Icon.Flip, Icon.Leaf, Icon.Wither, Icon.Sun, Icon.Gold,
-    Icon.Overflow, Icon.Hop, Icon.Rune, Icon.Close,
+    Icon.Key, Icon.Hop, Icon.Rune, Icon.Close,
 ];
 
 fn icon_index(i: Icon) -> i64 {
@@ -110,7 +110,7 @@ fn icon_index(i: Icon) -> i64 {
         Undo => 0, Restart => 1, Shuffle => 2, Bottle => 3, Hint => 4, Home => 5, Gear => 6, SoundOn => 7,
         SoundOff => 8, Play => 9, Eye => 10, Seed => 11, Book => 12, Back => 13, Check => 14, Map => 15,
         Lock => 16, Flame => 17, Flake => 18, Unseal => 19, Flip => 20, Leaf => 21, Wither => 22, Sun => 23,
-        Gold => 24, Overflow => 25, Hop => 26, Rune => 27, Close => 28,
+        Gold => 24, Key => 25, Hop => 26, Rune => 27, Close => 28,
     }
 }
 
@@ -123,7 +123,7 @@ fn icon_define(i: Icon) -> const u8[:] {
         Book => "ICON_BOOK", Back => "ICON_BACK", Check => "ICON_CHECK", Map => "ICON_MAP",
         Lock => "ICON_LOCK", Flame => "ICON_FLAME", Flake => "ICON_FLAKE", Unseal => "ICON_UNSEAL",
         Flip => "ICON_FLIP", Leaf => "ICON_LEAF", Wither => "ICON_WITHER", Sun => "ICON_SUN", Gold => "ICON_GOLD",
-        Overflow => "ICON_OVERFLOW", Hop => "ICON_HOP", Rune => "ICON_RUNE", Close => "ICON_CLOSE",
+        Key => "ICON_KEY", Hop => "ICON_HOP", Rune => "ICON_RUNE", Close => "ICON_CLOSE",
     }
 }
 
@@ -199,10 +199,11 @@ let FRAGMENT_SHADER = """
     #define SHAPE_BLOOM 34
     #define SHAPE_BRAZIER 35
     #define SHAPE_ROOTS 36
-    #define SHAPE_TUBE 37
+    #define SHAPE_DOOR 37
     #define SHAPE_SALAMANDER 38
     #define SHAPE_HEAT 39
     #define SHAPE_SHARD 40
+    #define SHAPE_KEY 41
     #define ICON_UNDO 0
     #define ICON_RESTART 1
     #define ICON_SHUFFLE 2
@@ -228,7 +229,7 @@ let FRAGMENT_SHADER = """
     #define ICON_WITHER 22
     #define ICON_SUN 23
     #define ICON_GOLD 24
-    #define ICON_OVERFLOW 25
+    #define ICON_KEY 25
     #define ICON_HOP 26
     #define ICON_RUNE 27
     #define ICON_CLOSE 28
@@ -778,6 +779,15 @@ let FRAGMENT_SHADER = """
         return vec4(mix(vec3(0.05), vec3(1.0), a / max(a + outline, 0.001)), max(a, outline));
     }
 
+    // A key u across each way from its middle: a ring for a bow on the left,
+    // the shaft, two teeth at the tip.
+    float sd_key(vec2 p, float u) {
+        float bow = abs(sd_circle(p - vec2(-0.6 * u, 0.0), 0.27 * u)) - 0.11 * u;
+        float shaft = sd_box(p - vec2(0.25 * u, 0.0), vec2(0.62 * u, 0.085 * u));
+        float t1 = sd_box(p - vec2(0.76 * u, 0.2 * u), vec2(0.08 * u, 0.14 * u));
+        float t2 = sd_box(p - vec2(0.5 * u, 0.17 * u), vec2(0.07 * u, 0.1 * u));
+        return min(min(bow, shaft), min(t1, t2));
+    }
     float sd_icon(vec2 p, int which, float r) {
         if (which == ICON_UNDO) {           // undo: an arc with an arrowhead
             float arc = sd_arc(p, r * 0.6, -2.4, 1.6, r * 0.11);
@@ -912,12 +922,8 @@ let FRAGMENT_SHADER = """
             return d;
         } else if (which == ICON_GOLD) {   // gold: the alchemists' sun, a ring with a dot
             return min(abs(sd_circle(p, r * 0.68)) - r * 0.12, sd_circle(p, r * 0.2));
-        } else if (which == ICON_OVERFLOW) {   // a flask's worth running over through a tube
-            float cup = abs(sd_box(p - vec2(-r * 0.45, r * 0.3), vec2(r * 0.3, r * 0.42))) - r * 0.07;
-            cup = max(cup, -sd_box(p - vec2(-r * 0.45, -r * 0.2), vec2(r * 0.22, r * 0.2)));
-            float tube = sd_arc(p - vec2(0.0, -r * 0.1), r * 0.45, -3.1416, -0.2, r * 0.08);
-            float head = sd_triangle(p, vec2(r * 0.42, r * 0.5), vec2(r * 0.12, r * 0.02), vec2(r * 0.8, r * 0.02));
-            return min(cup, min(tube, head));
+        } else if (which == ICON_KEY) {    // a key and the door it opens: a key, tilted
+            return sd_key(rot(0.6) * p, r * 0.95);
         } else if (which == ICON_HOP) {    // the salamander's hop: a leap over, with a landing mark
             float arc = sd_arc(p - vec2(0.0, r * 0.25), r * 0.62, -2.9, -0.45, r * 0.08);
             float head = sd_triangle(p, vec2(r * 0.68, r * 0.45), vec2(r * 0.2, -r * 0.02), vec2(r * 0.92, -r * 0.15));
@@ -1362,6 +1368,21 @@ let FRAGMENT_SHADER = """
             c = mix(c, vec3(1.0), shatter * 0.6);
             a *= fill_aa(d) * (1.0 - smoothstep(0.4, 1.0, shatter));
             col = vec4(c, clamp(a, 0.0, 1.0) * v_color.a);
+        } else if (kind == SHAPE_CLOTH && v_p0.x > 0.5) {   // a curtain: velvet folds on a rod, a gold fringe
+            float top = -h.y;
+            float hem = h.y - 4.0 + 1.5 * sin(p.x * 0.6);
+            float d = max(abs(p.x) - h.x, max(top - p.y, p.y - hem));
+            float folds = 0.5 + 0.5 * sin(p.x * 0.5 + 0.5 * sin(p.y * 0.04 + t * 0.4));
+            vec3 c = v_color.rgb * (0.45 + 0.75 * folds) * (0.92 + 0.08 * noise(p * 0.4));
+            c *= 1.0 - 0.45 * (1.0 - smoothstep(0.0, 3.0, abs(p.x)));     // where the two drapes meet
+            vec3 thread = vec3(0.95, 0.78, 0.42);
+            float val = top + h.x * 0.5 + 2.5 * abs(sin(p.x * 0.3));       // the valance's scalloped edge
+            c = mix(c, v_color.rgb * (0.8 + 0.2 * sin(p.x * 0.3)), fill_aa(p.y - val));
+            c = mix(c, thread * 0.9, fill_aa(abs(p.y - val) - 1.2));
+            c = mix(c, thread * 0.8, fill_aa(abs(p.y - hem + 3.0) - 1.6));
+            float rod = sd_segment(p, vec2(-h.x - 3.0, top + 1.5), vec2(h.x + 3.0, top + 1.5)) - 2.2;
+            c = mix(c, vec3(0.6, 0.45, 0.22), fill_aa(rod));
+            col = vec4(c, max(fill_aa(d), fill_aa(rod)) * v_color.a);
         } else if (kind == SHAPE_CLOTH) {               // a shroud: night blue, stars in gold thread
             float hem = h.y - 6.0 + 5.0 * sin(p.x * 0.18 + 1.3 + 0.3 * sin(t * 0.7)) + 3.0 * sin(p.x * 0.41);
             float top = -h.y;
@@ -1974,19 +1995,32 @@ let FRAGMENT_SHADER = """
             res = over(res, mix(vec3(0.25, 0.55, 0.2), bark, wither), fill_aa(sprout) * keep);
             res = over(res, pc, fill_aa(pod) * keep);
             col = vec4(res.rgb, res.a * v_color.a);
-        } else if (kind == SHAPE_TUBE) {                // a glass tube, liquid passing through
-            vec2 bz = sd_bezier(p, v_p0.xy, v_p0.zw, v_p1.xy);
-            float w = v_p1.z;
-            float head = v_p1.w;
-            float d = bz.x - w;
-            vec4 c = vec4(0.10, 0.08, 0.16, 0.45 * fill_aa(d));
-            float slug = smoothstep(head - 0.7, head - 0.55, bz.y) * (1.0 - smoothstep(head - 0.03, head, bz.y));
-            c = over(c, v_color.rgb * (1.1 - 0.4 * bz.x / w), fill_aa(bz.x - w * 0.72) * slug * v_color.a);
-            vec3 gc = mix(vec3(0.86, 0.92, 1.0), light.rgb, 0.18 + 0.22 * light.a);
-            float rim = fill_aa(abs(d + 1.1) - 1.1);
-            float shine = fill_aa(abs(bz.x - w * 0.4) - 0.6) * 0.3 * fill_aa(d);
-            c = over(c, gc, clamp(rim * 0.6 + shine, 0.0, 1.0));
-            col = c;
+        } else if (kind == SHAPE_DOOR) {                // a door: planks, iron straps, a keyhole in its key's metal
+            float d = sd_round_box(p, h, vec4(min(h.x, h.y) * 0.06));
+            float pw = max(h.x / 3.0, 9.0);
+            float px = (fract((p.x + h.x) / pw) - 0.5) * pw;
+            float grain = noise(vec2(p.x * 0.09, p.y * 0.015)) * 0.6 + noise(vec2(p.x * 0.35, p.y * 0.05)) * 0.4;
+            vec3 c = v_color.rgb * (0.68 + 0.45 * grain);
+            c *= 1.0 - 0.5 * (1.0 - smoothstep(0.0, 1.6, pw * 0.5 - abs(px)));   // the seams between planks
+            c *= 0.75 + 0.25 * smoothstep(-h.y, -h.y * 0.4, p.y);               // shade under the lintel
+            vec3 iron = vec3(0.2, 0.2, 0.23);
+            for (int k = 0; k < 2; k++) {
+                float y = (k == 0 ? -0.6 : 0.6) * h.y;
+                float strap = sd_box(p - vec2(0.0, y), vec2(h.x - 3.0, max(2.5, h.y * 0.045)));
+                c = mix(c, iron * (1.0 + 0.4 * smoothstep(2.0, -2.0, p.y - y)), fill_aa(strap));
+                vec2 rv = vec2((fract((p.x + h.x) / pw) - 0.5) * pw, p.y - y);
+                c = mix(c, vec3(0.45, 0.45, 0.48), fill_aa(sd_circle(rv, 1.6)) * step(abs(p.x), h.x - 4.0));
+            }
+            c = mix(c, c * 0.5, fill_aa(abs(d + 2.5) - 2.5));                   // the frame
+            float R = clamp(min(h.x * 0.28, h.y * 0.16), 8.0, 26.0);
+            vec2 e = vec2(0.5, 0.0);
+            float plate = sd_round_box(p, vec2(R * 0.7, R), vec4(R * 0.45));
+            vec2 g = vec2(sd_round_box(p + e.xy, vec2(R * 0.7, R), vec4(R * 0.45)) - sd_round_box(p - e.xy, vec2(R * 0.7, R), vec4(R * 0.45)),
+                          sd_round_box(p + e.yx, vec2(R * 0.7, R), vec4(R * 0.45)) - sd_round_box(p - e.yx, vec2(R * 0.7, R), vec4(R * 0.45)));
+            c = mix(c, metal(v_p1.rgb, plate, g, 0.25 * R), fill_aa(plate));
+            float hole = min(sd_circle(p - vec2(0.0, -R * 0.22), R * 0.22), sd_box(p - vec2(0.0, R * 0.18), vec2(R * 0.08, R * 0.34)));
+            c = mix(c, vec3(0.03, 0.02, 0.02), fill_aa(hole));
+            col = vec4(c, fill_aa(d) * v_color.a);
         } else if (kind == SHAPE_SALAMANDER) {          // the fire lizard
             float u = h.x / 1.05;
             float seed = v_p0.x;
@@ -2052,6 +2086,15 @@ let FRAGMENT_SHADER = """
                 if (which == 0) c = mix(c, vec3(1.0), fill_aa(abs(d + 0.7) - 0.6) * 0.8);
                 col = vec4(c, fill_aa(d) * v_color.a * (which == 0 ? 0.85 : 1.0));
             }
+        } else if (kind == SHAPE_KEY) {                 // a key, with a dark edge so it reads in any liquid
+            float u = h.x;
+            float d = sd_key(p, u);
+            vec2 e = vec2(0.5, 0.0);
+            vec2 g = vec2(sd_key(p + e.xy, u) - sd_key(p - e.xy, u), sd_key(p + e.yx, u) - sd_key(p - e.yx, u));
+            vec4 c = vec4(vec3(0.05, 0.04, 0.03), 0.7 * fill_aa(d - 1.6));
+            vec3 m = metal(v_color.rgb, d, g, 0.08 * u) + vec3(1.0, 0.95, 0.8) * v_p0.x * 0.6;
+            c = over(c, m, fill_aa(d));
+            col = vec4(c.rgb, c.a * v_color.a);
         }
         if (col.a <= 0.001) discard;
         result = vec4(col.rgb * col.a, col.a);

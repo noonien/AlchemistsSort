@@ -433,38 +433,169 @@ fn test_quicksilver() {
     check(!w.bottles[0].done && !is_won(w), "unturned quicksilver never wins with an athanor");
 }
 
-// --- chapter 3: siphons and twins --------------------------------------------------------
+// --- chapter 3: keys, doors and curtains -----------------------------------------------
 
-fn test_twins() {
-    test("twin overflow");
-    var b = row_of(["RRR", "BRR", "", "G"]);
-    b.bottles[1].twin = 2;
-    b.bottles[2].twin = 1;
-    var r = pour(b, 0, 1);
-    check(r.amount == 1 && r.overflow == 2 && letters(b.bottles[2]) == "RR", "the rest goes through the tube");
-    check(has_event(r, EventKind.Overflowed, 2), "with an event");
-    check(b.bottles[0].n == 0, "all of it moved");
+// A board of these flasks, its doors numbered as a level's are, settled.
+fn doors_board(bottles: const Bottle[:]) -> Board {
+    var b = level(1, "test", Difficulty.Normal, "test", bottles).board;
+    settle(b);
+    b
+}
 
-    test("rime blocks the overflow");
-    b = row_of(["RRR", "BRR", "", "G"]);
-    b.bottles[1].twin = 2;
-    b.bottles[2].twin = 1;
-    b.bottles[2].cover = Cover.Rime;
-    b.bottles[2].thaw = 5;
+fn has_door_event(r: PourResult, kind: EventKind, door: i64) -> bool {
+    for e in r.events { if e.kind == kind && e.door == door { return true; } }
+    false
+}
+
+fn test_keys() {
+    let brass = KeyColor.Brass;
+    let silver = KeyColor.Silver;
+    test("a key comes free on top and opens its door");
+    var b = doors_board([flask("GRRB").key_at(1, brass), flask("B"), flask("G").behind_door(brass),
+                         flask("").behind_door(brass), flask("RR")]);
+    check(b.door_count == 1 && b.doors[0].color == brass && !b.doors[0].open, "one brass door, shut");
+    check(b.bottles[2].behind && b.bottles[3].behind && !b.bottles[0].behind, "its flasks are behind it");
+    check(b.row[2] == b.row[3] && b.col[3] == b.col[2] + 1, "side by side in one row");
+    check(!can_pour(b, 1, 3) && !can_pour(b, 2, 1) && !can_pour_from(b.bottles[2]), "shut: nothing in or out");
+    check(contents_hidden(b.bottles[2]), "and out of sight");
+    var r = pour(b, 4, 0);
+    check(!r.ok, "the key's flask pours like any other");
     r = pour(b, 0, 1);
-    check(r.amount == 1 && r.overflow == 0 && letters(b.bottles[0]) == "RR", "no overflow into ice");
+    check(r.ok && b.bottles[0].key_color == KeyColor.None && b.bottles[0].keyed == 0, "the key is free");
+    check(has_door_event(r, EventKind.KeyFreed, 0) && has_event(r, EventKind.KeyFreed, 0), "with an event");
+    check(has_door_event(r, EventKind.DoorOpened, 0) && has_event(r, EventKind.DoorOpened, 2) &&
+          event_at(r, EventKind.KeyFreed) < event_at(r, EventKind.DoorOpened), "then the door opens");
+    check(b.doors[0].open && !b.bottles[2].behind && !b.bottles[3].behind, "for good");
+    check(can_pour(b, 4, 0) && can_pour(b, 2, 3), "and its flasks join the board");
 
-    test("twins must be neighbors");
-    var v = board_of(["RRRR", "GGGG", "", ""]);
-    v.cols = 2;
-    place_grid(v);
-    v.bottles[1].twin = 2;
-    v.bottles[2].twin = 1;
-    check(validate(v).len > 0, "not across rows");
-    v.bottles[1].twin = 0;
-    v.bottles[2].twin = -1;
-    v.bottles[0].twin = 1;
-    check(validate(v).len == 0, "side by side");
+    test("a key's whole layer must be on top");
+    b = doors_board([flask("RRRB").key_at(0, brass), flask("B"), flask("").behind_door(brass), flask("").behind_door(brass)]);
+    check(layers_over_key(b.bottles[0]) == 1, "one layer over it");
+    r = pour(b, 0, 1);
+    check(b.doors[0].open, "the run it sits low in is the top layer now");
+
+    test("smoke hides a key");
+    b = doors_board([flask("GRRB").key_at(1, brass).under_murk(3), flask("B"), flask(""), flask("").behind_door(brass),
+                     flask("").behind_door(brass)]);
+    pour(b, 0, 1);
+    check(!b.doors[0].open && b.bottles[0].key_color == brass, "a key under smoke stays put");
+    r = pour(b, 0, 2);
+    check(r.amount == 1 && b.doors[0].open, "free once its layer clears on top");
+
+    test("the key moves with its layer");
+    b = doors_board([flask("RGB").key_at(0, brass), flask("Q"), flask("").behind_door(brass), flask("").behind_door(brass)]);
+    pour(b, 1, 0);
+    check(letters(b.bottles[0]) == "QRGB" && key_segment(b.bottles[0]) == 1, "quicksilver sinks under it, lifting it");
+    check(!b.doors[0].open, "still buried");
+    b = doors_board([flask("RGGB").key_at(0, brass).hourglass(1), flask("Y"), flask(""), flask("").behind_door(brass),
+                     flask("").behind_door(brass)]);
+    r = pour(b, 1, 2);
+    check(has_event(r, EventKind.Flipped, 0) && event_at(r, EventKind.Flipped) < event_at(r, EventKind.KeyFreed) &&
+          b.doors[0].open, "a flip brings it to the top");
+    b = doors_board([flask("RGB").key_at(0, brass).siphon(), flask(""), flask("").behind_door(brass), flask("").behind_door(brass)]);
+    r = pour(b, 0, 1);
+    check(r.ok && letters(b.bottles[1]) == "R" && b.doors[0].open, "a siphon's tap lets it out, which frees it");
+    b = doors_board([flask("RGB").key_at(1, brass).siphon(), flask(""), flask("").behind_door(brass), flask("").behind_door(brass)]);
+    pour(b, 0, 1);
+    check(key_segment(b.bottles[0]) == 0 && !b.doors[0].open, "the tap shifts it down");
+
+    test("behind a shut door nothing reaches");
+    b = doors_board([flask("GRRB").key_at(1, brass), flask("").brazier(), flask("RG").rime(3).behind_door(brass),
+                     flask("GB").behind_door(brass), flask("B")]);
+    b.cols = MAX_BOTTLES;
+    place_grid(b);
+    pour(b, 4, 1);
+    check(b.bottles[2].cover == Cover.Rime && b.bottles[2].thaw == 3, "no heat, and no pours counted");
+    check(!has_move(doors_board([flask("RG").key_at(0, brass), flask("GR"), flask("").behind_door(brass),
+                                 flask("").behind_door(brass)])), "its empty flasks are no move");
+
+    test("liquid behind a shut door blocks the win");
+    b = doors_board([flask("RRRR").key_at(0, brass), flask("G").behind_door(brass), flask("").behind_door(brass)]);
+    check(b.doors[0].open && !b.bottles[1].behind, "a key on top at the start opens its door at once");
+    b = board_of(["RRRR", "", ""]);
+    b.doors[0] = Door { color: brass };
+    b.door_count = 1;
+    b.bottles[1].door = 0;
+    b.bottles[2].door = 0;
+    settle(b);
+    check(b.bottles[1].behind && is_won(b), "empty flasks behind it don't");
+    b.bottles[1] = flask("G");
+    b.bottles[1].door = 0;
+    b.bottles[1].behind = true;
+    check(!is_won(b), "liquid does");
+
+    test("a curtain opens when its color is completed");
+    b = row_of(["RRR", "R", "GGBB", "", "BBGG"]);
+    b.bottles[2] = flask("GGBB").curtain('R');
+    settle(b);
+    check(!can_pour_from(b.bottles[2]) && !can_pour(b, 3, 2) && contents_hidden(b.bottles[2]), "hidden and shut");
+    r = pour(b, 1, 0);
+    check(b.bottles[0].done && b.bottles[2].cover == Cover.None && has_event(r, EventKind.CurtainOpened, 2), "it opens");
+    check(event_at(r, EventKind.Completed) < event_at(r, EventKind.CurtainOpened), "after the completion");
+    b = board_of(["RRRR", "GG", "GG"]);
+    b.bottles[1] = flask("GG").curtain('R');
+    settle(b);
+    check(b.bottles[1].cover == Cover.None, "settle opens one whose color starts complete");
+    b = board_of(["GGGG", "BB", "BB"]);
+    b.bottles[0] = flask("GGGG").curtain('B');
+    settle(b);
+    check(!is_won(b) && !b.bottles[0].done, "liquid behind a curtain isn't sorted yet");
+
+    test("keys, doors and curtains are validated");
+    fn bad(bottles: const Bottle[:], what: const u8[:]) {
+        var x = level(1, "test", Difficulty.Normal, "test", bottles).board;
+        check(validate(x).len > 0, what);
+    }
+    fn good(bottles: const Bottle[:], what: const u8[:]) {
+        var x = level(1, "test", Difficulty.Normal, "test", bottles).board;
+        let err = validate(x);
+        check(err.len == 0, str(what, ": ", err));
+    }
+    good([flask("RRGG").key_at(1, brass), flask("GGRR"), flask("").behind_door(brass), flask("").behind_door(brass)], "a key and its door");
+    bad([flask("RRGG").key_at(2, brass), flask("GGRR"), flask("").behind_door(brass), flask("").behind_door(brass)], "a key on top");
+    bad([flask("RRGG").key_at(1, brass), flask("GGRR"), flask(""), flask("")], "a key with no door");
+    bad([flask("RRGG"), flask("GGRR"), flask("").behind_door(brass), flask("").behind_door(brass)], "a door with no key");
+    bad([flask("RRGG").key_at(1, brass), flask("GGRR").key_at(1, brass), flask("").behind_door(brass),
+         flask("").behind_door(brass)], "two keys for one door");
+    bad([flask("RRGG").key_at(1, brass), flask("GGRR"), flask("").behind_door(brass), flask("")], "a door before one flask");
+    bad([flask("RRGG").key_at(1, brass), flask("").behind_door(brass), flask(""), flask("").behind_door(brass)],
+        "a door's flasks side by side");
+    bad([flask("RRGG").key_at(1, brass), flask("GGRR"), flask("").behind_door(brass), flask("").behind_door(brass),
+         flask("").behind_door(brass), flask("").behind_door(brass)], "at most three behind a door");
+    bad([flask("RRGG").key_at(1, brass).behind_door(brass), flask("GGRR").behind_door(brass), flask(""), flask("")],
+        "a key behind its own door");
+    bad([flask("RRGG").key_at(1, brass), flask("GGRR"), tall_flask('B', 2).behind_door(brass), flask("BBBB").behind_door(brass)],
+        "no tall flask behind a door");
+    good([flask("RRGG").key_at(1, brass).behind_door(silver), flask("").behind_door(silver), flask("GGRR").key_at(1, silver),
+          flask("").behind_door(brass), flask("").behind_door(brass)], "a key behind another door");
+    bad([flask("RRGG").key_at(1, brass).behind_door(silver), flask("GGRR").behind_door(silver),
+         flask("BBRR").key_at(1, silver).behind_door(brass), flask("RRBB").behind_door(brass), flask("BG"), flask("BG")],
+        "keys locked behind each other's doors");
+    good([flask("RRGG"), flask("GGRR").curtain('B'), flask("BB"), flask("BB")], "a curtain");
+    bad([flask("RRGG"), flask("GGRB").curtain('B'), flask("BBB"), flask("R")], "a curtain hiding some of its color");
+    bad([flask("RRGG"), flask("GGRR").curtain('Y'), flask("")], "a curtain's color on the board");
+    bad([flask("RRGG").curtain('B'), flask("GGRR"), flask("BBYY").curtain('R'), flask("YYBB")], "curtains waiting on each other");
+    var x = level(1, "test", Difficulty.Normal, "test", [flask("RRGG").key_at(1, brass), flask("GGRR"), flask("").behind_door(brass),
+                                                         flask("").behind_door(brass)]).board;
+    x.salamander = 2;
+    check(validate(x).len > 0, "no salamander behind a door");
+
+    test("the solver opens doors and curtains");
+    var path: Move[>..] = [];
+    b = doors_board([flask("RRGB").key_at(1, brass), flask("GBRB"), flask("BGG").key_at(0, silver), flask(""),
+                     flask("R").behind_door(brass), flask("").behind_door(brass), flask("").behind_door(silver),
+                     flask("").behind_door(silver)]);
+    check(validate(b).len == 0 && solve(b, 100000, path).solved, "two doors");
+    b = doors_board([flask("RRGB").key_at(1, brass), flask("GBRB"), flask("YRBG"), flask(""), flask(""),
+                     flask("YG").curtain('B').behind_door(brass), flask("YY").behind_door(brass)]);
+    check(validate(b).len == 0 && solve(b, 100000, path).solved, "a curtain behind a door");
+
+    test("the grid keeps a door's flasks together");
+    b = doors_board([flask("RRGG").key_at(1, brass), flask("GGRR"), flask("").behind_door(brass), flask("").behind_door(brass),
+                     flask(""), flask("")]);
+    b.cols = 3;
+    place_grid(b);
+    check(b.row[2] == b.row[3] && b.col[3] == b.col[2] + 1 && validate(b).len == 0, "never split across rows");
 }
 
 // --- chapter 4: lanterns, shrouds, hourglasses -------------------------------------------
@@ -649,6 +780,16 @@ fn test_hash() {
     var n = a;
     n.salamander = 1;
     check(board_hash(m) != board_hash(n), "and the salamander's perch");
+    let k = doors_board([flask("RRGB").key_at(1, KeyColor.Brass), flask("GBRB"), flask("").behind_door(KeyColor.Brass),
+                         flask("").behind_door(KeyColor.Brass)]);
+    var k2 = k;
+    k2.bottles[0].keyed = 1;
+    check(board_hash(k) != board_hash(k2), "where a key is");
+    var k3 = k;
+    k3.doors[0].open = true;
+    k3.bottles[2].behind = false;
+    k3.bottles[3].behind = false;
+    check(board_hash(k) != board_hash(k3), "and whether its door is open");
 }
 
 fn test_undo_snapshot() {
@@ -767,7 +908,7 @@ fn test_generator() {
     check(o.stats.solved && solve(o.board, 100000, path).solved, "modifiers stay solvable");
 
     // Each modifier, alone or with what it needs, for a few seeds.
-    for which in 15 {
+    for which in 16 {
         var q = GenParams { colors: 5, empties: 2 };
         var name = "";
         match which {
@@ -778,13 +919,14 @@ fn test_generator() {
             4 => { q.rime = 1; q.brazier = 1; name = "brazier"; },
             5 => { q.quicksilver = true; name = "quicksilver"; },
             6 => { q.siphon = 1; name = "siphon"; },
-            7 => { q.twins = 1; name = "twins"; },
+            7 => { q.doors = 2; name = "doors"; },
             8 => { q.shroud = 1; q.murk = 2; name = "shroud"; },
             9 => { q.hourglass = 1; q.murk = 2; name = "hourglass"; },
             10 => { q.vine = true; q.brazier = 1; name = "vine"; },
             11 => { q.salamander = true; q.rime = 1; name = "salamander"; },
             12 => { q.moonpetal = 1; name = "moonpetal"; },
             13 => { q.athanor = true; name = "athanor"; },
+            14 => { q.curtains = 1; name = "curtain"; },
             _ => { q.drop = true; q.catalyst = 1; q.lantern = 1; name = "drop and catalyst"; },
         }
         for seed in 1..4 {
@@ -815,13 +957,14 @@ fn has_modifier(board: Board, which: i64) -> bool {
             4 => b.fixture == Fixture.Brazier && by_ice,
             5 => tally[QUICKSILVER] == CAP,
             6 => b.body == Body.Siphon,
-            7 => b.twin >= 0 && are_neighbors(board, i, b.twin),
+            7 => board.door_count == 2 && b.key_color != KeyColor.None && layers_over_key(b) > 0,
             8 => b.cover == Cover.Shroud,
             9 => b.body == Body.Hourglass,
             10 => b.fixture == Fixture.VineRoot && tally[EMERALD] > 0,
             11 => board.salamander >= 0,
             12 => b.body == Body.Moonpetal,
             13 => b.body == Body.Athanor && tally[QUICKSILVER] > 0,
+            14 => b.cover == Cover.Curtain && !has_color(b, b.badge),
             _ => tally[DROP] == 1 && b.fixture == Fixture.Catalyst,
         };
         if ok { return true; }
@@ -916,7 +1059,7 @@ fn test_generated_levels() {
             worst_level = n;
         }
         check(g.stats.solved && validate(g.board).len == 0, str("level ", n, " is solvable and well formed"));
-        check(g.attempts <= 6, str("level ", n, " brews in a few attempts"));
+        check(g.attempts <= 8, str("level ", n, " brews in a few attempts"));
         check(g.board.count <= 18, str("level ", n, " fits the screen"));
         for f in spec.mods {
             check(introduced(f, n), str("level ", n, ": ", feature_name(f), " only after its tutorial"));
@@ -987,7 +1130,7 @@ fn test_tables() {
 
 // What a solution set off, pour by pour.
 struct PathFacts {
-    seen: bool[17] = [false; 17],   // by event kind
+    seen: bool[19] = [false; 19],   // by event kind
     heat_ice: bool = false,         // heat reached a flask under ice
     heat_seal: bool = false,        // a seal broken by heat
     drop_key: bool = false,         // the Drop broke a seal
@@ -999,7 +1142,8 @@ fn kind_index(k: EventKind) -> i64 {
     match k {
         SealBroken => 0, SealSoftened => 1, Thawed => 2, HeatPulse => 3, Lit => 4, ShroudLifted => 5,
         MurkCleared => 6, Flipped => 7, VineSpread => 8, VineWithered => 9, TendrilBurned => 10,
-        SalamanderHop => 11, Transmuted => 12, Overflowed => 13, CatalystFired => 14, Completed => 15, Vowed => 16,
+        SalamanderHop => 11, Transmuted => 12, CatalystFired => 13, Completed => 14, Vowed => 15, KeyFreed => 16,
+        DoorOpened => 17, CurtainOpened => 18,
     }
 }
 
@@ -1033,7 +1177,8 @@ fn shows(number: i64, f: PathFacts) -> bool {
         11 => saw(EventKind.Vowed),
         18 => saw(EventKind.Thawed),
         21 => f.heat_ice,
-        36 => saw(EventKind.Overflowed),
+        36 => saw(EventKind.KeyFreed) && saw(EventKind.DoorOpened),
+        41 => saw(EventKind.CurtainOpened),
         48 => saw(EventKind.Lit),
         51 => saw(EventKind.ShroudLifted),
         56 => saw(EventKind.Flipped),
@@ -1045,7 +1190,7 @@ fn shows(number: i64, f: PathFacts) -> bool {
         // The finales: the interactions are the point.
         15 => saw(EventKind.SealBroken) && saw(EventKind.Vowed),
         30 => f.heat_ice && f.heat_seal,
-        45 => saw(EventKind.Overflowed) && f.siphon_quicksilver,
+        45 => f.siphon_quicksilver,
         60 => saw(EventKind.Lit) && saw(EventKind.ShroudLifted) && saw(EventKind.Flipped),
         75 => saw(EventKind.TendrilBurned) && saw(EventKind.VineWithered) && saw(EventKind.Lit) && f.into_moonpetal,
         90 => f.drop_key && saw(EventKind.CatalystFired) && saw(EventKind.Transmuted) && saw(EventKind.ShroudLifted) &&
@@ -1167,17 +1312,35 @@ fn test_explain() {
     check(card_says(c, "Moonpetal: closed until a lantern is lit") && blocked_says(c, "Can't pour into it until a lantern is lit"),
           "the moonpetal");
 
-    test("a flask's card: twins, hourglass, siphon, vow, tall");
+    test("a flask's card: keys, doors, curtains");
+    b = doors_board([flask("GRRB").key_at(1, KeyColor.Brass), flask("B"), flask("G").behind_door(KeyColor.Brass),
+                     flask("").behind_door(KeyColor.Brass), flask("RRBB").curtain('G'), flask("GRGB").key_at(0, KeyColor.Silver),
+                     flask("").behind_door(KeyColor.Silver), flask("").behind_door(KeyColor.Silver)]);
+    c = explain_flask(b, 0);
+    check(card_says(c, "Brass key: buried under 1 layer; clear it to unlock the brass door.") && find(c.title[..], "Key") >= 0,
+          "a key's card");
+    check(related_to(c, 2, Tie.Key, true) && related_to(c, 3, Tie.Key, true), "tied to what its door hides");
+    check(card_says(explain_flask(b, 5), "Silver key: buried under 3 layers; clear them"), "deeper");
+    c = explain_flask(b, 2);
+    check(card_says(c, "Behind the brass door: opens when the brass key reaches the top of its flask.") &&
+          related_to(c, 0, Tie.Key, false), "behind a door");
+    check(blocked_says(c, "Can't pour in or out until the brass door opens"), "shut both ways");
+    check(refusal(b, -1, 2) == "Behind the brass door: opens when the brass key reaches the top of its flask." &&
+          refusal(b, 1, 3) == refusal(b, -1, 3), "refusals");
+    c = explain_flask(b, 4);
+    check(card_says(c, "Curtain: opens when an Emerald flask is completed."), "a curtain");
+    check(blocked_says(c, "Can't pour in or out until the curtain opens") && find(c.title[..], "Curtain") >= 0, "shut");
+    var es = grimoire(b);
+    check(effect_says(es[..], Feature.Keys, "Brass key: opens the brass door when its layer reaches the top.") >= 0 &&
+          effect_says(es[..], Feature.Curtain, "Curtain: opens when") >= 0, "the grimoire");
+
+    test("a flask's card: hourglass, siphon, vow, tall");
     b = row_of(["GGR", "", "RBB", "B", "GG"]);
-    b.bottles[0] = twin_of(b.bottles[0], 1);
-    b.bottles[1] = twin_of(b.bottles[1], 0);
     b.bottles[2] = hourglass(b.bottles[2], 3);
     b.bottles[2].flip_count = 1;
     b.bottles[3] = siphon(b.bottles[3]);
     b.bottles[4] = vow_flask(b.bottles[4]);
     settle(b);
-    c = explain_flask(b, 0);
-    check(card_says(c, "Twin: joined to the flask on its right") && related_to(c, 1, Tie.Twin, true), "twins");
     c = explain_flask(b, 2);
     check(card_says(c, "Hourglass: flips in 2 pours"), "the hourglass counts down");
     check(card_says(c, "When it flips, Ruby comes to the top"), "and what comes up");
@@ -1255,7 +1418,7 @@ fn test_explain() {
     b.bottles[1] = brazier(b.bottles[1]);
     b.bottles[2] = seal(b.bottles[2], 'R');
     b.bottles[5] = siphon(b.bottles[5]);
-    var es = grimoire(b);
+    es = grimoire(b);
     check(entry_of(es[..], Feature.Rime) >= 0 && entry_of(es[..], Feature.Seal) >= 0 && entry_of(es[..], Feature.Brazier) >= 0 &&
           entry_of(es[..], Feature.Quicksilver) >= 0 && entry_of(es[..], Feature.Siphon) >= 0 && es.len == 5,
           "only what is on the board");
@@ -1277,7 +1440,7 @@ fn test_explain() {
     es = grimoire(b);
     check(effect_says(es[..], Feature.Lantern, "lifts the shroud beside it") >= 0, "the lantern lifts the shroud");
     check(effect_says(es[..], Feature.Moonpetal, "opens once a lantern is lit") >= 0, "the moonpetal waits");
-    for k in [9, 12, 16, 20, 24] {
+    for k in [9, 13, 17, 21, 25] {
         let h = hand_made(k);
         es = grimoire(h.board);
         var any = 0;
@@ -1321,7 +1484,7 @@ fn main() {
     test_rime();
     test_heat();
     test_quicksilver();
-    test_twins();
+    test_keys();
     test_light();
     test_hourglass();
     test_vine();

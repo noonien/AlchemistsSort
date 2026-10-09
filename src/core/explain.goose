@@ -12,17 +12,17 @@ import .campaign;
 enum Tie {
     Heat,       // a brazier's or the salamander's heat
     Light,      // a lantern's light, or a moonpetal waiting on one
-    Twin,       // the tube between twins
+    Key,        // a key and the door it opens
     Vine,       // a vine's root, its tendrils and where it grows next
     Salamander, // the salamander's perch
     Catalyst,   // what a catalyst sets off
     Flow,       // where quicksilver goes, a seal's key, the Drop
 }
 
-let ALL_TIES: const Tie[7] = [Tie.Heat, Tie.Light, Tie.Twin, Tie.Vine, Tie.Salamander, Tie.Catalyst, Tie.Flow];
+let ALL_TIES: const Tie[7] = [Tie.Heat, Tie.Light, Tie.Key, Tie.Vine, Tie.Salamander, Tie.Catalyst, Tie.Flow];
 
 fn tie_index(t: Tie) -> i64 {
-    match t { Heat => 0, Light => 1, Twin => 2, Vine => 3, Salamander => 4, Catalyst => 5, Flow => 6 }
+    match t { Heat => 0, Light => 1, Key => 2, Vine => 3, Salamander => 4, Catalyst => 5, Flow => 6 }
 }
 
 let TEXT_CAP = 160;
@@ -71,6 +71,13 @@ struct Entry {
 // --- words -------------------------------------------------------------------------------
 
 fn color_name(c: i64) -> const u8[:] { COLOR_NAMES[clamp(c, 0, COLOR_NAMES.len - 1)] }
+
+// "a Ruby", "an Amber".
+fn a_color(c: i64) -> u8[>..] {
+    let name = color_name(c);
+    let vowel = name.len > 0 && (name[0] == 'A' || name[0] == 'E' || name[0] == 'I' || name[0] == 'O' || name[0] == 'U');
+    str(if vowel { "an " } else { "a " }, name)
+}
 
 fn pours_left(n: i64) -> u8[>..] { str(n, if n == 1 { " pour" } else { " pours" }) }
 
@@ -152,6 +159,46 @@ fn vine_root(board: Board) -> i64 {
     -1
 }
 
+// "brass", for a sentence.
+fn metal(k: KeyColor) -> u8[>..] {
+    var s = str(key_name(k));
+    if s.len > 0 { s[0] = s[0] + 32; }
+    s
+}
+
+// The flask holding the key to door d, or -1.
+fn key_flask(board: Board, d: i64) -> i64 {
+    if d < 0 || d >= board.door_count { return -1; }
+    for i in board.count { if board.bottles[i].key_color == board.doors[d].color { return i; } }
+    -1
+}
+
+fn behind_door_of(board: Board, d: i64) -> i64[..MAX_BOTTLES] {
+    var out: i64[..MAX_BOTTLES] = [];
+    for i in board.count { if board.bottles[i].door == d { out.push(i); } }
+    out
+}
+
+// What a shut door means for flask `i` and what opens it.
+fn door_reason(board: Board, i: i64) -> u8[>..] {
+    let d: i64 = board.bottles[i].door;
+    let m = metal(board.doors[d].color);
+    str("Behind the ", m, " door: opens when the ", m, " key reaches the top of its flask.")
+}
+
+// Where a flask's key is, in words.
+fn key_words(b: Bottle) -> u8[>..] {
+    let m = metal(b.key_color);
+    let k = key_segment(b);
+    let tap = if b.body == Body.Siphon { ", or let it out of the tap" } else { "" };
+    if k >= 0 && murky(b, k) {
+        return str(capitalized(m), " key: hidden in the smoke; it comes free when its layer reaches the top", tap, ".");
+    }
+    let n = layers_over_key(b);
+    str(capitalized(m), " key: buried under ", n, if n == 1 { " layer" } else { " layers" },
+        "; clear ", if n == 1 { "it" } else { "them" }, tap, " to unlock the ", m, " door.")
+}
+
 // --- why it can't pour -------------------------------------------------------------------
 
 // What a cover means for flask `i` and what takes it away, as a sentence.
@@ -193,6 +240,7 @@ fn cover_reason(board: Board, i: i64) -> u8[>..] {
             if by.len > 0 { return str("Overgrown by the vine: heat burns it away (", by, "), or pour Emerald into the root to wither the vine."); }
             str("Overgrown by the vine: heat burns it away, or pour Emerald into the root to wither the vine.")
         },
+        Curtain => str("Curtain: opens when ", a_color(b.badge), " flask is completed."),
         None => str(""),
     }
 }
@@ -204,6 +252,7 @@ fn cover_until(b: Bottle) -> const u8[:] {
         Seal => "until the seal breaks",
         Shroud => "until light lifts the shroud",
         Vine => "until the vine is gone",
+        Curtain => "until the curtain opens",
         None => "",
     }
 }
@@ -215,6 +264,7 @@ fn refusal(board: Board, from: i64, to: i64) -> u8[>..] {
     let b = board.bottles[to];
     if from < 0 || from == to {
         if b.done { return str("That flask is complete and sealed."); }
+        if b.behind { return door_reason(board, to); }
         if covered(b) { return cover_reason(board, to); }
         if b.cap > CAP { return str("Nothing comes out of a tall flask. It only takes ", color_name(tall_color(b)), "."); }
         return str("");
@@ -222,6 +272,7 @@ fn refusal(board: Board, from: i64, to: i64) -> u8[>..] {
     let color = pour_color(board.bottles[from]);
     if can_pour(board, from, to) { return str(""); }
     if b.done { return str("That flask is complete and sealed."); }
+    if b.behind { return door_reason(board, to); }
     if covered(b) { return cover_reason(board, to); }
     if to == board.salamander { return str("The Salamander is on that flask: nothing goes in until it hops off."); }
     if b.body == Body.Moonpetal && !any_lantern_lit(board) { return str("A Moonpetal takes liquid only once a lantern is lit."); }
@@ -269,18 +320,27 @@ fn explain_flask(board_in: Board, i: i64) -> Card {
     }
     if b.cap > CAP { name("Tall Flask"); }
     match b.cover {
-        Seal => name("Seal"), Rime => name("Rime"), Shroud => name("Shroud"), Vine => name("Vine"), None => {},
+        Seal => name("Seal"), Rime => name("Rime"), Shroud => name("Shroud"), Vine => name("Vine"),
+        Curtain => name("Curtain"), None => {},
     }
     match b.fixture {
         Brazier => name("Brazier"), Lantern => name("Lantern"), Catalyst => name("Catalyst"),
         VineRoot => name("Vine Root"), None => {},
     }
-    if b.twin >= 0 { name("Twin"); }
+    if b.behind { name("Behind a Door"); }
+    if b.key_color != KeyColor.None && !contents_hidden(b) { name("Key"); }
     if i == board.salamander { name("Salamander"); }
-    if b.murk != 0 && b.cover != Cover.Seal && b.cover != Cover.Shroud { name("Smoke"); }
+    if b.murk != 0 && !contents_hidden(b) { name("Smoke"); }
     if card.title.len == 0 { name(if b.done { "Complete" } else { "Flask" }); }
 
     if b.done { line(LineKind.State, "Complete and sealed: nothing more to do here."); }
+
+    // A shut door before it, and the key that opens it.
+    if b.behind {
+        line(LineKind.State, door_reason(board, i));
+        relate(key_flask(board, b.door), Tie.Key, false);
+        for j in behind_door_of(board, b.door) { relate(j, Tie.Key, true); }
+    }
 
     // Its cover, and what warms or lights it.
     if b.cover != Cover.None && !b.done {
@@ -353,7 +413,7 @@ fn explain_flask(board_in: Board, i: i64) -> Card {
                 let x = board.bottles[j];
                 relate(j, Tie.Heat, true);
                 if !heat_takes(x) { continue; }
-                let what = match x.cover { Rime => "the ice", Seal => "the seal", Vine => "the vine", Shroud, None => "" };
+                let what = match x.cover { Rime => "the ice", Seal => "the seal", Vine => "the vine", Shroud, Curtain, None => "" };
                 if hit.len > 0 { hit.append(" and "); }
                 hit.append(str(what, " ", side_of(board, i, j)));
             }
@@ -423,16 +483,14 @@ fn explain_flask(board_in: Board, i: i64) -> Card {
         relate(root, Tie.Vine, false);
     }
 
-    // Its twin.
-    if b.twin >= 0 {
-        let t: i64 = b.twin;
-        line(LineKind.State, str("Twin: joined to the flask ", side_of(board, i, t), "; what doesn't fit runs on into it."));
-        if covered(board.bottles[t]) { line(LineKind.State, "Its twin is covered, so nothing runs over for now."); }
-        relate(t, Tie.Twin, true);
+    // Its key, and the door it opens.
+    if b.key_color != KeyColor.None && !contents_hidden(b) {
+        line(LineKind.State, key_words(b));
+        for j in behind_door_of(board, door_of(board, b.key_color)) { relate(j, Tie.Key, true); }
     }
 
     // What is in it.
-    let hidden = b.cover == Cover.Seal || b.cover == Cover.Shroud;
+    let hidden = contents_hidden(b);
     if !hidden && !b.done {
         let m = murk_count(b);
         if m > 0 {
@@ -461,9 +519,11 @@ fn explain_flask(board_in: Board, i: i64) -> Card {
     if !b.done {
         var from_why: u8[>..] = [];
         var into_why: u8[>..] = [];
-        if covered(b) { from_why.append(cover_until(b)); }
+        if b.behind { from_why.append(str("until the ", metal(board.doors[b.door].color), " door opens")); }
+        else if covered(b) { from_why.append(cover_until(b)); }
         else if b.n == 0 { from_why.append(": it's empty"); }
-        if b.cover == Cover.Seal {
+        if b.behind { into_why.append(from_why); }
+        else if b.cover == Cover.Seal {
             into_why.append(str(": only ", color_name(b.key), if any_liquid(board, DROP) { " or the Drop" } else { "" },
                                 " can go on, and it breaks the seal"));
         }
@@ -494,7 +554,8 @@ fn rule_of(f: Feature) -> const u8[:] {
         Brazier => "Each pour into its flask warms the flasks beside it.",
         Quicksilver => "Pours onto any color, and sinks to the bottom.",
         Siphon => "Pours from the tap at its base: the bottom layer comes out first.",
-        Twins => "Joined by a tube: what doesn't fit in one flows on into the other.",
+        Keys => "A key sits in a layer. When that layer reaches the top, the key comes free and opens the door of its metal; the flasks behind join the board.",
+        Curtain => "Hides a flask and keeps it shut until a flask of the color on its badge is completed.",
         Lantern => "Lights when its flask is completed. Its light reaches the flasks beside it.",
         Shroud => "Hides a flask and keeps it shut until a lantern beside it lights.",
         Hourglass => "Turns over after the pours on its dial, made anywhere.",
@@ -519,7 +580,8 @@ fn flask_has(board: Board, i: i64, f: Feature) -> bool {
         Brazier => b.fixture == Fixture.Brazier,
         Quicksilver => has_liquid(b, QUICKSILVER) || (b.body == Body.Athanor && has_liquid(b, GOLD)),
         Siphon => b.body == Body.Siphon,
-        Twins => b.twin >= 0,
+        Keys => b.key_color != KeyColor.None || b.behind,
+        Curtain => b.cover == Cover.Curtain,
         Lantern => b.fixture == Fixture.Lantern,
         Shroud => b.cover == Cover.Shroud,
         Hourglass => b.body == Body.Hourglass,
@@ -534,9 +596,9 @@ fn flask_has(board: Board, i: i64, f: Feature) -> bool {
 
 // The modifiers on this board, in the order the campaign brings them in,
 // each with its rule and only the ways it meets the others here.
-fn grimoire(board_in: Board) -> Entry[..18] {
+fn grimoire(board_in: Board) -> Entry[..19] {
     let board = placed(board_in);
-    var out: Entry[..18] = [];
+    var out: Entry[..19] = [];
     for f in ALL_FEATURES {
         var e = Entry { feature: f };
         for i in board.count { if flask_has(board, i, f) { e.flasks.push(i); } }
@@ -649,12 +711,25 @@ fn grimoire(board_in: Board) -> Entry[..18] {
             add(lanterns, "every lantern lights");
             if what.len > 0 { effect(Feature.Catalyst, str("Catalyst: when its flask is completed, ", what, "."), pairs); }
         }
-        // Twins.
-        if b.twin > i {
-            let t: i64 = b.twin;
-            if covered(b) || covered(board.bottles[t]) {
-                effect(Feature.Twins, "Twins: a covered twin takes no overflow until it's free.", [Pair { a: i, b: t, tie: Tie.Twin }]);
+        // A key and its door, and what moves its layer.
+        if b.key_color != KeyColor.None {
+            let m = metal(b.key_color);
+            var pairs: Pair[..4] = [];
+            for j in behind_door_of(board, door_of(board, b.key_color)) { pairs.push(Pair { a: i, b: j, tie: Tie.Key }); }
+            effect(Feature.Keys, str(capitalized(m), " key: opens the ", m, " door when its layer reaches the top."), pairs);
+            let here: Pair[1] = [Pair { a: i, b: i, tie: Tie.Key }];
+            if b.body == Body.Siphon { effect(Feature.Keys, "Keys: a siphon's tap frees a key it lets out of the bottom.", here); }
+            if b.body == Body.Hourglass { effect(Feature.Keys, "Keys: an hourglass's flip can bring a key's layer to the top.", here); }
+            if b.cover != Cover.None && b.cover != Cover.Vine { effect(Feature.Keys, "Keys: a key under a cover stays put until the cover is gone.", here); }
+            if any_liquid(board, QUICKSILVER) && b.body != Body.Athanor {
+                effect(Feature.Quicksilver, "Quicksilver: sinking under a key's layer lifts it, never over it.", here);
             }
+        }
+        // A curtain waits on its color.
+        if b.cover == Cover.Curtain {
+            var pairs: Pair[..16] = [Pair { a: i, b: i, tie: Tie.Flow }];
+            for j in board.count { if j != i && has_liquid(board.bottles[j], b.badge) && pairs.len < pairs.cap { pairs.push(Pair { a: j, b: i, tie: Tie.Flow }); } }
+            effect(Feature.Curtain, str("Curtain: opens when ", a_color(b.badge), " flask is completed."), pairs);
         }
         // The vine.
         if b.fixture == Fixture.VineRoot {

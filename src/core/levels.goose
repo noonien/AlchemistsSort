@@ -12,6 +12,10 @@
 //         flask("BRGG").rime(4),                  // ice, melting in four pours
 //         flask("YY").seal('Y'),                  // a seal that Y breaks
 //         tall_flask('V', 2).lantern(),           // two rows tall, holding its extra violet
+//         flask("GRBY").key_at(1, KeyColor.Brass),    // a brass key in its second layer
+//         flask("R").behind_door(KeyColor.Brass), // two flasks behind the brass door
+//         flask("").behind_door(KeyColor.Brass),
+//         flask("BBG").curtain('R'),              // hidden until a Ruby flask is completed
 //         flask("").brazier(),
 //         flask(""),
 //     ])
@@ -19,9 +23,13 @@
 // The letters (COLOR_LETTERS below) are R O Y L G C B V K N W S T A for the
 // dyes, Q quicksilver, U gold and * the Philosopher's Drop. Parts chain
 // onto a flask: bodies .vow_flask() .siphon() .hourglass(every) .athanor()
-// .moonpetal(); covers .seal(key) .rime(pours) .shroud() .vine(); fixtures
-// .brazier() .lantern() .catalyst() .root(every); .twin_of(index) on both
-// twins. A tall flask is made with tall_flask(color, rows), which holds the
+// .moonpetal(); covers .seal(key) .rime(pours) .shroud() .vine()
+// .curtain(color); fixtures .brazier() .lantern() .catalyst() .root(every).
+// A key goes in a layer with .key_at(layer, metal) (layers count from the
+// bottom, from 0), under a layer of another color; the flasks behind a door
+// of that metal get .behind_door(metal), 2 or 3 of them, one after another
+// (they stand side by side in one row). Each metal has one key and one
+// door. A tall flask is made with tall_flask(color, rows), which holds the
 // share of its color beyond an ordinary flask's; only that color goes in,
 // and nothing comes out. A salamander goes in with
 // `.salamander(index)` on the level, and `.columns(n)` holds the grid to n
@@ -124,7 +132,20 @@ fn root(b: Bottle, every: i64) -> Bottle {
     x.spread_every = every as u8;
     x
 }
-fn twin_of(b: Bottle, other: i64) -> Bottle { var x = b; x.twin = other as i8; x }
+fn curtain(b: Bottle, color: u8) -> Bottle {
+    var x = b;
+    x.cover = Cover.Curtain;
+    x.badge = color_of_letter(color) as u8;
+    x
+}
+fn key_at(b: Bottle, layer: i64, metal: KeyColor) -> Bottle {
+    var x = b;
+    x.keyed = (1 << layer) as u16;
+    x.key_color = metal;
+    x
+}
+// Behind the door of `metal`; level() numbers the doors.
+fn behind_door(b: Bottle, metal: KeyColor) -> Bottle { var x = b; x.door = (key_index(metal) - 1) as i8; x }
 
 fn level(number: i64, name: const u8[:], difficulty: Difficulty, hint: const u8[:],
          bottles: const Bottle[:]) -> HandMade {
@@ -133,6 +154,20 @@ fn level(number: i64, name: const u8[:], difficulty: Difficulty, hint: const u8[
     h.info.name.append(name[..min(48, name.len)]);
     h.info.hint.append(hint[..min(200, hint.len)]);
     for b in bottles { push_bottle(h.board, b); }
+    // The doors, in the order their flasks come: behind_door marked each
+    // flask with its door's metal.
+    var number: i64[3] = [-1; 3];
+    for i in h.board.count {
+        var b .= h.board.bottles[i];
+        if b.door < 0 { continue; }
+        let m: i64 = b.door;
+        if number[m] < 0 {
+            number[m] = h.board.door_count;
+            h.board.doors[h.board.door_count] = Door { color: KEY_COLORS[m] };
+            h.board.door_count++;
+        }
+        b.door = number[m] as i8;
+    }
     h.board.colors = color_count(h.board);
     h
 }
@@ -143,7 +178,7 @@ fn columns(h: HandMade, n: i64) -> HandMade { var x = h; x.board.cols = n; x }
 
 // --- the levels -------------------------------------------------------------------------
 
-let HAND_MADE_COUNT = 25;
+let HAND_MADE_COUNT = 26;
 
 // Hand-made level `k`, 0 <= k < HAND_MADE_COUNT, settled and ready to play.
 fn hand_made(k: i64) -> HandMade {
@@ -187,49 +222,53 @@ fn hand_made(k: i64) -> HandMade {
         10 => level(33, "The Siphon", Difficulty.Normal,
                     "A siphon pours from the tap at its base: the bottom layer comes out first. It is filled from the top like any flask.",
                     [flask("RBBB").siphon(), flask("RRR"), flask("GGGB"), flask("G")]),
-        11 => level(36, "Twin Flasks", Difficulty.Normal,
-                    "Twin flasks are joined by a tube. When a pour does not fit in one, the rest flows on into its twin.",
-                    [flask("BRRR"), flask("GGR").twin_of(2), flask("").twin_of(1), flask("GBBB"), flask("G")]),
-        12 => level(45, "The Glassblower's Bench", Difficulty.SuperHard,
-                    "Siphons, twins and a tall flask that takes only quicksilver: let the sinking liquid find its way.",
-                    [flask("YBRG").siphon(), flask("GBYQ"), flask("OBR").twin_of(3), flask("QBR").twin_of(2),
+        11 => level(36, "Keys and Doors", Difficulty.Normal,
+                    "A key is buried in a layer. Pour off what lies over it and it comes free: it opens the door of its metal, and the flasks behind join the board.",
+                    [flask("GRRB").key_at(1, KeyColor.Brass), flask("RBGB"), flask("BRG"), flask(""),
+                     flask("G").behind_door(KeyColor.Brass), flask("").behind_door(KeyColor.Brass)]),
+        12 => level(41, "The Curtain", Difficulty.Normal,
+                    "A curtain hides a flask until a flask of the color on its badge is completed. Then it opens for good.",
+                    [flask("RRBG"), flask("GBRR"), flask("BGBG").curtain('R'), flask(""), flask("")]),
+        13 => level(45, "The Glassblower's Bench", Difficulty.SuperHard,
+                    "Siphons and a tall flask that takes only quicksilver: let the sinking liquid find its way.",
+                    [flask("YBRG").siphon(), flask("GBYQ"), flask("OBR"), flask("QBR"),
                      tall_flask('Q', 2), flask("QOOR"), flask("QG").siphon(), flask("YOGY"), flask("")]),
         // The Observatory.
-        13 => level(48, "Lamplight", Difficulty.Normal,
+        14 => level(48, "Lamplight", Difficulty.Normal,
                     "Complete the lantern's flask and it lights for good. Its light clears the smoke from its own flask and the flasks beside it.",
                     [flask(""), flask("BGBG").under_murk(3), flask("RRR").lantern(), flask("GBGB").under_murk(3), flask("R")]),
-        14 => level(51, "The Shroud", Difficulty.Normal,
+        15 => level(51, "The Shroud", Difficulty.Normal,
                     "A shroud hides a flask until light reaches it. Complete the flask with the lantern, and its light lifts the shroud next door.",
                     [flask("RRGB"), flask("YBGY").lantern(), flask("GBYG").shroud(), flask("BRYR"), flask(""), flask("")]),
-        15 => level(56, "The Hourglass", Difficulty.Normal,
+        16 => level(56, "The Hourglass", Difficulty.Normal,
                     "The hourglass turns over after the number of pours on it, made anywhere: what was at the bottom comes to the top.",
                     [flask("RBB").hourglass(1), flask("RRR"), flask("GGBB"), flask("GG")]),
-        16 => level(60, "The Orrery", Difficulty.SuperHard,
+        17 => level(60, "The Orrery", Difficulty.SuperHard,
                     "Lanterns, a shroud and a turning hourglass: light the way, and time the turn.",
                     [flask("GRCB").under_murk(3), flask("YGQ").lantern(), flask("RCBY").shroud(), flask("QBYR").hourglass(3),
                      flask(""), flask("QGBC").under_murk(2), flask("GCY"), flask("QR").lantern(), flask("")]),
         // The Greenhouse.
-        17 => level(63, "Creeping Vine", Difficulty.Normal,
+        18 => level(63, "Creeping Vine", Difficulty.Normal,
                     "Every few pours the vine grows over a flask next to it, shutting it. Pour emerald into its root and the whole vine withers.",
                     [flask("GRB"), flask("GBR"), flask("GG").root(3), flask("RRBB"), flask("")]),
-        18 => salamander(level(66, "The Salamander", Difficulty.Normal,
+        19 => salamander(level(66, "The Salamander", Difficulty.Normal,
                     "Nothing can be poured into the salamander's flask. After each pour it hops onto the flask you poured from, and its heat melts ice there and next door.",
                     [flask("RGB").rime(6), flask("BRG"), flask("GBR").rime(6), flask("RGB"), flask(""), flask("")]), 1),
-        19 => level(71, "Moonpetal", Difficulty.Normal,
+        20 => level(71, "Moonpetal", Difficulty.Normal,
                     "The moonpetal takes liquid only while a lantern is lit. Pouring out of it is always fine.",
                     [flask("RR").moonpetal(), flask("BBB").lantern(), flask("GRB"), flask("RGG"), flask("G"), flask("")]),
-        20 => salamander(level(75, "The Moonlit Greenhouse", Difficulty.SuperHard,
+        21 => salamander(level(75, "The Moonlit Greenhouse", Difficulty.SuperHard,
                     "The vine creeps, the salamander burns its tendrils, and the moonpetal waits for the lantern.",
                     [flask("GROB"), flask("YOBB"), flask("OR").root(3), flask("RYY").moonpetal(), flask("GY").lantern(),
                      flask("OGG"), flask("RB"), flask(""), flask("")]), 5).columns(5),
         // The Athanor.
-        21 => level(78, "The Athanor", Difficulty.Normal,
+        22 => level(78, "The Athanor", Difficulty.Normal,
                     "The athanor turns quicksilver poured into it into gold. Every drop of quicksilver has to become gold.",
                     [flask("").athanor(), flask("QRR"), flask("QBB"), flask("BBUU"), flask("RR")]),
-        22 => level(81, "The Philosopher's Drop", Difficulty.Normal,
+        23 => level(81, "The Philosopher's Drop", Difficulty.Normal,
                     "The Drop fits any color: pour it anywhere, pour anything onto it, and it counts as whichever color fills its flask.",
                     [flask("GR*"), flask("BRB"), flask("GBGR"), flask("BG"), flask("")]),
-        23 => level(86, "The Catalyst", Difficulty.Normal,
+        24 => level(86, "The Catalyst", Difficulty.Normal,
                     "Complete the catalyst's flask and it sets everything off: every brazier heats, every hourglass turns over and every lantern lights.",
                     [flask("YYY").catalyst(), flask("RBBB").hourglass(9), flask("RRR"), flask("GGGB"), flask("GY")]),
         _ => level(90, "The Great Athanor", Difficulty.SuperHard,

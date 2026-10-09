@@ -3,7 +3,8 @@
 // rippling across, ice shattering, wax softening and cracking off, lanterns
 // flaring, shrouds sliding away, smoke clearing, an hourglass turning over,
 // vines growing, withering and burning, the salamander's hop, the athanor's
-// gold, the twins' overflow, the catalyst's runes, a vow's band taking its color.
+// gold, the catalyst's runes, a vow's band taking its color, a key flying
+// free to its door, the door lifting away, a curtain drawn up.
 //
 // The board drawn, `shown`, trails the board in play while they play: it
 // starts as the pour left it before anything it set off, and each event's
@@ -35,8 +36,9 @@ struct Beat {
     quiet: bool = false,    // one of a group that another plays the sound of
     by_pour: bool = false,  // SealBroken: by the liquid poured onto it
     mask: i64 = 0,          // MurkCleared: the layers cleared; Lit: the flasks its light changes
-    n0: i64 = 0,            // Overflowed: the twin's layers before
-    color: i64 = 0,         // the liquid it is about
+    n0: i64 = 0,            // KeyFreed: the layer the key left from
+    color: i64 = 0,         // the liquid it is about; KeyFreed: the key's metal (key_index)
+    door: i64 = -1,         // KeyFreed, DoorOpened: the door
     alt: Bottle,            // Flipped: the stack turned over, before quicksilver sinks
     gap: i64 = 0,           // Flipped: the empty layers the liquid falls through once it is over
     steps: i64 = 0,         // Flipped: the steps quicksilver takes running back down
@@ -129,7 +131,9 @@ fn beat_span(kind: EventKind) -> f64, f64 {
         TendrilBurned => { return 0.9, 0.55; },
         SalamanderHop => { return 0.55, 0.0; },
         Transmuted => { return 0.9, 0.0; },
-        Overflowed => { return 0.6, 0.0; },
+        KeyFreed => { return 0.9, 0.0; },
+        DoorOpened => { return 0.9, 0.0; },
+        CurtainOpened => { return 0.8, 0.0; },
         CatalystFired => { return 1.1, 0.0; },
         Completed => { return 0.0, 0.0; },
         Vowed => { return 0.8, 0.0; },
@@ -259,14 +263,12 @@ fn sink_steps(s: Bottle) -> i64, Bottle {
 }
 
 // The board just after a pour's liquid moved, before anything it set off:
-// what landed in the destination and what went on into its twin. A seal
-// on the destination stays until its own event breaks it.
+// what landed in the destination. A seal on the destination stays until its
+// own event breaks it, and a key let out of a tap until it flies.
 fn liquid_moved(before: Board, from: i64, to: i64, r: PourResult) -> Board {
     var m = before;
     var scratch = PourResult {};
     for k in r.amount { move_one(m, from, to, scratch); }
-    let tw: i64 = m.bottles[to].twin;
-    if tw >= 0 { for k in r.overflow { move_one(m, from, tw, scratch); } }
     // A vow takes its color when its own event plays.
     for e in r.events { if e.kind == EventKind.Vowed { m.bottles[e.bottle].vow = 0; } }
     m
@@ -294,7 +296,7 @@ fn schedule_pour(before: Board, from: i64, to: i64, r: PourResult, t0: f64) {
         if e.kind == EventKind.HeatPulse && !heat_reaches(r, k) { continue; }
         let span, delay0 = beat_span(e.kind);
         var delay = delay0;
-        var b = Beat { kind: e.kind, bottle: e.bottle, from: e.from, span: span, alt: mid.bottles[0] };
+        var b = Beat { kind: e.kind, bottle: e.bottle, from: e.from, door: e.door, span: span, alt: mid.bottles[0] };
         let heat_follow = heat_result(e.kind) && e.from >= 0 && e.from == heat_src;
         let light_follow = (e.kind == EventKind.MurkCleared || e.kind == EventKind.ShroudLifted) && e.from >= 0 &&
                            e.from == light_src;
@@ -312,10 +314,6 @@ fn schedule_pour(before: Board, from: i64, to: i64, r: PourResult, t0: f64) {
         } else if e.kind == EventKind.Vowed {
             // As the liquid lands.
             b.at = land - T_POUR * 0.4;
-        } else if e.kind == EventKind.Overflowed {
-            b.at = t0 + T_LIFT + T_POUR * 0.5;
-            b.n0 = before.bottles[e.bottle].n;
-            b.color = top(mid.bottles[e.bottle]);
         } else if e.kind == EventKind.HeatPulse {
             b.quiet = e.from == heat_src;
             if e.from != heat_src {
@@ -345,10 +343,17 @@ fn schedule_pour(before: Board, from: i64, to: i64, r: PourResult, t0: f64) {
                 b.span = flip_span(b.gap, b.steps);
                 delay = b.span;
             }
+            if e.kind == EventKind.KeyFreed {
+                // From its layer as the flips so far left it (the bottom,
+                // when a tap let it out).
+                b.n0 = max(0, key_segment(sim.bottles[e.bottle]));
+                b.color = key_index(before.bottles[e.bottle].key_color);
+            }
             b.at = cursor;
             cursor += match e.kind {
                 Lit => 0.45, Flipped => b.span, VineSpread => 0.75, VineWithered => 0.65, SalamanderHop => 0.55,
-                CatalystFired => 0.6, Completed => 0.12, _ => 0.3,
+                CatalystFired => 0.6, Completed => 0.12, KeyFreed => 0.6, DoorOpened => 0.5, CurtainOpened => 0.4,
+                _ => 0.3,
             };
             if e.kind == EventKind.Lit {
                 light_src = e.bottle;
@@ -500,7 +505,12 @@ fn start_beat(b: Beat&) {
             play_pitched(Sfx.Chime, 1.5, 0.6);
             burst(at(a, a.body), 26, float4 { 1.0, 0.82, 0.3, 1.0 }, 170.0);
         },
-        Overflowed => play_pitched(Sfx.Pour, 1.35, 0.4),
+        KeyFreed => play_pitched(Sfx.Chime, 1.6, 0.6),
+        DoorOpened => {
+            play_pitched(Sfx.Crack, 0.6, 0.5);
+            play_pitched(Sfx.Reveal, 0.8, 0.8);
+        },
+        CurtainOpened => play_pitched(Sfx.Reveal, 1.1, 0.8),
         CatalystFired => {
             play(Sfx.Gong);
             burst(at(a, a.base), 30, float4 { 0.8, 0.5, 1.0, 1.0 }, 220.0);
@@ -578,7 +588,19 @@ fn apply_beat(b: Beat&, live: bool) {
                 burst(a.center, 30, palette_color(c, save.color_safe), 180.0);
             }
         },
-        Transmuted, Overflowed => {},
+        KeyFreed => {
+            s.key_color = KeyColor.None;
+            s.keyed = 0;
+        },
+        DoorOpened => {
+            let d = b.door;
+            if d >= 0 && d < shown.door_count {
+                shown.doors[d].open = true;
+                for j in shown.count { if shown.bottles[j].door == d { shown.bottles[j].behind = false; } }
+            }
+        },
+        CurtainOpened => { s.cover = Cover.None; },
+        Transmuted => {},
     }
 }
 
@@ -696,27 +718,34 @@ fn flip_pose(i: i64) -> FlipPose {
     f
 }
 
-// A twin's fill while liquid comes through the tube.
-fn overflow_fill(i: i64, fill: f32) -> f32 {
+// How far door d has opened, 0..1, while it opens; -1 otherwise.
+fn door_opening(d: i64) -> f32 {
     for e in beats {
-        if e.kind != EventKind.Overflowed || e.bottle != i { continue; }
-        if now < e.at { return e.n0; }
-        let k = ease((now - e.at - 0.15) / (e.span - 0.15));
-        return e.n0 + (fill - e.n0) * k;
+        if e.kind != EventKind.DoorOpened || e.door != d || !e.started || e.span <= 0.0 { continue; }
+        let k = (now - e.at) / e.span;
+        if k < 1.0 { return ease(k); }
     }
-    fill
+    -1.0
 }
 
-// The liquid in the tube between twins i and j: how far it has run, its
-// color and the flask it runs from; -1 there when none is.
-fn tube_flow(i: i64, j: i64) -> f32, float4, i64 {
-    for e in beats {
-        if e.kind != EventKind.Overflowed || !e.started || !((e.bottle == i && e.from == j) || (e.bottle == j && e.from == i)) { continue; }
-        let k = (now - e.at) / e.span;
-        if k >= 1.0 { continue; }
-        return (k * 1.7) as f32, palette_color(e.color, save.color_safe), e.from;
+// The door before door d's flasks, from its top left to its bottom right:
+// over their cells, from the rims (but clear of the feet of the row behind)
+// to the table.
+fn door_box(d: i64) -> float2, float2 {
+    var lo = v2(1e9, 1e9);
+    var hi = v2(-1e9, -1e9);
+    var clear: f32 = -1e9;
+    for i in shown.count {
+        if shown.bottles[i].door != d { continue; }
+        let a = stand_anchors(i);
+        let w = a.hx * COLUMN_STEP * 0.5 - 2.0;
+        lo = v2(min(lo.x, a.center.x - w), min(lo.y, a.center.y - a.half.y - a.hx * 0.1));
+        hi = v2(max(hi.x, a.center.x + w), max(hi.y, a.center.y + a.half.y + a.hx * 0.2));
+        let j = flask_at(shown, shown.row[i] - 1, shown.col[i]);
+        if j >= 0 { clear = max(clear, foot_y(j) + drop_offset(j) + a.hx * 0.15); }
     }
-    return -100.0, float4_0, -1;
+    lo.y = max(lo.y, clear);
+    return lo, hi;
 }
 
 // How bright a vow's band flashes as it takes its color, 0..1.
@@ -823,7 +852,33 @@ fn draw_beats(out: Inst[>..]&) {
                 glow(out, c, v2(hx * 2.2, hx * 2.2), 1.0, float4 { 1.0, 0.85, 0.35, 0.65 * f });
                 spark(out, c, hx * (0.6 + 1.6 * k), float4 { 1.0, 0.95, 0.7, f });
             },
-            Overflowed => {},
+            KeyFreed => {
+                // The key rises out of its layer, glinting, and flies to its door.
+                let from = a.center + segment_center(a.half, e.n0);
+                var to = at(a, a.rim) - v2(0.0, hx * 1.2);
+                if e.door >= 0 {
+                    let lo, hi = door_box(e.door);
+                    if lo.x < hi.x { to = (lo + hi) * v2(0.5, 0.5); }
+                }
+                let u = ease(k);
+                let ctrl = v2((from.x + to.x) * 0.5, min(from.y, to.y) - hx * 2.5);
+                let pos = lerp2(lerp2(from, ctrl, u), lerp2(ctrl, to, u), u);
+                let glint = sin(k * PI);
+                glow(out, pos, v2(hx * 1.1, hx * 1.1), 1.0, float4 { 1.0, 0.9, 0.6, 0.45 * glint });
+                spark(out, pos + v2(-hx * 0.3, -hx * 0.15), hx * (0.3 + 0.5 * glint), white(glint));
+                draw_key(out, pos, hx * (0.62 + 0.2 * glint), KEY_COLORS[clamp(e.color - 1, 0, 2)], glint, 1.0 - clamp((k - 0.85) / 0.15, 0.0, 1.0));
+            },
+            DoorOpened => {
+                // Dust as it lifts away.
+                if k < 0.4 {
+                    let lo, hi = door_box(e.door);
+                    if lo.x < hi.x && rand.rand_int(3) == 0 {
+                        emit(v2(lo.x + (hi.x - lo.x) * rand.rand_flt() as f32, hi.y), v2(0.0, -30.0), 0.8, 3.0,
+                             float4 { 0.6, 0.5, 0.4, 0.6 }, -20.0);
+                    }
+                }
+            },
+            CurtainOpened => draw_curtain(out, a, shown.bottles[i].badge, ease(k), save.color_safe),
             CatalystFired => {
                 let base = at(a, a.base);
                 let r = hx * (1.3 + 2.4 * ease(k));

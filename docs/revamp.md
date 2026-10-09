@@ -42,21 +42,23 @@ spans, so it can have up to 2 × rows neighbors.
 ## The bottle model
 
 A bottle has independent parts, so modifiers combine (a frozen hourglass, a
-sealed twin, a tall flask on a brazier, ...):
+key under smoke, a tall flask on a brazier, ...):
 
 | Part | Values |
 |---|---|
 | `seg`, `n`, `cap` | the liquid, bottom first; `cap` 4, or 9 or 14 for a **Tall Flask** spanning 2 or 3 rows |
 | `murk: u16` | bitmask, one bit per segment: hidden under smoke (was `hidden` count) |
 | **body** (one) | `Plain`, `Vow`, `Siphon`, `Hourglass`, `Athanor`, `Moonpetal` |
-| **cover** (at most one; blocks pours in and out unless said otherwise) | `None`, `Seal` (key color, heat count), `Rime` (timer), `Shroud`, `Vine` (a tendril) |
+| **cover** (at most one; blocks pours in and out unless said otherwise) | `None`, `Seal` (key color, heat count), `Rime` (timer), `Shroud`, `Vine` (a tendril), `Curtain` (`badge`: the color that opens it) |
 | **fixture** (at most one) | `None`, `Brazier`, `Lantern` (lit flag), `Catalyst` (spent flag), `VineRoot` (spread timer, every N) |
-| `twin` | index of its twin flask, or -1 |
+| `keyed: u16`, `key_color` | the key buried in it (at most one): bit k set when segment k holds it, moved with the segments exactly like `murk`; `key_color` its metal (`Brass`, `Silver`, `Copper`), `None` once freed |
+| `door`, `behind` | the door it stands behind (-1 none), and whether that door is still shut (kept by `settle` and the door opening) |
 | body data | `key` for Vow; `flip_every` and a counter for Hourglass |
 | `done` | completed and sealed (unchanged) |
 
 Board-level state: `salamander` (flask index, -1 when none), the grid placement,
-`pours`.
+`pours`, and the doors: `doors: Door[3]` (`Door { color, open }`) and
+`door_count`.
 
 Special liquids (letters in the level format):
 - **Quicksilver** `Q`: a liquid that sinks.
@@ -118,11 +120,33 @@ run of equal segments from `seg[0]` up) instead of the top run. It receives
 on top as normal. No murk on siphons. Quicksilver poured into a siphon sinks
 straight to the tap, so it comes out first.
 
-**Twin Flasks** (`twin`). Two neighboring flasks joined by a tube. When a
-pour into one doesn't fit, the excess **overflows into the twin**, if the
-twin would accept that color (no cover, not done, room, top match or empty,
-no salamander, and its own body rules). One hop only. A covered twin
-(Rime, Seal...) takes no overflow.
+**Keys and Doors** (`keyed`/`key_color`, `door`). A key sits in one liquid
+layer of a flask. It **comes free the moment its layer is the top layer of
+its flask**: nothing of another color (nor the Drop) lies over its segment,
+and its segment is out of the smoke. That happens however the layer gets
+there: pouring off what lay over it, an hourglass's flip, light clearing
+the smoke. A siphon's tap that lets the keyed segment out of the bottom
+frees it too. The key moves with its segment whenever the stack shifts
+(quicksilver sinking under it, a flip, a tap draining). Keys come in three
+metals, Brass, Silver and Copper; each **opens the door of its metal**, so
+a level has at most three doors, each with exactly one key. A **door**
+stands before **2 or 3 neighboring flasks in one grid row**. While it is
+shut those flasks are **out of play**: hidden, nothing poured from or into
+them, and nothing reaches them (no heat, no light, no vine; their ice,
+hourglass and vine root count no pours; nothing there completes). They may
+hold liquid, which then has to be sorted after the door opens: liquid
+behind a shut door means the level isn't won; empty flasks behind one
+don't stand in the way. When its key comes free the door **opens for
+good** and its flasks join the board. A key under a cover stays put until
+the cover is gone (nothing moves under one), and smoke hides a key: it is
+drawn only when its layer is in view.
+
+**Curtain** (cover, `badge`). A drape with a color badge. The flask is
+hidden and inert until **a flask of the badge color is completed**
+(anywhere, a tall flask included); then the curtain opens for good. Liquid
+behind a curtain isn't sorted yet, so it blocks the win. Heat and light
+don't touch it. A curtain whose color is already complete at the start
+opens at `settle`.
 
 **Lantern** (fixture). When its flask is completed, the lantern **lights**
 for good. Light reaches its neighbors and its own flask: it clears all murk
@@ -173,12 +197,13 @@ sends a heat pulse, every Hourglass flips, every Lantern lights.
 
 ### Order of effects in one pour
 
-1. Legality: the source can pour (has liquid, not done, no cover, not a
-   tall flask). The destination accepts the color (no cover except
-   Seal/key rules, no salamander, body rules, a tall flask's color, room,
-   top match). Siphon sources pour their bottom run.
-2. Move the liquid: seal break, quicksilver sinking, athanor transmutation,
-   twin overflow.
+1. Legality: the source can pour (has liquid, not done, no cover, not
+   behind a shut door, not a tall flask). The destination accepts the
+   color (not behind a shut door, no cover except Seal/key rules, no
+   salamander, body rules, a tall flask's color, room, top match). Siphon
+   sources pour their bottom run.
+2. Move the liquid: seal break, quicksilver sinking, athanor
+   transmutation. Keys and murk move with their segments.
 3. Clear murk on the new tops.
 4. `pours++`. Then, in order: Rime timers (one per pour), Hourglass counters
    and flips, Vine spread timers and spreading.
@@ -186,15 +211,30 @@ sends a heat pulse, every Hourglass flips, every Lantern lights.
    the root.
 6. The Salamander hops to the source, then its heat pulse.
 7. Completion: seal completed flasks. Lanterns on completed flasks light.
-   Catalysts fire. Repeat until nothing changes, since light or heat can
-   uncover a flask that's already complete.
+   Catalysts fire. Curtains whose color has been completed open. Keys
+   whose layer is on top (or that a tap let out) come free, and their
+   doors open. Repeat until nothing changes, since light or heat can
+   uncover a flask that's already complete, and an opened door or curtain
+   can show one. (So a key freed by a pour, a flip or light opens its door
+   within that same pour.)
 
 ### Details settled during implementation
 
-- **Twins:** the destination must accept the pour first, so a full flask
-  refuses even with a twin. Overflow happens when the destination runs out
-  of room and the color fits the twin; nothing overflows back into the
-  source. A brazier or vine root on the twin isn't set off by overflow.
+- **Keys and doors:** the "layer" is the run of the key's color it sits in,
+  so a key low in a run comes free once that whole run is on top (it is
+  never poured out while buried: a pour takes only the top run). Validated:
+  a key's layer can't start on top (its door would open at once), each key
+  has exactly one door of its metal and each door exactly one key, a
+  door's flasks are 2 or 3 in a row side by side (consecutive in the
+  level's order; `place_grid` keeps such a group together in one row,
+  leaving a cell empty rather than splitting it), never tall flasks, and
+  the salamander never sits behind one. A key may lie behind another door
+  (a chain) or under a curtain, but never behind its own door, and what
+  opens a door or a curtain is never shut away behind it (no cycles).
+- **Curtain:** validated: its color is on the board and not inside it (it
+  couldn't be completed while the curtain hides some), and no two curtains
+  (or a curtain and a door) wait on each other. The solver catches the
+  rest.
 - **Seal:** heat breaks it on the second pulse. Any break (key, Drop or
   heat) lets liquid in only if it fits by the normal rules. A seal's key is
   never the Drop.
@@ -217,12 +257,15 @@ sends a heat pulse, every Hourglass flips, every Lantern lights.
   can't be won.
 
 `PourResult` keeps its fields and gains an **event list** (a fixed array,
-e.g. up to 32) of `Event { kind, bottle, from }`. The game animates the
-events in order. Kinds: `SealBroken`, `SealSoftened`, `Thawed`, `HeatPulse`,
-`Lit`, `ShroudLifted`, `MurkCleared`, `Flipped`, `VineSpread`,
+e.g. up to 32) of `Event { kind, bottle, from, door }`. The game animates
+the events in order. Kinds: `SealBroken`, `SealSoftened`, `Thawed`,
+`HeatPulse`, `Lit`, `ShroudLifted`, `MurkCleared`, `Flipped`, `VineSpread`,
 `VineWithered`, `TendrilBurned`, `SalamanderHop`, `Transmuted`,
-`Overflowed`, `CatalystFired`, `Completed`, `Vowed` (a vow flask took its
-color).
+`CatalystFired`, `Completed`, `Vowed` (a vow flask took its color),
+`KeyFreed` (`bottle`: the key's flask, `door`: the door it opens),
+`DoorOpened` (`door`, `bottle`: its first flask, `from`: the key's flask),
+`CurtainOpened` (`bottle`: the curtain's flask, `from`: the completed flask
+of its color).
 
 ## Explaining the board
 
@@ -233,7 +276,7 @@ Every sentence the game says about the rules comes from
   with its one-sentence rule, its flasks, and only the ways it meets the
   others *on this board* ("Brazier: each pour into it melts the ice beside
   it, and softens the seal beside it"), each with the flasks and the pairs
-  of flasks it ties (heat, light, twin, vine, salamander, catalyst, flow).
+  of flasks it ties (heat, light, key, vine, salamander, catalyst, flow).
 - `explain_flask(board, i)`: a flask's card: its parts' names, how it
   stands in plain words ("Frozen: thaws in 3 pours. Sooner with heat: each
   pour into the Brazier on its left melts one more."), what it can't do now
@@ -254,8 +297,9 @@ no player-made levels: the My Levels screen, `--file` and the `E` export are
 gone. Hand-made levels (tutorials and finales) are a table in
 `src/core/levels.goose`, written with compact constructors close to how a
 level reads: liquid strings bottom to top (`"RRGB"`; `Q` quicksilver, `U`
-gold, `*` the Drop) plus the bottle's body, cover, fixture, murk, height and
-twin. The campaign looks hand-made levels up by number; every other level is
+gold, `*` the Drop) plus the bottle's body, cover, fixture, murk, height,
+key (`.key_at(layer, metal)`) and door (`.behind_door(metal)`), and
+`.curtain(color)`. The campaign looks hand-made levels up by number; every other level is
 generated from its seed. The tests solve every level in the table.
 
 ## Campaign: six chapters, then the Great Work
@@ -268,7 +312,7 @@ combos). Tutorials are hand-made and never land on a multiple of 5.
 |---|---|---|---|---|
 | 1 | The Apothecary | 1–15 | Smoke (3), Seal (6), Tall Flask (8), Vow (11) | warm wood, jars, candles |
 | 2 | The Frost Cellar | 16–30 | Rime (18), Brazier (21), Quicksilver (26) | cold stone, icicles, embers |
-| 3 | The Glassworks | 31–45 | Siphon (33), Twin Flasks (36) | furnace glow, glass tubes |
+| 3 | The Glassworks | 31–45 | Siphon (33), Keys and Doors (36), Curtain (41) | furnace glow, glass tubes |
 | 4 | The Observatory | 46–60 | Lantern (48), Shroud (51), Hourglass (56) | night sky, brass, stars |
 | 5 | The Greenhouse | 61–75 | Vine (63), Salamander (66), Moonpetal (71) | leaves, moonlight, mist |
 | 6 | The Athanor | 76–90 | Athanor (78), Philosopher's Drop (81), Catalyst (86) | gold, red furnace, runes |
@@ -283,9 +327,9 @@ Levels 1–2 are plain colors. They are the only plain levels.
 - Plus **1** (normal) or **2** (hard) modifiers from **earlier chapters**,
   weighted toward the previous chapter and toward modifiers that interact
   with this chapter's (heat → Rime/Seal/Vine; light → Murk/Shroud;
-  flow → Quicksilver/Tall; flip → Murk/Quicksilver; transmutation →
-  Quicksilver; catalyst → Brazier/Hourglass/Lantern). Never everything at
-  once.
+  flow → Quicksilver/Tall; keys → Murk/Quicksilver; curtain → Tall/Vow;
+  flip → Murk/Quicksilver/Keys; transmutation → Quicksilver; catalyst →
+  Brazier/Hourglass/Lantern). Never everything at once.
 - **Warm-up** (positions 1–2 of chapters 2+): only earlier modifiers, 2 of
   them.
 - **Tall Flask**: levels `n >= 9` with `n % 4 == 0` get one (but not
@@ -294,9 +338,12 @@ Levels 1–2 are plain colors. They are the only plain levels.
   common, more on Hard.
 - **Dependencies** the generator respects: a Shroud needs a neighboring
   Lantern. A Moonpetal needs a Lantern on the board. An Athanor needs
-  quicksilver. A Catalyst needs a Brazier, an Hourglass or a Lantern. Twins
-  are neighbors. A Brazier stands next to something heat affects, or there
-  is a Salamander.
+  quicksilver. A Catalyst needs a Brazier, an Hourglass or a Lantern. A
+  door stands before one or two dealt flasks and one extra empty one, side
+  by side in a row, and its key is buried (under at least one layer of
+  another color) in a flask in plain play. A curtain's color is one that
+  neither it nor another curtain holds. A Brazier stands next to something
+  heat affects, or there is a Salamander.
 
 **Saves:** the old save holds `level` (the next level). It maps to the
 first level of the new chapter that contains it (capped at 91), so a player
@@ -361,7 +408,11 @@ functions.
   (A2); completion drops a stopper in and slides a label on (A5); every
   force has a visible effect (heat shimmer, light beams, the flip, the
   salamander's hop, vines growing and burning, the athanor's gold flash,
-  the catalyst's rune burst). Heat and light are shown going only to flasks
+  the catalyst's rune burst, a freed key flying to its door's keyhole, the
+  door lifting away, a curtain drawn up). A key is drawn in its layer
+  through the liquid; a shut door is a plank door with a keyhole of its
+  key's metal over its flasks' cells, and a curtain a drape with its
+  color's badge. Heat and light are shown going only to flasks
   they change. A tipped flask's liquid stays level and leaves over the lip;
   an hourglass turns over on its pivots and its liquid falls back down.
   Whatever moves (a flask being poured from, an hourglass turning, the

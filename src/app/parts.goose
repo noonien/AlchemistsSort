@@ -1,7 +1,8 @@
 // What a flask can have, drawn: its body (a vow band, a siphon's tap, an
 // hourglass's stand, an athanor's hearth, a moonpetal's bloom), its cover
-// (wax, rime, a shroud, a vine), what stands by it (a brazier, a lantern, a
-// catalyst's runes, a vine's roots), the twins' tube and the salamander.
+// (wax, rime, a shroud, a vine, a curtain), what stands by it (a brazier, a
+// lantern, a catalyst's runes, a vine's roots), a key in its liquid, the
+// door before it and the salamander.
 //
 // Every part hangs off a few points of the flask worked out in one place,
 // flask_anchors, so a new way of drawing flasks only has to move those.
@@ -41,7 +42,6 @@ struct Anchors {
     body: float2,       // the middle of the liquid
     base: float2,       // the middle of the bottom, where it stands
     side: float2,       // the right of the body, low down (left is its mirror)
-    joint: float2,      // the right of the body, high up, where a twin's tube joins
     hang: f32 = 1.0,    // the side a lantern's crook rises on: 1 right, -1 left
     room: f32 = 2.0,    // the free space over the rim's middle, in half widths, for a lantern
 }
@@ -58,8 +58,7 @@ fn flask_anchors(pos: float2, half: float2, angle: f32, squash: f32) -> Anchors 
               shoulder: float2 { 0.0, top + ry + hx * 0.55 },
               body: float2 { 0.0, (top + ry + bottom) * 0.5 },
               base: float2 { 0.0, bottom },
-              side: float2 { hx * FLASK_BODY, bottom - hx * 0.45 },
-              joint: float2 { hx * FLASK_BODY, top + ry + hx * 0.7 } }
+              side: float2 { hx * FLASK_BODY, bottom - hx * 0.45 } }
 }
 
 // The middle of the near face of liquid segment k, relative to the flask's
@@ -90,8 +89,6 @@ fn at(a: Anchors, local: float2) -> float2 {
     let s = sin(a.angle);
     float2 { a.center.x + c * local.x - s * y, a.center.y + s * local.x + c * y }
 }
-
-fn mirror(p: float2) -> float2 { float2 { -p.x, p.y } }
 
 // An instance of a part that turns with the flask.
 fn part(shape: Shape, a: Anchors, local: float2, half: float2, color: float4) -> Inst {
@@ -182,8 +179,75 @@ fn draw_cover(out: Inst[>..]&, i: i64, b: Bottle, a: Anchors, look: CoverLook, s
                                 float4 { 0.17, 0.13, 0.32, 1.0 })),
         Seal => draw_wax(out, b.key, a, look.soft, look.crack, (i * 0.618) % 1.0, 1.0, safe),
         Vine => draw_vines(out, a, look.grow, look.wither, look.burn, (i * 0.414) % 1.0, 1.0),
+        Curtain => draw_curtain(out, a, b.badge, 0.0, safe),
         None => {},
     }
+}
+
+let CURTAIN_COLOR = float4 { 0.5, 0.08, 0.12, 1.0 };
+
+// A curtain on a rod over the flask, `up` 0..1 drawn up and away, with its
+// color's badge on it.
+fn draw_curtain(out: Inst[>..]&, a: Anchors, badge: i64, up: f32, safe: bool) {
+    let hx = a.hx;
+    let alpha = 1.0 - up;
+    let c = a.center + float2 { up * hx * 0.3, hx * 0.05 - up * a.half.y * 1.1 };
+    var cl = inst(Shape.Cloth, c, a.half + float2 { hx * 0.18, hx * 0.1 }, with_alpha(CURTAIN_COLOR, alpha));
+    cl.p0 = float4 { 1.0, 0.0, 0.0, 0.0 };
+    cl.misc.z = 6.0;
+    out.push(cl);
+    // The badge: a disc of the color that opens it, on a gold ring.
+    let bp = c - float2 { 0.0, a.half.y * 0.15 };
+    let r = hx * 0.42;
+    glow(out, bp + float2 { 0.0, r * 0.2 }, float2 { r * 1.5, r * 1.5 }, 0.6, float4 { 0.0, 0.0, 0.0, 0.4 * alpha });
+    rect(out, bp, float2 { r, r }, r, with_alpha(palette_color(badge, safe), alpha));
+    ring(out, bp, r, max(1.5, r * 0.18), float4 { 0.95, 0.78, 0.42, alpha });
+    if safe {
+        var s = inst(Shape.Symbol, bp, float2 { r * 0.7, r * 0.7 }, rgba(1.0, 1.0, 1.0, 0.95 * alpha));
+        s.p0 = float4 { badge, 0.0, 0.0, 0.0 };
+        out.push(s);
+    }
+}
+
+// --- keys and doors -----------------------------------------------------------------------
+
+// A key's metal.
+fn key_tint(k: KeyColor) -> float4 {
+    match k {
+        Brass => float4 { 0.86, 0.66, 0.3, 1.0 },
+        Silver => float4 { 0.8, 0.83, 0.88, 1.0 },
+        Copper => float4 { 0.8, 0.42, 0.24, 1.0 },
+        None => float4 { 0.5, 0.5, 0.5, 1.0 },
+    }
+}
+
+// A key `u` across each way from `c`, tilted a little; glint 0..1 flashes it.
+fn draw_key(out: Inst[>..]&, c: float2, u: f32, k: KeyColor, glint: f32, alpha: f32) {
+    var i = inst(Shape.Key, c, float2 { u, u * 0.5 }, with_alpha(key_tint(k), alpha));
+    i.p0 = float4 { glint, 0.0, 0.0, 0.0 };
+    i.misc.y = -0.25;
+    i.misc.z = u * 0.3;
+    out.push(i);
+}
+
+// The key in a flask's liquid, at its layer: in view unless smoke or a
+// cover hides its layer.
+fn draw_flask_key(out: Inst[>..]&, b: Bottle, a: Anchors) {
+    let k = key_segment(b);
+    if b.key_color == KeyColor.None || k < 0 || murky(b, k) || contents_hidden(b) { return; }
+    draw_key(out, at(a, segment_center(a.half, k)), a.hx * 0.62, b.key_color, 0.0, 1.0);
+}
+
+// A door from lo to hi (its top left and bottom right), drawn `up` 0..1
+// slid up and faded as it opens.
+fn draw_door(out: Inst[>..]&, lo: float2, hi: float2, k: KeyColor, up: f32) {
+    let half = (hi - lo) * float2 { 0.5, 0.5 };
+    let c = (lo + hi) * float2 { 0.5, 0.5 } - float2 { 0.0, up * half.y * 0.8 };
+    let alpha = 1.0 - up * up;
+    glow(out, c + float2 { 6.0, 8.0 }, half + float2 { 10.0, 10.0 }, 0.5, float4 { 0.0, 0.0, 0.0, 0.45 * alpha });
+    var d = inst(Shape.Door, c, half, float4 { 0.42, 0.27, 0.15, alpha });
+    d.p1 = key_tint(k);
+    out.push(d);
 }
 
 fn draw_wax(out: Inst[>..]&, key: i64, a: Anchors, soft: f32, crack: f32, seed: f32, alpha: f32, safe: bool) {
@@ -345,18 +409,6 @@ fn draw_roots(out: Inst[>..]&, b: Bottle, a: Anchors, wither: f32, alpha: f32) {
 }
 
 // --- between flasks, and on them ------------------------------------------------------------
-
-// The glass tube joining twins, from a's shoulder to b's; liquid runs
-// through it from a's end as head goes 0..1.6, in `color`.
-fn draw_tube(out: Inst[>..]&, a: Anchors, b: Anchors, head: f32, color: float4) {
-    let a_left = a.center.x <= b.center.x;
-    let p = at(a, if a_left { a.joint } else { mirror(a.joint) });
-    let q = at(b, if a_left { mirror(b.joint) } else { b.joint });
-    let mid = float2 { (p.x + q.x) * 0.5, min(p.y, q.y) - a.hx * 0.6 };
-    let w = a.hx * 0.19;
-    for e in [p, q] { rect(out, e, float2 { w * 1.1, w * 1.5 }, w * 0.6, float4 { 0.78, 0.6, 0.3, 0.9 }); }
-    curve(out, Shape.Tube, p, mid, q, w, head, color);
-}
 
 // The salamander at `at` (its feet), facing 1 right or -1 left; leap 0..1
 // stretches it out.

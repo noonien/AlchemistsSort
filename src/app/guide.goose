@@ -26,7 +26,7 @@ import .forces;
 let HOLD_TIME: f64 = 0.4;       // a press this long shows a flask's card
 let FOCUS_TIME: f64 = 4.5;      // a Grimoire line's flasks stay lit this long
 
-var book_entries: Entry[..18];
+var book_entries: Entry[..19];
 var book_page = 0;
 var book_pulse_at: f64 = -10.0;
 
@@ -56,7 +56,7 @@ fn tie_color(t: Tie) -> float4 {
     match t {
         Heat => float4 { 1.0, 0.55, 0.2, 1.0 },
         Light => float4 { 1.0, 0.9, 0.5, 1.0 },
-        Twin => float4 { 0.6, 0.85, 1.0, 1.0 },
+        Key => float4 { 0.95, 0.78, 0.4, 1.0 },
         Vine => float4 { 0.5, 0.85, 0.35, 1.0 },
         Salamander => float4 { 1.0, 0.4, 0.25, 1.0 },
         Catalyst => float4 { 0.85, 0.6, 1.0, 1.0 },
@@ -66,7 +66,7 @@ fn tie_color(t: Tie) -> float4 {
 
 fn tie_icon(t: Tie) -> Icon {
     match t {
-        Heat => Icon.Flame, Light => Icon.Sun, Twin => Icon.Overflow, Vine => Icon.Leaf,
+        Heat => Icon.Flame, Light => Icon.Sun, Key => Icon.Key, Vine => Icon.Leaf,
         Salamander => Icon.Hop, Catalyst => Icon.Rune, Flow => Icon.Seed,
     }
 }
@@ -187,10 +187,14 @@ fn book_page_starts() -> i64[..19] {
     starts
 }
 
-// The flask that shows an entry best: the vine's root before its tendrils.
+// The flask that shows an entry best: the vine's root before its tendrils,
+// a key before what its door hides.
 fn entry_flask(e: Entry) -> i64 {
     if e.feature == Feature.Vine {
         for i in e.flasks { if board.bottles[i].fixture == Fixture.VineRoot { return i; } }
+    }
+    if e.feature == Feature.Keys {
+        for i in e.flasks { if board.bottles[i].key_color != KeyColor.None { return i; } }
     }
     e.flasks[0]
 }
@@ -199,32 +203,18 @@ fn entry_flask(e: Entry) -> i64 {
 fn draw_entry_picture(out: Inst[>..]&, e: Entry, foot: float2) {
     let i = entry_flask(e);
     if i < 0 || i >= shown.count { return; }
-    var ids: i64[..2] = [i];
-    let tw: i64 = shown.bottles[i].twin;
-    if e.feature == Feature.Twins && tw >= 0 { ids.push(tw); }
-    var hx: f32 = if ids.len > 1 { 11.0 } else { 14.0 };
+    let b = shown.bottles[i];
     // A lantern stands over its flask, under the rule above: the flask is
     // smaller to leave it room.
-    for j in ids {
-        hx = min(hx, 84.0 / (shown.bottles[j].cap * SEGMENT + FLASK_EXTRA));
-        if shown.bottles[j].fixture == Fixture.Lantern { hx = min(hx, 76.0 / (shown.bottles[j].cap * SEGMENT + FLASK_EXTRA + 1.5)); }
-    }
+    var hx: f32 = min(14.0, 84.0 / (b.cap * SEGMENT + FLASK_EXTRA));
+    if b.fixture == Fixture.Lantern { hx = min(hx, 76.0 / (b.cap * SEGMENT + FLASK_EXTRA + 1.5)); }
     parts_layer = 1;
-    var anchors: Anchors[2];
-    for j, k in ids {
-        let half = bottle_half(hx, shown.bottles[j].cap);
-        let dx: f32 = if ids.len > 1 { (k * 2 - 1) * hx * 1.35 } else { 0.0 };
-        anchors[k] = flask_anchors(v2(foot.x + dx, foot.y - half.y), half, 0.0, 1.0);
-        anchors[k].room = (at(anchors[k], anchors[k].rim).y - (foot.y - 76.0)) / hx;
-    }
-    if ids.len > 1 { draw_tube(out, anchors[0], anchors[1], -100.0, float4_0); }
-    for j, k in ids {
-        let b = shown.bottles[j];
-        let a = anchors[k];
-        draw_stand_back(out, j, b, a, StandLook {});
-        draw_flask(out, j, b, a.center, a.half, 0.0, b.n, 0.0, 0.0, gold(1.0), true);
-        draw_stand_front(out, j, b, a, StandLook {});
-    }
+    let half = bottle_half(hx, b.cap);
+    var a = flask_anchors(v2(foot.x, foot.y - half.y), half, 0.0, 1.0);
+    a.room = (at(a, a.rim).y - (foot.y - 76.0)) / hx;
+    draw_stand_back(out, i, b, a, StandLook {});
+    draw_flask(out, i, b, a.center, a.half, 0.0, b.n, 0.0, 0.0, gold(1.0), true);
+    draw_stand_front(out, i, b, a, StandLook {});
     parts_layer = 0;
 }
 

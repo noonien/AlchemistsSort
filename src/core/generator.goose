@@ -21,7 +21,8 @@ struct GenParams {
     brazier: i64 = 0,       // next to something heat changes, where there is one
     quicksilver: bool = false,  // one color is quicksilver
     siphon: i64 = 0,
-    twins: i64 = 0,         // pairs of neighbors joined by a tube
+    doors: i64 = 0,         // 0..3, each before 2 or 3 flasks (one an extra empty), its key buried elsewhere
+    curtains: i64 = 0,      // on flasks with liquid, each opened by a color it doesn't hold
     lantern: i64 = 0,       // besides those shrouds and moonpetals bring
     shroud: i64 = 0,        // each next to a lantern
     hourglass: i64 = 0,
@@ -44,8 +45,8 @@ struct GenResult {
 }
 
 fn modifier_count(p: GenParams) -> i64 {
-    var n = p.vow + p.seal + p.rime + p.brazier + p.siphon + p.twins + p.lantern + p.shroud + p.hourglass +
-            p.moonpetal + p.catalyst;
+    var n = p.vow + p.seal + p.rime + p.brazier + p.siphon + p.doors + p.curtains + p.lantern + p.shroud +
+            p.hourglass + p.moonpetal + p.catalyst;
     for on in [p.quicksilver, p.vine, p.salamander, p.athanor, p.drop] { if on { n++; } }
     n
 }
@@ -95,6 +96,18 @@ fn split_color(board: Board&, x: i64, a: i64, b: i64) {
     }
 }
 
+// The segments a key can be buried in: under at least one layer of another
+// color, so it doesn't start free.
+fn key_depths(b: Bottle) -> i64[..MAX_CAP] {
+    var out: i64[..MAX_CAP] = [];
+    for k in b.n as i64 {
+        var x = b;
+        x.keyed = (1 << k) as u16;
+        if layers_over_key(x) > 0 { out.push(k); }
+    }
+    out
+}
+
 // Whether a neighbor of `i` is marked in `near`.
 fn next_to(board: Board, i: i64, near: const bool[:]) -> bool {
     for j in neighbors(board, i) { if near[j] { return true; } }
@@ -118,7 +131,8 @@ fn deal(p: GenParams, r: rng&) -> Board {
     // A vow flask is one of the spares, not one more: an empty vow need not
     // be used, so it is there only when the board needs it.
     let vows = clamp(p.vow, 0, p.empties);
-    let extra = vows + (if p.athanor { 1 } else { 0 });
+    let doors = clamp(p.doors, 0, MAX_DOORS);
+    let extra = vows + doors + (if p.athanor { 1 } else { 0 });
     let bottles = min(colors + p.empties - vows, MAX_BOTTLES - extra - talls);
     // What each dealt color is poured as: a dye, or quicksilver, or the
     // athanor's gold. A vine wants emerald on the board to wither it.
@@ -180,6 +194,7 @@ fn deal(p: GenParams, r: rng&) -> Board {
     }
     shuffle(segs, r);
     var at = 0;
+    var dealt: Bottle[..MAX_BOTTLES] = [];
     for i in bottles {
         var b = Bottle { .. };
         for k in heights[i] {
@@ -187,8 +202,27 @@ fn deal(p: GenParams, r: rng&) -> Board {
             at++;
         }
         b.n = heights[i] as u8;
-        push_bottle(board, b);
+        dealt.push(b);
     }
+    // Doors: each stands before one or two dealt flasks side by side and an
+    // extra empty one after them; place_grid keeps them together in a row.
+    for d in doors {
+        let g = 1 + r.rand_int(2);
+        var ok: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
+        for i in dealt.len {
+            ok[i] = i + g <= dealt.len;
+            for k in g { if i + k < dealt.len && dealt[i + k].door >= 0 { ok[i] = false; } }
+        }
+        let s = pick(r, ok[..dealt.len]);
+        if s < 0 { break; }
+        for k in g { dealt[s + k].door = d as i8; }
+        var e = Bottle { .. };
+        e.door = d as i8;
+        insert_at(dealt, s + g, e);
+        board.doors[d] = Door { color: KEY_COLORS[d] };
+        board.door_count = d + 1;
+    }
+    for b in dealt { push_bottle(board, b); }
     for c in 1..colors + 1 {
         if !tall_color[c] { continue; }
         var b = Bottle { cap: tall as u8, .. };
@@ -262,19 +296,20 @@ fn deal(p: GenParams, r: rng&) -> Board {
         let n: i64 = board.bottles[i].n;
         board.bottles[i].murk = ((1 << (n - 1)) - 1) as u16;
     }
-    // Twins: neighbors, at least one with room for an overflow to matter.
-    for k in p.twins {
+    // Each door's key, in a flask in plain play, under at least one layer of
+    // another color.
+    for d in board.door_count {
         for i in count {
-            let a = board.bottles[i];
-            let right = right_of(board, i);
-            ok[i] = right >= 0 && a.twin < 0 && board.bottles[right].twin < 0 &&
-                    (a.n < a.cap || board.bottles[right].n < board.bottles[right].cap);
+            let b = board.bottles[i];
+            ok[i] = b.door < 0 && b.cap == CAP && b.key_color == KeyColor.None && key_depths(b).len > 0;
         }
         let i = pick(r, ok[..count]);
         if i < 0 { break; }
-        let j = right_of(board, i);
-        board.bottles[i].twin = j as i8;
-        board.bottles[j].twin = i as i8;
+        var b .= board.bottles[i];
+        let depths = key_depths(b);
+        let k = depths[r.rand_int(depths.len)];
+        b.keyed = (1 << k) as u16;
+        b.key_color = board.doors[d].color;
     }
     // Shrouds, each next to a lantern on a flask with liquid to complete.
     for k in p.shroud {
@@ -331,6 +366,29 @@ fn deal(p: GenParams, r: rng&) -> Board {
         b.cover = Cover.Seal;
         b.key = key as u8;
     }
+    // Curtains, on flasks with liquid in plain play, each opened by a color
+    // neither it nor another curtain holds.
+    for k in p.curtains {
+        for i in count {
+            let b = board.bottles[i];
+            ok[i] = b.n > 0 && !covered(b) && b.cap == CAP && b.door < 0;
+        }
+        let i = pick(r, ok[..count]);
+        if i < 0 { break; }
+        var free: bool[MAX_COLORS + 1] = [false; MAX_COLORS + 1];
+        for c in 1..colors + 1 {
+            let x = liquid[c];
+            free[c] = x != QUICKSILVER || !p.athanor;
+            for j in count {
+                let b = board.bottles[j];
+                if (j == i || b.cover == Cover.Curtain) && has_color(b, x) { free[c] = false; }
+            }
+        }
+        let c = pick(r, free[..colors + 1]);
+        if c < 0 { break; }
+        board.bottles[i].cover = Cover.Curtain;
+        board.bottles[i].badge = liquid[c] as u8;
+    }
     // A creeping vine, with neighbors to grow over, on an ordinary flask (a
     // tall one takes only its color, maybe not emerald).
     if p.vine {
@@ -363,7 +421,7 @@ fn deal(p: GenParams, r: rng&) -> Board {
         if place_fixture(board, r, ok, Fixture.Catalyst) < 0 { break; }
     }
     if p.salamander {
-        for i in count { ok[i] = board.bottles[i].n > 0 && !covered(board.bottles[i]); }
+        for i in count { ok[i] = board.bottles[i].n > 0 && !covered(board.bottles[i]) && board.bottles[i].door < 0; }
         board.salamander = pick(r, ok[..count]);
     }
     settle(board);

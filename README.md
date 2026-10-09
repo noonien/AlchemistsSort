@@ -11,7 +11,7 @@ from this repo's Nix flake.
 nix run                                   # play
 nix run . -- --level 26                   # jump to a campaign level
 nix run . -- --seed 4242 --like 30        # the board brewed from a seed
-nix run . -- --hand 8                     # built-in hand-made level 8 of 0-24 (src/core/levels.goose)
+nix run . -- --hand 8                     # built-in hand-made level 8 of 0-25 (src/core/levels.goose)
 nix run . -- --autoplay                   # watch the hint solver play
 nix run . -- --size 900 1600              # a bigger window (it remembers the size you leave it)
 nix run . -- --export-music out           # write each room's music loop to out/*.wav
@@ -91,7 +91,11 @@ stand in (three on Hard levels). A tall flask is for one color, tinted on its
 glass: it comes with some of that color, takes only that color, and nothing
 ever comes out of it. A Vow Flask takes the first color poured in, then
 only that one; it doesn't have to be used, and left empty it doesn't stand
-in the way of the win. The rules of every modifier, and how they meet
+in the way of the win. A key buried in a layer comes free when that layer
+reaches the top of its flask, and opens the door of its metal (brass,
+silver or copper): the two or three flasks behind a door are out of play
+until then. A curtain hides a flask until a flask of the color on its badge
+is completed. The rules of every modifier, and how they meet
 through heat, light, flow, flip, growth and transmutation, are in
 [docs/revamp.md](docs/revamp.md).
 
@@ -99,7 +103,7 @@ through heat, light, flow, flip, growth and transmutation, are in
 |---|---|---|
 | The Apothecary | 1–15 | Smoke (3), Seal (6), Tall Flask (8), Vow Flask (11) |
 | The Frost Cellar | 16–30 | Rime (18), Brazier (21), Quicksilver (26) |
-| The Glassworks | 31–45 | Siphon (33), Twin Flasks (36) |
+| The Glassworks | 31–45 | Siphon (33), Keys and Doors (36), Curtain (41) |
 | The Observatory | 46–60 | Lantern (48), Shroud (51), Hourglass (56) |
 | The Greenhouse | 61–75 | Creeping Vine (63), Salamander (66), Moonpetal (71) |
 | The Athanor | 76–90 | Athanor (78), Philosopher's Drop (81), Catalyst (86) |
@@ -114,7 +118,8 @@ and a progress reset. Progress is saved in
 
 Every shipped level is built in: the tutorials and examples are written in
 Goose in `src/core/levels.goose`, in a compact form close to how a level
-reads (`flask("GGBR").under_murk(3)`, `flask("BRGG").rime(4)`, ...); the
+reads (`flask("GGBR").under_murk(3)`, `flask("BRGG").rime(4)`,
+`flask("RGBY").key_at(1, KeyColor.Brass)`, ...); the
 comment at the top of that file describes it. Generated levels come from
 `src/core/campaign.goose` (what each level asks for) and
 `src/core/generator.goose`, which deals a random board, adds the modifiers

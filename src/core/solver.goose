@@ -1,6 +1,6 @@
 // A solver for any board, every modifier included: weighted A* over positions,
-// with a visited set and a node budget. It sees through murk, seals
-// and shrouds -- it is the level designer's check that a board
+// with a visited set and a node budget. It sees through murk, seals,
+// shrouds, curtains and doors -- it is the level designer's check that a board
 // can be won, and the hint tool's source of a good next move.
 
 import std;
@@ -55,8 +55,9 @@ struct Search {
 }
 
 // How far a position looks from solved: a run boundary costs one (the Drop
-// fits anywhere and makes none), as does each murky segment, each cover
-// still standing and quicksilver an athanor has yet to turn.
+// fits anywhere and makes none), as does each murky segment, each key still
+// buried, each door still shut and quicksilver an athanor has yet to turn;
+// each cover still standing (a curtain too) costs two.
 fn heuristic(board: Board) -> i64 {
     var h = 0;
     let athanor = has_body(board, Body.Athanor);
@@ -76,14 +77,17 @@ fn heuristic(board: Board) -> i64 {
         }
         for k in b.n as i64 { if murky(b, k) { h += 1; } }
         if covered(b) { h += 2; }
+        if b.key_color != KeyColor.None { h += 1; }
     }
+    for d in board.door_count { if !board.doors[d].open { h += 1; } }
     max(0, h - board.colors)
 }
 
 // An empty bottle anything can be poured into with nothing else happening;
-// on a board where places don't matter, those of one height are alike.
+// on a board where places don't matter, those of one height are alike. One
+// behind a shut door is out of play, so it never stands for the others.
 fn plain_empty(b: Bottle) -> bool {
-    b.n == 0 && b.body == Body.Plain && !covered(b) && b.fixture == Fixture.None && b.twin < 0 && !b.done
+    b.n == 0 && b.body == Body.Plain && !covered(b) && b.fixture == Fixture.None && !b.behind && !b.done
 }
 
 // Something counts pours made anywhere, so a pour that only moves liquid
@@ -103,7 +107,7 @@ fn ticking(board: Board) -> bool {
 // that the board cannot be won.
 fn useful_moves(board: Board, out: Move[>..]&) {
     var first_empty: i64[MAX_CAP + 1] = [-1; MAX_CAP + 1];     // by height
-    // Where neighbors matter (heat, light, vines, twins, the salamander), no
+    // Where neighbors matter (heat, light, vines, the salamander), no
     // two empty flasks are alike; where pours are counted, no pour is idle.
     let place = positional(board);
     let live = place || ticking(board);
@@ -116,8 +120,10 @@ fn useful_moves(board: Board, out: Move[>..]&) {
         if !can_pour_from(src) { continue; }
         // Moving a whole bottle to an empty one as tall only swaps the two,
         // unless a pour has effects of its own or the source is more than a
-        // plain flask (a vow keeps its color, a siphon is a siphon...).
-        let whole = !live && src.murk == 0 && is_uniform(src) && src.body == Body.Plain;
+        // plain flask (a vow keeps its color, a siphon is a siphon, a key
+        // goes nowhere...).
+        let whole = !live && src.murk == 0 && is_uniform(src) && src.body == Body.Plain &&
+                    src.key_color == KeyColor.None;
         for j in board.count {
             if i == j || !can_pour(board, i, j) { continue; }
             let dst = board.bottles[j];

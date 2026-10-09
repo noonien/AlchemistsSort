@@ -14,27 +14,27 @@ import .levels;
 enum Feature {
     Murk, Seal, Tall, Vow,              // The Apothecary
     Rime, Brazier, Quicksilver,         // The Frost Cellar
-    Siphon, Twins,                      // The Glassworks
+    Siphon, Keys, Curtain,              // The Glassworks
     Lantern, Shroud, Hourglass,         // The Observatory
     Vine, Salamander, Moonpetal,        // The Greenhouse
     Athanor, Drop, Catalyst,            // The Athanor
 }
 
-let ALL_FEATURES: const Feature[18] = [
+let ALL_FEATURES: const Feature[19] = [
     Feature.Murk, Feature.Seal, Feature.Tall, Feature.Vow, Feature.Rime, Feature.Brazier, Feature.Quicksilver,
-    Feature.Siphon, Feature.Twins, Feature.Lantern, Feature.Shroud, Feature.Hourglass, Feature.Vine,
-    Feature.Salamander, Feature.Moonpetal, Feature.Athanor, Feature.Drop, Feature.Catalyst,
+    Feature.Siphon, Feature.Keys, Feature.Curtain, Feature.Lantern, Feature.Shroud, Feature.Hourglass,
+    Feature.Vine, Feature.Salamander, Feature.Moonpetal, Feature.Athanor, Feature.Drop, Feature.Catalyst,
 ];
 
 // The level that teaches each one, in ALL_FEATURES order. None is a
 // multiple of 5, which are the Hard levels and the finales.
-let TUTORIAL_LEVELS: const i64[18] = [3, 6, 8, 11, 18, 21, 26, 33, 36, 48, 51, 56, 63, 66, 71, 78, 81, 86];
+let TUTORIAL_LEVELS: const i64[19] = [3, 6, 8, 11, 18, 21, 26, 33, 36, 41, 48, 51, 56, 63, 66, 71, 78, 81, 86];
 
 fn feature_index(f: Feature) -> i64 {
     match f {
         Murk => 0, Seal => 1, Tall => 2, Vow => 3, Rime => 4, Brazier => 5, Quicksilver => 6, Siphon => 7,
-        Twins => 8, Lantern => 9, Shroud => 10, Hourglass => 11, Vine => 12, Salamander => 13, Moonpetal => 14,
-        Athanor => 15, Drop => 16, Catalyst => 17,
+        Keys => 8, Curtain => 9, Lantern => 10, Shroud => 11, Hourglass => 12, Vine => 13, Salamander => 14,
+        Moonpetal => 15, Athanor => 16, Drop => 17, Catalyst => 18,
     }
 }
 
@@ -43,7 +43,8 @@ fn tutorial_level(f: Feature) -> i64 { TUTORIAL_LEVELS[feature_index(f)] }
 fn feature_name(f: Feature) -> const u8[:] {
     match f {
         Murk => "Smoke", Seal => "Seal", Tall => "Tall Flask", Vow => "Vow Flask", Rime => "Rime",
-        Brazier => "Brazier", Quicksilver => "Quicksilver", Siphon => "Siphon", Twins => "Twin Flasks",
+        Brazier => "Brazier", Quicksilver => "Quicksilver", Siphon => "Siphon", Keys => "Keys and Doors",
+        Curtain => "Curtain",
         Lantern => "Lantern", Shroud => "Shroud", Hourglass => "Hourglass", Vine => "Creeping Vine",
         Salamander => "Salamander", Moonpetal => "Moonpetal", Athanor => "Athanor",
         Drop => "Philosopher's Drop", Catalyst => "Catalyst",
@@ -67,7 +68,8 @@ fn feature_on(board: Board, f: Feature) -> bool {
             Brazier => b.fixture == Fixture.Brazier,
             Quicksilver, Drop => liquid,
             Siphon => b.body == Body.Siphon,
-            Twins => b.twin >= 0,
+            Keys => b.key_color != KeyColor.None || b.behind,
+            Curtain => b.cover == Cover.Curtain,
             Lantern => b.fixture == Fixture.Lantern,
             Shroud => b.cover == Cover.Shroud,
             Hourglass => b.body == Body.Hourglass,
@@ -174,16 +176,20 @@ fn newest_feature(level: i64) -> Feature, bool {
 
 // Whether an earlier modifier `old` meets `new` through a force: heat on ice,
 // seals and vines; light on murk and shrouds; flow with quicksilver and tall
-// flasks; the flip with murk and quicksilver; the athanor with quicksilver;
-// the catalyst with what it sets off; the Drop with what it fits.
+// flasks; a key with what hides or shifts its layer; a curtain with what
+// completes a color; the flip with murk, quicksilver and keys; the athanor
+// with quicksilver; the catalyst with what it sets off; the Drop with what
+// it fits.
 fn meets(new: Feature, old: Feature) -> bool {
     match new {
         Brazier, Salamander => old == Feature.Rime || old == Feature.Seal || old == Feature.Vine,
         Rime => old == Feature.Seal,
         Lantern, Moonpetal => old == Feature.Murk || old == Feature.Shroud || old == Feature.Lantern,
         Shroud => old == Feature.Lantern,
-        Quicksilver, Siphon, Twins => old == Feature.Quicksilver || old == Feature.Tall,
-        Hourglass => old == Feature.Murk || old == Feature.Quicksilver,
+        Quicksilver, Siphon => old == Feature.Quicksilver || old == Feature.Tall,
+        Keys => old == Feature.Murk || old == Feature.Quicksilver,
+        Curtain => old == Feature.Tall || old == Feature.Vow,
+        Hourglass => old == Feature.Murk || old == Feature.Quicksilver || old == Feature.Keys,
         Vine => old == Feature.Brazier || old == Feature.Rime,
         Athanor => old == Feature.Quicksilver || old == Feature.Siphon,
         Catalyst => old == Feature.Brazier || old == Feature.Hourglass || old == Feature.Lantern,
@@ -209,7 +215,8 @@ fn ask_for(p: GenParams&, f: Feature, hard: bool, r: rng&) {
         Brazier => { p.brazier = 1; },
         Quicksilver => { p.quicksilver = true; },
         Siphon => { p.siphon = 1; },
-        Twins => { p.twins = 1; },
+        Keys => { p.doors = if hard { 1 + r.rand_int(2) } else { 1 }; },
+        Curtain => { p.curtains = 1; },
         Lantern => { p.lantern = 1; },
         Shroud => { p.shroud = 1; },
         Hourglass => {
@@ -229,7 +236,7 @@ fn ask_for(p: GenParams&, f: Feature, hard: bool, r: rng&) {
 }
 
 // Picks one of `pool`, each as likely as its weight, and takes it out.
-fn draw(pool: Feature[..18]&, weight: i64[..18]&, r: rng&) -> Feature, bool {
+fn draw(pool: Feature[..19]&, weight: i64[..19]&, r: rng&) -> Feature, bool {
     var total = 0;
     for w in weight { total += w; }
     if total == 0 { return Feature.Murk, false; }
@@ -284,8 +291,8 @@ fn plan_level(level: i64, difficulty: Difficulty, seed: u64) -> Feature[..8], Ge
 
     if great {
         // The Great Work: three or four modifiers from everything.
-        var pool: Feature[..18] = [];
-        var weight: i64[..18] = [];
+        var pool: Feature[..19] = [];
+        var weight: i64[..19] = [];
         for f in ALL_FEATURES {
             if f == Feature.Murk || f == Feature.Tall { continue; }
             pool.push(f);
@@ -314,8 +321,8 @@ fn plan_level(level: i64, difficulty: Difficulty, seed: u64) -> Feature[..8], Ge
         var earlier = if hard || warm_up { 2 } else { 1 };
         if tall && !warm_up { earlier--; }
         for m in mods { if chapter_of(tutorial_level(m)) < ch && m != Feature.Tall { earlier--; } }
-        var pool: Feature[..18] = [];
-        var weight: i64[..18] = [];
+        var pool: Feature[..19] = [];
+        var weight: i64[..19] = [];
         for f in ALL_FEATURES {
             let fc = chapter_of(tutorial_level(f));
             if fc >= ch || f == Feature.Murk || f == Feature.Tall || contains(mods, f) { continue; }

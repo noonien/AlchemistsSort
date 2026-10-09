@@ -815,6 +815,8 @@ fn draw_flask_drained(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: flo
     if !shrouded && fill > 0.0 {
         let murk: f32 = if sealed { (1 << b.cap) - 1 } else { b.murk };
         out.push(liquid_inst(i, b, pos, half, angle, fill, murk, wave, drain, false));
+        // A key shows through the liquid, but not through smoke.
+        if overlays && angle == 0.0 && drain == 0.0 { draw_flask_key(out, b, a); }
     }
     flask_glass(out, i, b, pos, half, angle, 1.0, glow_amount, glow_color);
     draw_body(out, i, b, a, open, save.color_safe);
@@ -860,21 +862,13 @@ fn draw_board(out: Inst[>..]&) {
     for a in pours { if a.active { moving[a.from] = true; } }
     var turning: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
     for i in shown.count { turning[i] = flip_pose(i).on; }
-    fn place(i: i64) -> Anchors { if moving[i] { stand_anchors(i) } else { slot_anchors(i) } }
     // Each flask's soft shadow on the table.
     for i in shown.count {
+        if shown.bottles[i].behind { continue; }
         let a = stand_anchors(i);
         let foot = at(a, a.base);
         let lift = if i == selected || moving[i] { 0.6 } else { 1.0 };
         glow(out, foot + v2(a.hx * 0.18, -a.hx * 0.05), v2(a.hx * 1.3, a.hx * 0.5), 0.9, float4 { 0.0, 0.0, 0.0, 0.42 * lift });
-    }
-    // Twins' tubes, behind the flasks; liquid runs through on an overflow.
-    for i in shown.count {
-        let tw: i64 = shown.bottles[i].twin;
-        if tw <= i || tw >= shown.count { continue; }
-        let head, c, src = tube_flow(i, tw);
-        if src == tw { draw_tube(out, place(tw), place(i), head, c); }
-        else { draw_tube(out, place(i), place(tw), head, c); }
     }
     // A lit lantern's light on its flask and neighbors.
     for i in shown.count {
@@ -898,16 +892,30 @@ fn draw_board(out: Inst[>..]&) {
             glow(out, a.center, a.half * v2(1.25, 1.05), 0.8, float4 { 1.0, 0.72, 0.36, 0.26 + f });
         }
     }
+    // Doors still shut, before the flasks they shut away: behind the row in
+    // front of them.
+    for d in shown.door_count {
+        if shown.doors[d].open { continue; }
+        let lo, hi = door_box(d);
+        if lo.x < hi.x { draw_door(out, lo, hi, shown.doors[d].color, 0.0); }
+    }
     // Back to front: what stands behind each flask, and the flask. What
     // stands in front of them goes over them all, since a row's foot is
     // behind the rims of the row in front. Then what moves.
     for i in drawing {
-        if i >= shown.count { continue; }
+        if i >= shown.count || shown.bottles[i].behind { continue; }
         draw_stand_back(out, i, shown.bottles[i], stand_anchors(i), stand_look(i));
         if !moving[i] && !turning[i] { draw_resting(out, i); }
     }
     for i in drawing {
-        if i < shown.count { draw_stand_front(out, i, shown.bottles[i], stand_anchors(i), stand_look(i)); }
+        if i < shown.count && !shown.bottles[i].behind { draw_stand_front(out, i, shown.bottles[i], stand_anchors(i), stand_look(i)); }
+    }
+    // Doors lifting away as they open, over the flasks they let out.
+    for d in shown.door_count {
+        let up = door_opening(d);
+        if up < 0.0 { continue; }
+        let lo, hi = door_box(d);
+        if lo.x < hi.x { draw_door(out, lo, hi, shown.doors[d].color, up); }
     }
     for i in drawing {
         if i < shown.count && turning[i] { draw_turning(motion, i, flip_pose(i)); }
@@ -938,7 +946,6 @@ fn draw_resting(out: Inst[>..]&, i: i64) {
             wave = 1.0 - p * 0.7;
         }
     }
-    fill = overflow_fill(i, fill);
     let pos = rest_pos(i);
     var g: f32 = 0.0;
     var gc = gold(1.0);
@@ -1159,21 +1166,22 @@ fn feature_rank(bd: Board, i: i64) -> i64 {
     up(b.fixture == Fixture.Brazier, 6);
     up(has_q, 7);
     up(b.body == Body.Siphon, 8);
-    up(b.twin >= 0, 9);
-    up(b.fixture == Fixture.Lantern, 10);
-    up(b.cover == Cover.Shroud, 11);
-    up(b.body == Body.Hourglass, 12);
-    up(b.fixture == Fixture.VineRoot || b.cover == Cover.Vine, 13);
-    up(i == bd.salamander, 14);
-    up(b.body == Body.Moonpetal, 15);
-    up(b.body == Body.Athanor, 16);
-    up(has_drop, 17);
-    up(b.fixture == Fixture.Catalyst, 18);
+    up(b.key_color != KeyColor.None, 9);
+    up(b.cover == Cover.Curtain, 10);
+    up(b.fixture == Fixture.Lantern, 11);
+    up(b.cover == Cover.Shroud, 12);
+    up(b.body == Body.Hourglass, 13);
+    up(b.fixture == Fixture.VineRoot || b.cover == Cover.Vine, 14);
+    up(i == bd.salamander, 15);
+    up(b.body == Body.Moonpetal, 16);
+    up(b.body == Body.Athanor, 17);
+    up(has_drop, 18);
+    up(b.fixture == Fixture.Catalyst, 19);
     r
 }
 
-// The level's newest feature, drawn on its flask (and its twin) standing
-// on the intro panel's top edge at `foot`.
+// The level's newest feature, drawn on its flask standing on the intro
+// panel's top edge at `foot`.
 fn draw_intro_picture(out: Inst[>..]&, foot: float2) {
     var best = -1;
     var rank = 0;
@@ -1183,32 +1191,15 @@ fn draw_intro_picture(out: Inst[>..]&, foot: float2) {
     }
     if best < 0 { return; }
     let b = shown.bottles[best];
-    let twin: i64 = if rank == 9 { b.twin } else { -1 };
-    let ids: i64[2] = [best, twin];
     // A tall flask smaller, so it fits over the panel.
-    var hx: f32 = 20.0;
-    for k in 2 { if ids[k] >= 0 { hx = min(hx, 120.0 / (shown.bottles[ids[k]].cap * SEGMENT + FLASK_EXTRA)); } }
+    let hx: f32 = min(20.0, 120.0 / (b.cap * SEGMENT + FLASK_EXTRA));
     glow(out, foot - v2(0.0, 50.0), v2(110.0, 90.0), 1.0, float4 { 1.0, 0.8, 0.45, 0.18 });
     parts_layer = 1;
-    var anchors: Anchors[2];
-    for k in 2 {
-        let i = ids[k];
-        if i < 0 { continue; }
-        let half = bottle_half(hx, shown.bottles[i].cap);
-        let dx: f32 = if twin >= 0 { (k * 2 - 1) * hx * 1.7 } else { 0.0 };
-        let x = foot.x + dx;
-        anchors[k] = flask_anchors(v2(x, foot.y - half.y), half, 0.0, 1.0);
-    }
-    if twin >= 0 { draw_tube(out, anchors[0], anchors[1], -100.0, float4_0); }
-    for k in 2 {
-        let i = ids[k];
-        if i < 0 { continue; }
-        let bi = shown.bottles[i];
-        let a = anchors[k];
-        draw_stand_back(out, i, bi, a, StandLook {});
-        draw_flask(out, i, bi, a.center, a.half, 0.0, bi.n, 0.0, 0.0, gold(1.0), true);
-        draw_stand_front(out, i, bi, a, StandLook {});
-    }
+    let half = bottle_half(hx, b.cap);
+    let a = flask_anchors(v2(foot.x, foot.y - half.y), half, 0.0, 1.0);
+    draw_stand_back(out, best, b, a, StandLook {});
+    draw_flask(out, best, b, a.center, a.half, 0.0, b.n, 0.0, 0.0, gold(1.0), true);
+    draw_stand_front(out, best, b, a, StandLook {});
     parts_layer = 0;
 }
 
