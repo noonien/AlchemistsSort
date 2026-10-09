@@ -35,6 +35,7 @@ import app.menus;
 import app.parts;
 import app.forces;
 import app.guide;
+import app.flights;
 import core.explain;
 
 // The canvas everything is laid out on, scaled to fit the window.
@@ -59,26 +60,23 @@ let IDLE_FRAME_MS: f64 = 33.0;
 // The most flasks the layout keeps readable.
 let MAX_ON_SCREEN = 22;
 
-// Timing of a pour, in seconds.
-let T_LIFT: f64 = 0.2;
-let T_POUR: f64 = 0.5;
-let T_BACK: f64 = 0.22;
-
 struct Counters { undo: i64 = 0, restart: i64 = 0, shuffle: i64 = 0, extra: i64 = 0, hint: i64 = 0 }
 
+// A pour being seen: its flight (app/flights.goose), and the liquid in the
+// two flasks before and after it. Only the liquid is taken from these; the
+// rest of each flask is as `shown`.
 struct PourAnim {
-    active: bool = false,
-    from: i64 = 0,
-    to: i64 = 0,
-    t0: f64 = 0.0,
+    f: Flight,
     color: i64 = 0,
-    amount: i64 = 0,
     src_before: Bottle,
     src_after: Bottle,
     dst_before: Bottle,
     dst_after: Bottle,
-    popped: bool = false,
-    effects_done: bool = false,
+    start_pos: float2,      // where it lifts off from: its place, or where its last flight left it
+    start_angle: f32 = 0.0,
+    moved: bool = false,    // its liquid has moved on `shown`
+    reached: bool = false,  // the stream has reached the target
+    landed: bool = false,   // the last of it has landed
 }
 
 struct Particle {
@@ -93,8 +91,9 @@ struct Particle {
 
 struct Slot { pos: float2, half: float2 }
 
-// A click scripted for testing; a hold is not let go.
-struct Scripted { pos: float2, hold: bool = false }
+// A click scripted for testing; a hold is not let go. `frame` is the frame
+// it comes on, or -1 for its turn in the queue (see --click-every).
+struct Scripted { pos: float2, hold: bool = false, frame: i64 = -1 }
 
 // --- state ------------------------------------------------------------------------
 
@@ -124,7 +123,7 @@ var history: Board[>..];
 var used: Counters;
 var selected = -1;
 var taps: i64[>..<];
-var pours: PourAnim[8];
+var pours: PourAnim[>..] = [];     // in the order poured
 var particles: Particle[400];
 var next_particle = 0;
 var shake_until: f64[MAX_BOTTLES];
@@ -144,6 +143,7 @@ var pending_load = false;
 var seed_text: u8[..20];
 var autoplay = false;
 var autoplay_next: f64 = 0.0;
+var autoplay_gap: f64 = -1.0;  // (testing) seconds between autoplay's moves, not waiting for them to be seen
 var rand = rng { 12345 };
 
 // --- background work ------------------------------------------------------------------
@@ -349,11 +349,18 @@ fn lantern_room(i: i64) -> f32 {
     (rim - limit) / hx
 }
 
-// Where a bottle stands: its slot, raised when selected, shaken when refused.
+// Whether a flask is held up: picked to pour, or waiting to fly; not while
+// liquid is still to land in it.
+fn raised(i: i64) -> bool {
+    if i != selected && !waiting(flights(), i, now) { return false; }
+    !awaited(flights(), i, now)
+}
+
+// Where a bottle stands: its slot, raised when held up, shaken when refused.
 fn rest_pos(i: i64) -> float2 {
     var p = slots[i].pos;
     p.y += drop_offset(i);
-    if i == selected { p.y -= slots[i].half.x * 1.2; }
+    if raised(i) { p.y -= slots[i].half.x * 1.2; }
     if now < shake_until[i] {
         let k = (shake_until[i] - now) / 0.35;
         p.x += (sin(now * 60.0) * 5.0 * k) as f32;
@@ -366,7 +373,7 @@ fn rest_pos(i: i64) -> float2 {
 fn reset_play_state() {
     history.clear();
     taps.clear();
-    for &a in pours { a.active = false; }
+    pours.clear();
     for i in MAX_BOTTLES {
         shake_until[i] = 0.0;
         complete_at[i] = -10.0;
@@ -520,18 +527,28 @@ fn do_pending_load() {
 
 // --- the game's actions ------------------------------------------------------------
 
-fn busy(i: i64) -> bool {
-    for a in pours { if a.active && (a.from == i || a.to == i) { return true; } }
-    false
+fn any_pouring() -> bool { pours.len > 0 }
+
+// The flights of the pours being seen, in the order poured.
+fn flights() -> Flight[>..] {
+    var fs: Flight[>..] = [];
+    for a in pours { fs.push(a.f); }
+    fs
 }
 
-fn any_pouring() -> bool {
-    for a in pours { if a.active { return true; } }
-    false
+// When flask i is in its place with nothing more to land in it, as far as
+// the flights planned so far go (see schedule_pour).
+fn flask_free_at(i: i64) -> f64 {
+    var at = 0.0;
+    for a in pours {
+        if a.f.from == i { at = max(at, flight_end(a.f)); }
+        if a.f.to == i { at = max(at, flight_land(a.f)); }
+    }
+    at
 }
 
 fn finish_animations() {
-    for &a in pours { a.active = false; }
+    pours.clear();
     taps.clear();
     settle_beats();
 }
@@ -543,33 +560,79 @@ fn refuse(i: i64, why: const u8[:]) {
     if why.len > 0 { say(why, 2.2); }
 }
 
+// Pours at once on the board in play; the flight that shows it plays when
+// its flasks are free (app/flights.goose), what it set off once its liquid
+// lands (forces.goose).
 fn start_pour(from: i64, to: i64) {
-    settle_beats();
     let before = board;
     var after = board;
     let r = pour(after, from, to);
     if !r.ok { return; }
     history.push(before);
     board = after;
-    // What the pour set off plays once the liquid lands (forces.goose);
-    // until then the flasks show the liquid moved and nothing more.
-    schedule_pour(before, from, to, r, now);
-    let mid = shown;
-    for &a in pours {
-        if a.active { continue; }
-        a = PourAnim { active: true, from: from, to: to, t0: now, color: r.color, amount: r.amount,
-                       src_before: before.bottles[from], src_after: mid.bottles[from],
-                       dst_before: before.bottles[to], dst_after: mid.bottles[to],
-                       popped: r.popped, effects_done: false };
-        break;
+    let mid = liquid_moved(before, from, to, r);
+    var a = PourAnim { f: Flight { from: from, to: to, amount: r.amount, shares: before.bottles[from].body != Body.Siphon },
+                       color: r.color, src_before: before.bottles[from], src_after: mid.bottles[from],
+                       dst_before: before.bottles[to], dst_after: mid.bottles[to], start_pos: slots[from].pos };
+    let natural: f64 = if slots[from].pos.x <= slots[to].pos.x { 1.0 } else { -1.0 };
+    // The far side of the target, if the flask tipped there stays in view.
+    let reach = slots[to].pos.x + natural * (slots[to].half.x * 0.1 + slots[from].half.y * 1.9);
+    let crosses = reach > 8.0 && reach < VW - 8.0;
+    let plan = plan_flight(flights()[..], from, to, natural, crosses, a.f.shares, now, max(settled_at(from), settled_at(to)));
+    a.f.t0 = plan.t0;
+    a.f.side = plan.side;
+    if plan.after >= 0 {
+        // Straight on from where its last flight has got to.
+        var last .= pours[plan.after];
+        last.f.cut = plan.t0;
+        let p = pour_pose(last, plan.t0 - last.f.t0);
+        a.start_pos = p.pos;
+        a.start_angle = p.angle;
+    } else {
+        // From its place, picked up unless liquid lands in it first.
+        if !awaited(flights()[..], from, now) { a.start_pos.y -= slots[from].half.x * 1.2; }
     }
-    // The pour sounds higher as the flask it fills gets fuller.
-    let full = after.bottles[to].n as f64 / max(1, after.bottles[to].cap as i64);
-    play_pitched(Sfx.Pour, 0.85 + 0.45 * full, 0.8);
-    ripple_x[to] = if slots[from].pos.x <= slots[to].pos.x { 0.2 } else { -0.2 };
+    schedule_pour(before, from, to, r, a.f.t0);
+    pours.push(a);
     hint_from = -1;
     lost_checked = false;
     restart_search();
+}
+
+// A flight lifts off: its liquid moves on the board drawn (the target
+// shows it rising as it lands, see shown_fill), and it sounds, higher as
+// the flask it fills gets fuller, softer with others pouring.
+fn lift_off(a: PourAnim&) {
+    a.moved = true;
+    fn take(i: i64, l: Bottle) {
+        var s .= shown.bottles[i];
+        s.seg = l.seg;
+        s.n = l.n;
+        s.murk = l.murk;
+        s.keyed = l.keyed;
+    }
+    take(a.f.from, a.src_after);
+    take(a.f.to, a.dst_after);
+    var others = 0;
+    for o in pours { if o.moved && now < flight_land(o.f) { others++; } }
+    let full = a.dst_after.n as f64 / max(1, a.dst_after.cap as i64);
+    play_pitched(Sfx.Pour, 0.85 + 0.45 * full, 0.8 / sqrt(max(1, others) as f64));
+    ripple_x[a.f.to] = (0.2 * a.f.side) as f32;
+}
+
+// A flask as shown, holding the liquid of `l`.
+fn holding(i: i64, l: Bottle) -> Bottle {
+    var b = shown.bottles[i];
+    b.seg = l.seg;
+    b.n = l.n;
+    b.murk = l.murk;
+    b.keyed = l.keyed;
+    b
+}
+
+// How full flask i shows: what it holds, less what is still on its way in.
+fn shown_fill(i: i64) -> f32 {
+    max(0.0, shown.bottles[i].n - on_the_way(flights()[..], i, now)) as f32
 }
 
 fn tap_bottle(i: i64) {
@@ -608,10 +671,10 @@ fn tap_bottle(i: i64) {
     refuse(i, refusal(board, from, i));
 }
 
+// Taps act at once, on the board in play, whatever is still being seen.
 fn process_taps() {
     while taps.len > 0 {
         let i = taps[0];
-        if busy(i) || (selected >= 0 && busy(selected)) { break; }
         remove_at(taps, 0);
         tap_bottle(i);
     }
@@ -764,17 +827,27 @@ fn step_jobs() {
 }
 
 fn update_pours() {
-    for &a in pours {
-        if !a.active { continue; }
-        let t = now - a.t0;
-        if !a.effects_done && t >= T_LIFT {
-            a.effects_done = true;
-            slosh(a.to, ripple_x[a.to] * 0.5);
+    var k = 0;
+    while k < pours.len {
+        var a .= pours[k];
+        if now < a.f.t0 { k++; continue; }
+        if !a.moved { lift_off(a); }
+        let t = now - a.f.t0;
+        if !a.reached && t >= T_LIFT {
+            a.reached = true;
+            slosh(a.f.to, ripple_x[a.f.to] * 0.5);
         }
-        if t >= T_LIFT + T_POUR + T_BACK {
-            a.active = false;
-            slosh(a.from, if slots[a.from].pos.x <= slots[a.to].pos.x { -0.22 } else { 0.22 });
+        if !a.landed && t >= T_LIFT + T_POUR {
+            a.landed = true;
+            pour_landed();
         }
+        if now >= flight_end(a.f) {
+            // Back in its place, unless it went straight on to its next pour.
+            if a.f.cut < 0.0 { slosh(a.f.from, (-0.22 * a.f.side) as f32); }
+            remove_at(pours, k);
+            continue;
+        }
+        k++;
     }
 }
 
@@ -783,6 +856,12 @@ fn update_play(dt: f32) {
     process_taps();
     update_pours();
     update_beats();
+    if autoplay_gap >= 0.0 && overlay == Overlay.None && won_at < 0.0 && now > autoplay_next && taps.len == 0 &&
+       board_search.done {
+        let m, ok = search_first_move(board_search);
+        if ok { taps.push(m.from); taps.push(m.to); }
+        autoplay_next = now + autoplay_gap;
+    }
     if any_pouring() || beats_running() { return; }
     if won_at < 0.0 && is_won(board) {
         won_at = now;
@@ -810,7 +889,7 @@ fn update_play(dt: f32) {
             play(Sfx.Lose);
         }
     }
-    if autoplay && overlay == Overlay.None && won_at < 0.0 && now > autoplay_next && taps.len == 0 &&
+    if autoplay && autoplay_gap < 0.0 && overlay == Overlay.None && won_at < 0.0 && now > autoplay_next && taps.len == 0 &&
        board_search.done {
         let m, ok = search_first_move(board_search);
         if ok {
@@ -942,7 +1021,7 @@ fn in_lantern_light(i: i64) -> bool {
 // showing it through.
 fn draw_board(out: Inst[>..]&) {
     var moving: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
-    for a in pours { if a.active { moving[a.from] = true; } }
+    for a in pours { if now >= a.f.t0 { moving[a.f.from] = true; } }
     var turning: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
     for i in shown.count { turning[i] = flip_pose(i).on; }
     // The ledges they stand on (scene.goose), and each flask's soft shadow on its own.
@@ -951,7 +1030,7 @@ fn draw_board(out: Inst[>..]&) {
         if shown.bottles[i].behind { continue; }
         let a = stand_anchors(i);
         let foot = at(a, a.base);
-        let lift = if i == selected || moving[i] { 0.6 } else { 1.0 };
+        let lift = if raised(i) || moving[i] { 0.6 } else { 1.0 };
         glow(out, foot + v2(a.hx * 0.18, -a.hx * 0.05), v2(a.hx * 1.3, a.hx * 0.5), 0.9, float4 { 0.0, 0.0, 0.0, 0.42 * lift });
     }
     // A lit lantern's light on its flask and neighbors.
@@ -1004,36 +1083,25 @@ fn draw_board(out: Inst[>..]&) {
     for i in drawing {
         if i < shown.count && turning[i] { draw_turning(motion, i, flip_pose(i)); }
     }
-    for a in pours {
-        if !a.active { continue; }
-        draw_pouring(motion, a);
-    }
+    for a in pours { draw_pouring(motion, a); }
     draw_beats(motion);
 }
 
 // A flask at rest (or lifted, or being poured into).
 fn draw_resting(out: Inst[>..]&, i: i64) {
-    var b = shown.bottles[i];
-    var fill: f32 = b.n;
+    let b = shown.bottles[i];
+    // A bottle being poured into shows its new contents rising, as fast as
+    // the streams into it bring them.
+    let fill = shown_fill(i);
     var wave: f32 = 0.0;
-    // A bottle being poured into shows its new contents rising.
     for a in pours {
-        if !a.active || a.to != i { continue; }
-        let t = now - a.t0;
-        if t < T_LIFT {
-            b = a.dst_before;
-            fill = b.n;
-        } else {
-            let p = ease((t - T_LIFT) / T_POUR);
-            fill = a.dst_before.n + (b.n - a.dst_before.n) * p;
-            if covered(a.dst_before) && a.amount == 0 { fill = b.n; }
-            wave = 1.0 - p * 0.7;
-        }
+        if a.f.to == i && now >= a.f.t0 + T_LIFT { wave = max(wave, 1.0 - landed_k(a.f, now) as f32 * 0.7); }
     }
     let pos = rest_pos(i);
     var g: f32 = 0.0;
     var gc = gold(1.0);
     if i == selected { g = 0.9; }
+    else if raised(i) { g = 0.45; }
     if (i == hint_from || i == hint_to) && now < hint_until {
         g = 0.6 + 0.4 * sin(now * 8.0) as f32;
         gc = if i == hint_from { float4 { 0.5, 1.0, 0.7, 1.0 } } else { float4 { 0.6, 0.8, 1.0, 1.0 } };
@@ -1065,133 +1133,133 @@ fn brim_tilt(half: float2, cap: i64, fill: f32) -> f32 {
     min(atan(slope), 1.4)
 }
 
-// How full flask `to` shows while a pour fills it.
-fn filling(a: PourAnim) -> f32 {
-    let t = now - a.t0;
-    let n0: f32 = a.dst_before.n;
-    let n1: f32 = a.dst_after.n;
-    if t < T_LIFT { return n0; }
-    if covered(a.dst_before) && a.amount == 0 { return n1; }
-    n0 + (n1 - n0) * ease((t - T_LIFT) / T_POUR)
-}
+// Where a flight has the flask it pours from, t seconds into it: lifted
+// over the target, from its place or from its last target, and tipped
+// until its surface reaches the lip, then tipped further as it empties, so
+// the liquid leaves over the lip; then put back. A siphon isn't tipped: it
+// is held with its tap over the target and its bottom run drains out of the
+// tap. `stream` is how much the liquid runs, 0..1.
+struct Pose { pos: float2, angle: f32 = 0.0, fill: f32 = 0.0, drain: f32 = 0.0, stream: f32 = 0.0, back: bool = false }
 
-// The source of a pour: lifted over the target and tipped until its
-// surface reaches the lip, then tipped further as it empties, so the
-// liquid leaves over the lip; then put back. A siphon isn't tipped: it is
-// held with its tap over the target and its bottom run drains out of the tap.
-fn draw_pouring(out: Inst[>..]&, a: PourAnim) {
-    if a.src_before.body == Body.Siphon {
-        draw_siphoning(out, a);
-        return;
-    }
-    let half = slots[a.from].half;
-    let home = slots[a.from].pos;
-    let target = slots[a.to].pos;
-    let thalf = slots[a.to].half;
-    let side: f32 = if home.x <= target.x { 1.0 } else { -1.0 };
-    let t = now - a.t0;
-    let cap: i64 = a.src_before.cap;
+fn pour_pose(a: PourAnim, t: f64) -> Pose {
+    let half = slots[a.f.from].half;
+    let home = slots[a.f.from].pos;
+    let target = slots[a.f.to].pos;
+    let thalf = slots[a.f.to].half;
     let n0: f32 = a.src_before.n;
-    let tilt0 = max(brim_tilt(half, cap, n0), 0.3);
-    let tilt1 = max(brim_tilt(half, cap, n0 - a.amount), tilt0);
-    let lip_target = v2(target.x - side * thalf.x * 0.1, target.y - thalf.y - half.x * 0.5);
-    // The lip it pours over, in its own frame.
-    let lip_local = v2(side * half.x * 0.96, -half.y + half.x * FLASK_E);
-    fn lip_at(center: float2, angle: f32) -> float2 {
-        let s = sin(angle);
-        let c = cos(angle);
-        center + v2(c * lip_local.x - s * lip_local.y, s * lip_local.x + c * lip_local.y)
+    var p = Pose { pos: home, fill: n0 };
+    let running = if a.f.amount > 0 { min(1.0, min((t - T_LIFT) / 0.08, (T_LIFT + T_POUR - t) / 0.08)) as f32 } else { 0.0 };
+    if a.src_before.body == Body.Siphon {
+        // Its spout a little over the target's mouth.
+        let over = v2(target.x, target.y - thalf.y - half.x * 0.5) - tap_spout(flask_anchors(v2(0.0, 0.0), half, 0.0, 1.0));
+        if t < T_LIFT {
+            p.pos = lift_path(a.start_pos, over, target, half, ease(t / T_LIFT));
+        } else if t < T_LIFT + T_POUR {
+            p.pos = over;
+            p.drain = a.f.amount * ease((t - T_LIFT) / T_POUR);
+            p.fill = n0 - p.drain;
+            p.stream = running;
+        } else {
+            p.pos = lerp2(over, home, ease((t - T_LIFT - T_POUR) / T_BACK));
+            p.fill = a.src_after.n;
+            p.back = true;
+        }
+        return p;
     }
-    // The center that puts the tipped lip over the target's mouth.
-    fn center_for(angle: f32) -> float2 { lip_target - (lip_at(v2(0.0, 0.0), angle)) }
-    var pos = home;
-    var angle: f32 = 0.0;
-    var fill: f32 = n0;
-    var shown_src = a.src_before;
-    var stream = false;
-    var stream_a: f32 = 0.0;
+    let side: f32 = a.f.side as f32;
+    let cap: i64 = a.src_before.cap;
+    let tilt0 = max(brim_tilt(half, cap, n0), 0.3);
+    let tilt1 = max(brim_tilt(half, cap, n0 - a.f.amount), tilt0);
     if t < T_LIFT {
         let k = ease(t / T_LIFT);
-        angle = side * tilt0 * k;
-        pos = lerp2(home - v2(0.0, half.x * 1.2), center_for(side * tilt0), k);
+        p.angle = a.start_angle + (side * tilt0 - a.start_angle) * k;
+        p.pos = lift_path(a.start_pos, tipped_center(a, side * tilt0), target, half, k);
     } else if t < T_LIFT + T_POUR {
-        let k = ease((t - T_LIFT) / T_POUR);
-        fill = n0 - a.amount * k;
-        angle = side * max(brim_tilt(half, cap, fill), tilt0);
-        pos = center_for(angle);
-        stream = a.amount > 0;
-        stream_a = min(1.0, min((t - T_LIFT) / 0.08, (T_LIFT + T_POUR - t) / 0.08)) as f32;
+        p.fill = n0 - a.f.amount * ease((t - T_LIFT) / T_POUR);
+        p.angle = side * max(brim_tilt(half, cap, p.fill), tilt0);
+        p.pos = tipped_center(a, p.angle);
+        p.stream = running;
     } else {
         let k = ease((t - T_LIFT - T_POUR) / T_BACK);
-        angle = side * tilt1 * (1.0 - k);
-        pos = lerp2(center_for(side * tilt1), home, k);
-        shown_src = shown.bottles[a.from];
-        fill = shown_src.n;
+        p.angle = side * tilt1 * (1.0 - k);
+        p.pos = lerp2(tipped_center(a, side * tilt1), home, k);
+        p.fill = a.src_after.n;
+        p.back = true;
     }
-    if stream {
-        // The stream leaves the lip moving forward and arcs down under
-        // gravity into the middle of the rising surface, splashing there.
-        let lip = lip_at(pos, angle);
-        let surface = target.y + surface_mid(thalf, a.dst_after.cap, filling(a)).y;
-        let land = v2(target.x + side * thalf.x * 0.2, max(surface, lip.y + 6.0));
-        let reach = ease((t - T_LIFT) / 0.12);
-        let end = lerp2(lip, land, reach);
-        let ctrl = v2(lip.x + (end.x - lip.x) * 0.8, lip.y + (end.y - lip.y) * 0.2);
-        let color = palette_color(a.color, save.color_safe);
-        curve(out, Shape.Stream, lip, ctrl, end, half.x * 0.16, a.from * 1.7, with_alpha(color, stream_a));
-        glow(out, end, v2(half.x * 0.5, half.x * 0.2), 0.8, with_alpha(color, 0.5 * stream_a));
-        if reach >= 1.0 && rand.rand_int(3) != 0 { splash(end, color, side); }
-    }
-    draw_flask(out, a.from, shown_src, pos, half, angle, fill, if stream { 0.6 } else { 0.0 }, 0.0, gold(1.0), false);
-    // The salamander rides along on its rim.
-    if a.from == shown.salamander && !hop_flying() {
-        let an = flask_anchors(pos, half, angle, 1.0);
-        draw_salamander(out, at(an, an.lip), half.x, angle, salamander_facing, 0.0, 0.0);
-    }
+    p
 }
 
-fn draw_siphoning(out: Inst[>..]&, a: PourAnim) {
-    let half = slots[a.from].half;
-    let home = slots[a.from].pos;
-    let target = slots[a.to].pos;
-    let thalf = slots[a.to].half;
-    let t = now - a.t0;
-    // Where the flask is held: its spout a little over the target's mouth.
-    let spout0 = tap_spout(flask_anchors(v2(0.0, 0.0), half, 0.0, 1.0));
-    let over = v2(target.x, target.y - thalf.y - half.x * 0.5) - spout0;
-    var pos = over;
-    var fill: f32 = a.src_before.n;
-    var drain: f32 = 0.0;
-    var shown_src = a.src_before;
-    var stream_a: f32 = 0.0;
-    if t < T_LIFT {
-        pos = lerp2(home - v2(0.0, half.x * 1.2), over, ease(t / T_LIFT));
-    } else if t < T_LIFT + T_POUR {
-        let k = ease((t - T_LIFT) / T_POUR);
-        drain = a.amount * k;
-        fill = a.src_before.n - drain;
-        stream_a = if a.amount > 0 { min(1.0, min((t - T_LIFT) / 0.08, (T_LIFT + T_POUR - t) / 0.08)) as f32 } else { 0.0 };
-    } else {
-        pos = lerp2(over, home, ease((t - T_LIFT - T_POUR) / T_BACK));
-        shown_src = shown.bottles[a.from];
-        fill = shown_src.n;
-    }
-    if stream_a > 0.0 {
-        // Straight down out of the tap into the rising surface, splashing there.
-        let spout = pos + spout0;
-        let surface = target.y + surface_mid(thalf, a.dst_after.cap, filling(a)).y;
-        let land = v2(spout.x, max(surface, spout.y + 6.0));
-        let end = lerp2(spout, land, ease((t - T_LIFT) / 0.12));
+// The way up to where it pours: straight, unless it pours from the far
+// side of the target, when it arcs up over whatever pours from the near one.
+fn lift_path(from: float2, to: float2, target: float2, half: float2, k: f32) -> float2 {
+    if (from.x - target.x) * (to.x - target.x) >= 0.0 { return lerp2(from, to, k); }
+    let ctrl = v2((from.x + to.x) * 0.5, min(from.y, to.y) - half.y * 1.0);
+    lerp2(lerp2(from, ctrl, k), lerp2(ctrl, to, k), k)
+}
+
+// The lip a flask pours over, in its own frame; and where it is when the
+// flask is at `pos`, tipped by `angle`.
+fn pour_lip(half: float2, side: f32) -> float2 { v2(side * half.x * 0.96, -half.y + half.x * FLASK_E) }
+fn lip_at(pos: float2, angle: f32, lip: float2) -> float2 {
+    let s = sin(angle);
+    let c = cos(angle);
+    pos + v2(c * lip.x - s * lip.y, s * lip.x + c * lip.y)
+}
+
+// The center that puts the tipped lip over the target's mouth, a little
+// toward the side it pours from.
+fn tipped_center(a: PourAnim, angle: f32) -> float2 {
+    let half = slots[a.f.from].half;
+    let target = slots[a.f.to].pos;
+    let thalf = slots[a.f.to].half;
+    let side: f32 = a.f.side as f32;
+    let lip_target = v2(target.x - side * thalf.x * 0.1, target.y - thalf.y - half.x * 0.5);
+    lip_target - lip_at(v2(0.0, 0.0), angle, pour_lip(half, side))
+}
+
+// A flight: the flask poured from, where its pose has it, and the stream
+// out of it, arcing down under gravity into the middle of the rising
+// surface (straight down out of a siphon's tap), splashing there. Nothing
+// until it lifts off.
+fn draw_pouring(out: Inst[>..]&, a: PourAnim) {
+    if now < a.f.t0 { return; }
+    let t = now - a.f.t0;
+    let p = pour_pose(a, t);
+    let half = slots[a.f.from].half;
+    let target = slots[a.f.to].pos;
+    let thalf = slots[a.f.to].half;
+    let side: f32 = a.f.side as f32;
+    let siphon = a.src_before.body == Body.Siphon;
+    let src = holding(a.f.from, if p.back { a.src_after } else { a.src_before });
+    if p.stream > 0.0 {
+        let surface = target.y + surface_mid(thalf, a.dst_after.cap, shown_fill(a.f.to)).y;
         let color = palette_color(a.color, save.color_safe);
-        curve(out, Shape.Stream, spout, lerp2(spout, end, 0.5), end, half.x * 0.12, a.from * 1.7, with_alpha(color, stream_a));
-        glow(out, end, v2(half.x * 0.4, half.x * 0.16), 0.8, with_alpha(color, 0.5 * stream_a));
-        if end.y >= land.y - 0.5 && rand.rand_int(3) != 0 { splash(end, color, 1.0); }
+        let reach = ease((t - T_LIFT) / 0.12);
+        if siphon {
+            let spout = p.pos + tap_spout(flask_anchors(v2(0.0, 0.0), half, 0.0, 1.0));
+            let land = v2(spout.x, max(surface, spout.y + 6.0));
+            let end = lerp2(spout, land, reach);
+            curve(out, Shape.Stream, spout, lerp2(spout, end, 0.5), end, half.x * 0.12, a.f.from * 1.7, with_alpha(color, p.stream));
+            glow(out, end, v2(half.x * 0.4, half.x * 0.16), 0.8, with_alpha(color, 0.5 * p.stream));
+            if reach >= 1.0 && rand.rand_int(3) != 0 { splash(end, color, 1.0); }
+        } else {
+            let lip = lip_at(p.pos, p.angle, pour_lip(half, side));
+            let land = v2(target.x + side * thalf.x * 0.2, max(surface, lip.y + 6.0));
+            let end = lerp2(lip, land, reach);
+            let ctrl = v2(lip.x + (end.x - lip.x) * 0.8, lip.y + (end.y - lip.y) * 0.2);
+            curve(out, Shape.Stream, lip, ctrl, end, half.x * 0.16, a.f.from * 1.7, with_alpha(color, p.stream));
+            glow(out, end, v2(half.x * 0.5, half.x * 0.2), 0.8, with_alpha(color, 0.5 * p.stream));
+            if reach >= 1.0 && rand.rand_int(3) != 0 { splash(end, color, side); }
+        }
     }
-    draw_flask_drained(out, a.from, shown_src, pos, half, 0.0, fill, drain, if stream_a > 0.0 { 0.3 } else { 0.0 },
-                       0.0, gold(1.0), false);
-    if a.from == shown.salamander && !hop_flying() {
-        let an = flask_anchors(pos, half, 0.0, 1.0);
-        draw_salamander(out, at(an, an.lip), half.x, 0.0, salamander_facing, 0.0, 0.0);
+    // Picked again while in the air, it glows as it would in its place.
+    let g: f32 = if a.f.from == selected { 0.9 } else { 0.0 };
+    let wave: f32 = if p.stream > 0.0 { if siphon { 0.3 } else { 0.6 } } else { 0.0 };
+    draw_flask_drained(out, a.f.from, src, p.pos, half, p.angle, p.fill, p.drain, wave, g, gold(1.0), false);
+    // The salamander rides along on its rim.
+    if a.f.from == shown.salamander && !hop_flying() {
+        let an = flask_anchors(p.pos, half, p.angle, 1.0);
+        draw_salamander(out, at(an, an.lip), half.x, p.angle, salamander_facing, 0.0, 0.0);
     }
 }
 
@@ -1614,7 +1682,7 @@ fn flask_hit(c: float2) -> i64 {
     for i in drawing {
         if i >= board.count { continue; }
         let half = slots[i].half;
-        let center = slots[i].pos - v2(0.0, if i == selected { half.x * 1.2 } else { 0.0 });
+        let center = slots[i].pos - v2(0.0, if raised(i) { half.x * 1.2 } else { 0.0 });
         let top = center.y - half.y - half.x * 0.35;
         let bottom = center.y + half.y + half.x * 0.6;
         if abs(c.x - center.x) > half.x * 1.4 || c.y < top || c.y > bottom { continue; }
@@ -2094,6 +2162,7 @@ fn main() {
     var shots_from = -1;
     var shots_every = 1;
     var clicks_script: Scripted[>..] = [];
+    var click_every = 20;
     var export_to: u8[>..] = [];
     let argv = args();
     var a = 1;
@@ -2113,6 +2182,11 @@ fn main() {
             a += 2;
         }
         else if opt == "--autoplay" { autoplay = true; }
+        else if opt == "--autoplay-every" && has_value {
+            let n, ok = parse_int(argv[a + 1]);
+            if ok { autoplay = true; autoplay_gap = n / 1000.0; }
+            a++;
+        }
         else if opt == "--export-music" && has_value { export_to.append(argv[a + 1]); a++; }
         else if (opt == "--click" || opt == "--hold") && a + 2 < argv.len {
             let x, okx = parse_int(argv[a + 1]);
@@ -2120,6 +2194,14 @@ fn main() {
             if okx && oky { clicks_script.push(Scripted { pos: v2(x, y), hold: opt == "--hold" }); }
             a += 2;
         }
+        else if opt == "--click-at" && a + 3 < argv.len {
+            let f, okf = parse_int(argv[a + 1]);
+            let x, okx = parse_int(argv[a + 2]);
+            let y, oky = parse_int(argv[a + 3]);
+            if okf && okx && oky { clicks_script.push(Scripted { pos: v2(x, y), frame: f }); }
+            a += 3;
+        }
+        else if opt == "--click-every" && has_value { let n, ok = parse_int(argv[a + 1]); if ok { click_every = max(1, n); } a++; }
         else if opt == "--size" && a + 2 < argv.len {
             let w, okw = parse_int(argv[a + 1]);
             let h, okh = parse_int(argv[a + 2]);
@@ -2133,8 +2215,11 @@ fn main() {
                   --seed S       play the board brewed from seed S, shaped like level L (default 20)
                   --hand K       play built-in hand-made level K (0 to 24; levels.goose)
                   --autoplay     let the hint solver play
+                  --autoplay-every MS  (testing) the same, a move every MS milliseconds, not waiting to see each
                   --size W H     open the window W x H (it remembers the size it is left at)
                   --click X Y    (testing) click at canvas point X, Y; one every 20 frames after frame 10
+                  --click-every K  (testing) those clicks every K frames instead
+                  --click-at F X Y (testing) click at X, Y on frame F; any number to a frame
                   --hold X Y     (testing) press there and keep holding, in the same turn as the clicks
                   --shots F K    (testing) with --screenshot P, also save P-<frame>.png every K frames from frame F
                   --export-music DIR   write each music track, decoded, to DIR as a WAV file
@@ -2184,10 +2269,15 @@ fn main() {
         last = now;
         fit_canvas();
         gather_input();
-        // Scripted clicks for testing, one every 20 frames after the first
-        // 10: a click is let go at once, a hold stays down until the next.
-        if drawn >= 10 && (drawn - 10) % 20 == 0 && (drawn - 10) / 20 < clicks_script.len {
-            let s = clicks_script[(drawn - 10) / 20];
+        // Scripted clicks for testing, one every 20 frames (--click-every)
+        // after the first 10, and those set for this frame: a click is let
+        // go at once, a hold stays down until the next.
+        var turn = 0;
+        for s in clicks_script {
+            let due = if s.frame >= 0 { s.frame == drawn }
+                      else { drawn >= 10 && drawn == 10 + turn * click_every };
+            if s.frame < 0 { turn++; }
+            if !due || clicks.len >= 16 { continue; }
             clicks.push(s.pos);
             script_hold = s.hold;
             if !s.hold { released = true; }

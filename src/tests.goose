@@ -16,6 +16,7 @@ import core.variation;
 import app.shaders;
 import app.tracks;
 import app.save;
+import app.flights;
 
 var failures = 0;
 var checks = 0;
@@ -1761,7 +1762,69 @@ fn test_save_text() {
     check(parse_save("version=2\nmusic_volume=250\n").music_volume == 100, "the volume is kept in range");
 }
 
+// A pour planned as main.goose plans it, added to the flights.
+fn fly(fs: Flight[>..]&, from: i64, to: i64, natural: f64, amount: i64, now: f64) -> Plan {
+    let p = plan_flight(fs[..], from, to, natural, true, true, now, 0.0);
+    if p.after >= 0 { fs[p.after].cut = p.t0; }
+    fs.push(Flight { from: from, to: to, amount: amount, t0: p.t0, side: p.side });
+    p
+}
+
+fn near(a: f64, b: f64) -> bool { abs(a - b) < 1e-9 }
+
+fn test_flights() {
+    test("flights");
+    let land = T_LIFT + T_POUR;
+    // Three pours into flask 9 a few frames apart: two pour at once, one
+    // from each side, and the third waits for a side to come free.
+    var fs: Flight[>..] = [];
+    let a = fly(fs, 0, 9, 1.0, 1, 0.0);
+    let b = fly(fs, 1, 9, 1.0, 1, 0.05);
+    let c = fly(fs, 2, 9, -1.0, 1, 0.1);
+    check(near(a.t0, 0.0) && a.side == 1.0, "the first pours at once, from its own side");
+    check(near(b.t0, 0.05) && b.side == -1.0, "the second at once, from the other side");
+    check(near(c.t0, land) && c.side == 1.0, "the third once the first has poured");
+    check(near(on_the_way(fs[..], 9, 0.1), 2.0), "nothing has landed yet: two on the way");
+    check(on_the_way(fs[..], 9, 0.5) < 2.0 && on_the_way(fs[..], 9, 0.5) > 0.0, "the level rises with both streams");
+    check(near(on_the_way(fs[..], 9, land + 0.05), 1.0), "both landed; the third lifted off, nothing of it landed");
+    check(awaited(fs[..], 9, 0.5) && !awaited(fs[..], 9, flight_land(fs[2])), "awaited until the last lands");
+    check(waiting(fs[..], 2, 0.3) && !waiting(fs[..], 2, land), "the third waits, held up, until it flies");
+
+    // A to B, then at once B to C: B lets the stream land, then lifts off.
+    fs.clear();
+    let ab = fly(fs, 0, 1, 1.0, 2, 0.0);
+    let bc = fly(fs, 1, 2, 1.0, 1, 0.02);
+    check(near(bc.t0, land) && bc.after < 0, "B pours once A's liquid has landed in it");
+
+    // A pour into a flask in the air waits for it to be back in its place.
+    fs.clear();
+    let out = fly(fs, 0, 1, 1.0, 1, 0.0);
+    let into = fly(fs, 2, 0, -1.0, 1, 0.1);
+    check(near(into.t0 + T_LIFT, flight_end(fs[0])), "its stream comes as the flask is back");
+
+    // A flask that pours twice goes straight on, from where it got to.
+    fs.clear();
+    let first = fly(fs, 0, 1, 1.0, 1, 0.0);
+    let again = fly(fs, 0, 2, 1.0, 1, 0.3);
+    check(near(again.t0, land) && again.after == 0, "the second follows the first's pour");
+    check(near(flight_end(fs[0]), land), "and the first does not go back");
+
+    // A siphon pours alone, and a pour waits for what was set off on its flasks.
+    fs.clear();
+    let s0 = plan_flight(fs[..], 0, 9, 1.0, true, false, 0.0, 0.0);
+    fs.push(Flight { from: 0, to: 9, amount: 1, t0: s0.t0, side: s0.side, shares: false });
+    let s1 = plan_flight(fs[..], 1, 9, 1.0, true, true, 0.0, 0.0);
+    check(near(s1.t0, land), "beside a siphon, a pour waits");
+    fs.clear();
+    let near_side = fly(fs, 0, 9, 1.0, 1, 0.0);
+    let no_room = plan_flight(fs[..], 1, 9, 1.0, false, true, 0.05, 0.0);
+    check(near(no_room.t0, land) && no_room.side == 1.0, "with no room on the other side, it waits for its own");
+    let late = plan_flight([], 3, 4, 1.0, true, true, 0.0, 1.5);
+    check(near(late.t0, 1.5), "until what earlier pours set off is seen");
+}
+
 fn main() {
+    test_flights();
     test_levels();
     test_pour_rules();
     test_grid();

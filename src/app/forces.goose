@@ -7,11 +7,13 @@
 // out of its layer and flying to its door's lock, the door swinging open, a
 // curtain drawn aside when a ribbon from the flask of its color reaches it.
 //
-// The board drawn, `shown`, trails the board in play while they play: it
-// starts as the pour left it before anything it set off, and each event's
-// change is made to it when its animation gets there, so nothing on screen
-// changes before it is seen to happen. A new pour, an undo or any tool
-// first finishes what is still playing (settle_beats).
+// The board drawn, `shown`, trails the board in play while they play: a
+// pour's liquid moves on it as its flight lifts off (main.goose), and each
+// event's change is made to it when its animation gets there, so nothing on
+// screen changes before it is seen to happen. Pours made in quick
+// succession play side by side, each flask's moments in the order of the
+// pours that set them off; an undo or any tool first finishes what is
+// still playing (settle_beats).
 //
 // Part of the game in main.goose: it reads the game's state as main.goose's
 // other parts do.
@@ -46,9 +48,8 @@ struct Beat {
     cues: i64 = 0,          // the moments in it already played, one bit each
 }
 
-var beats: Beat[..40];
+var beats: Beat[..128];
 var shown: Board;           // the board as drawn
-var landing_at: f64 = -1.0; // when the last pour's liquid landed, for the counters
 var salamander_facing: f32 = 1.0;
 
 struct Bit {
@@ -275,15 +276,12 @@ fn liquid_moved(before: Board, from: i64, to: i64, r: PourResult) -> Board {
     m
 }
 
-// Lays out a pour's events from t0, its start (the liquid lands T_LIFT +
-// T_POUR later), and shows the board as the liquid left it.
+// Lays out a pour's events from t0, when its flight lifts off (the liquid
+// lands T_LIFT + T_POUR later), after what earlier pours set off.
 fn schedule_pour(before: Board, from: i64, to: i64, r: PourResult, t0: f64) {
-    settle_beats();
     let mid = liquid_moved(before, from, to, r);
-    shown = mid;
-    shown.pours = board.pours;
+    let first = beats.len;
     let land = t0 + T_LIFT + T_POUR;
-    landing_at = land;
     var cursor = land;
     var heat_src = -2;
     var heat_at = 0.0;
@@ -292,7 +290,7 @@ fn schedule_pour(before: Board, from: i64, to: i64, r: PourResult, t0: f64) {
     var transmuted = false;
     var sim = mid;          // the stacks as flips leave them, for their timing
     for e, k in r.events {
-        if beats.len >= 40 { break; }
+        if beats.len >= beats.cap { break; }
         // Heat that changes nothing where it lands isn't shown going there.
         if e.kind == EventKind.HeatPulse && !heat_reaches(r, k) { continue; }
         let span, delay0 = beat_span(e.kind);
@@ -369,6 +367,36 @@ fn schedule_pour(before: Board, from: i64, to: i64, r: PourResult, t0: f64) {
         b.apply_at = b.at + delay;
         beats.push(b);
     }
+    // A flask's moments wait for those earlier pours set off on it, and
+    // for it to be in its place; the rest of the pour's follow them.
+    var shift = 0.0;
+    for k in first..beats.len {
+        var b .= beats[k];
+        b.at += shift;
+        b.apply_at += shift;
+        var free = flask_free_at(b.bottle);
+        for l in first {
+            if beats[l].bottle == b.bottle { free = max(free, beats[l].at + beats[l].span); }
+        }
+        if free > b.at {
+            shift += free - b.at;
+            b.apply_at += free - b.at;
+            b.at = free;
+        }
+    }
+}
+
+// When what earlier pours set off on flask i has been seen far enough for
+// it to pour again or be poured into: each change made, and a key let out
+// of it risen clear.
+fn settled_at(i: i64) -> f64 {
+    var at = 0.0;
+    for b in beats {
+        if b.bottle != i { continue; }
+        if !b.applied { at = max(at, b.apply_at); }
+        if b.kind == EventKind.KeyFreed { at = max(at, b.at + b.span * KEY_FLY); }
+    }
+    at
 }
 
 // Makes every change still to come at once: the board drawn is the board.
@@ -376,31 +404,29 @@ fn settle_beats() {
     for &b in beats { if !b.applied { apply_beat(b, false); } }
     beats.clear();
     shown = board;
-    landing_at = -1.0;
 }
 
 fn beats_running() -> bool { beats.len > 0 }
 
+// As a pour's liquid lands: every pour counts toward ice, hourglasses and vines.
+fn pour_landed() {
+    for i in shown.count {
+        var s .= shown.bottles[i];
+        if s.cover == Cover.Rime && s.thaw > 1 { s.thaw--; }
+        // An hourglass about to turn over shows its time is up; its dial
+        // fills again as it turns.
+        s.flip_count = board.bottles[i].flip_count;
+        if beat_waiting(EventKind.Flipped, i) && s.flip_count == 0 { s.flip_count = s.flip_every; }
+        if board.bottles[i].fixture == Fixture.VineRoot { s.spread_count = board.bottles[i].spread_count; }
+    }
+}
+
+// Plays the moments due, and lets go of those over; once nothing is left
+// to see, the board drawn is the board.
 fn update_beats() {
-    if beats.len == 0 {
-        shown = board;
-        return;
-    }
-    if landing_at >= 0.0 && now >= landing_at {
-        // Every pour counts toward ice, hourglasses and vines.
-        landing_at = -1.0;
-        for i in shown.count {
-            var s .= shown.bottles[i];
-            if s.cover == Cover.Rime && s.thaw > 1 { s.thaw--; }
-            // An hourglass about to turn over shows its time is up; its dial
-            // fills again as it turns.
-            s.flip_count = board.bottles[i].flip_count;
-            if beat_waiting(EventKind.Flipped, i) && s.flip_count == 0 { s.flip_count = s.flip_every; }
-            if board.bottles[i].fixture == Fixture.VineRoot { s.spread_count = board.bottles[i].spread_count; }
-        }
-    }
-    var done = true;
-    for &b in beats {
+    var k = 0;
+    while k < beats.len {
+        var b .= beats[k];
         if !b.started && now >= b.at {
             b.started = true;
             start_beat(b);
@@ -408,12 +434,9 @@ fn update_beats() {
         if b.kind == EventKind.Flipped && b.started && !b.applied { flip_cues(b); }
         if b.started && now < b.at + b.span + 0.1 { key_cues(b); }
         if !b.applied && now >= b.apply_at { apply_beat(b, true); }
-        if !b.applied || now < b.at + b.span { done = false; }
+        if b.applied && now >= b.at + b.span + 0.1 { remove_at(beats, k); } else { k++; }
     }
-    if done && landing_at < 0.0 {
-        beats.clear();
-        shown = board;
-    }
+    if beats.len == 0 && !any_pouring() { shown = board; }
 }
 
 // The sounds and settling of an hourglass turning over, each once: the
