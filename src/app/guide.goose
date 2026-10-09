@@ -203,13 +203,19 @@ fn draw_entry_picture(out: Inst[>..]&, e: Entry, foot: float2) {
     let tw: i64 = shown.bottles[i].twin;
     if e.feature == Feature.Twins && tw >= 0 { ids.push(tw); }
     var hx: f32 = if ids.len > 1 { 11.0 } else { 14.0 };
-    for j in ids { hx = min(hx, 84.0 / (shown.bottles[j].cap * SEGMENT + FLASK_EXTRA)); }
+    // A lantern stands over its flask, under the rule above: the flask is
+    // smaller to leave it room.
+    for j in ids {
+        hx = min(hx, 84.0 / (shown.bottles[j].cap * SEGMENT + FLASK_EXTRA));
+        if shown.bottles[j].fixture == Fixture.Lantern { hx = min(hx, 76.0 / (shown.bottles[j].cap * SEGMENT + FLASK_EXTRA + 1.5)); }
+    }
     parts_layer = 1;
     var anchors: Anchors[2];
     for j, k in ids {
         let half = bottle_half(hx, shown.bottles[j].cap);
         let dx: f32 = if ids.len > 1 { (k * 2 - 1) * hx * 1.35 } else { 0.0 };
         anchors[k] = flask_anchors(v2(foot.x + dx, foot.y - half.y), half, 0.0, 1.0);
+        anchors[k].room = (at(anchors[k], anchors[k].rim).y - (foot.y - 76.0)) / hx;
     }
     if ids.len > 1 { draw_tube(out, anchors[0], anchors[1], -100.0, float4_0); }
     for j, k in ids {

@@ -303,7 +303,7 @@ fn layout(board: Board) {
 
 fn foot_y(i: i64) -> f32 { slots[i].pos.y + slots[i].half.y }
 
-// The side a flask's lantern hangs on: the right, unless only the left of
+// The side a flask's lantern's crook rises on: the right, unless only the left of
 // its top row is free.
 fn hang_side(i: i64) -> f32 {
     if i < 0 || i >= shown.count || shown.rows == 0 { return 1.0; }
@@ -312,6 +312,20 @@ fn hang_side(i: i64) -> f32 {
     let right = c + 1 < shown.cols && flask_at(shown, r, c + 1) >= 0;
     let left = c > 0 && flask_at(shown, r, c - 1) >= 0;
     if right && !left { -1.0 } else { 1.0 }
+}
+
+// The free space over a flask's rim, in half widths from the rim's middle:
+// up to the liquid of the flask above it in its column, or to the top of
+// the board area.
+fn lantern_room(i: i64) -> f32 {
+    if i < 0 || i >= shown.count { return 2.0; }
+    let hx = slots[i].half.x;
+    let rim = slots[i].pos.y - slots[i].half.y + hx * FLASK_E;
+    var limit: f32 = GRID_TOP - 36.0;
+    for j in shown.count {
+        if j != i && shown.col[j] == shown.col[i] && foot_y(j) < rim { limit = max(limit, foot_y(j) - hx * 0.25); }
+    }
+    (rim - limit) / hx
 }
 
 // Where a bottle stands: its slot, raised when selected, shaken when refused.
@@ -780,6 +794,7 @@ fn draw_flask_squashed(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: fl
     // with the one color it takes.
     var tint = if b.body == Body.Athanor { float4 { 1.0, 0.8, 0.6, 1.0 } } else { float4 { 0.86, 0.92, 1.0, 1.0 } };
     if tall_color(b) > 0 { tint = mix4(tint, palette_color(tall_color(b), save.color_safe), 0.85); }
+    if in_lantern_light(i) { tint = mix4(tint, float4 { 1.0, 0.76, 0.42, 1.0 }, 0.65); }
     var glass = inst(Shape.Glass, pos, half, tint);
     glass.misc.y = angle;
     glass.misc.z = 18.0;
@@ -808,6 +823,17 @@ fn draw_flask_squashed(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: fl
         draw_salamander(out, at(a, a.lip), half.x, 0.0, salamander_facing, 0.0, 0.0);
     }
     if b.done { draw_completion(out, i, b, pos, half); }
+}
+
+// Whether a lit lantern's light falls on flask i: its own, or a neighbor's.
+fn in_lantern_light(i: i64) -> bool {
+    if i < 0 || i >= shown.count { return false; }
+    let b = shown.bottles[i];
+    if b.fixture == Fixture.Lantern && b.lit { return true; }
+    for j in neighbors(shown, i) {
+        if shown.bottles[j].fixture == Fixture.Lantern && shown.bottles[j].lit { return true; }
+    }
+    false
 }
 
 fn draw_board(out: Inst[>..]&) {
@@ -840,8 +866,16 @@ fn draw_board(out: Inst[>..]&) {
             hi = v2(max(hi.x, slots[j].pos.x + slots[j].half.x), max(hi.y, slots[j].pos.y + slots[j].half.y));
         }
         let h = slots[i].half;
+        let f = 0.03 * look.light.w;
         glow(out, (lo + hi) * v2(0.5, 0.5), (hi - lo) * v2(0.5, 0.5) + v2(h.x * 1.5, h.x * 1.5),
-             1.0, float4 { 1.0, 0.8, 0.45, 0.09 + 0.03 * look.light.w });
+             1.0, float4 { 1.0, 0.8, 0.45, 0.09 + f });
+        // A warm wash behind each flask it reaches.
+        var reach: i64[..7] = [i];
+        for j in neighbors(shown, i) { reach.push(j); }
+        for j in reach {
+            let a = stand_anchors(j);
+            glow(out, a.center, a.half * v2(1.25, 1.05), 0.8, float4 { 1.0, 0.72, 0.36, 0.26 + f });
+        }
     }
     // Back to front: what stands behind each flask, and the flask. What
     // stands in front of them goes over them all, since a row's foot is

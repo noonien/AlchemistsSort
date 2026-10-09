@@ -42,7 +42,8 @@ struct Anchors {
     base: float2,       // the middle of the bottom, where it stands
     side: float2,       // the right of the body, low down (left is its mirror)
     joint: float2,      // the right of the body, high up, where a twin's tube joins
-    hang: f32 = 1.0,    // the side a lantern hangs on: 1 right, -1 left
+    hang: f32 = 1.0,    // the side a lantern's crook rises on: 1 right, -1 left
+    room: f32 = 2.0,    // the free space over the rim's middle, in half widths, for a lantern
 }
 
 fn flask_anchors(pos: float2, half: float2, angle: f32, squash: f32) -> Anchors {
@@ -211,7 +212,7 @@ struct StandLook {
 }
 
 // Behind the flask: a brazier's flames, an athanor's hearth, the hourglass's
-// stand, a catalyst's runes.
+// stand, a catalyst's runes, a lantern over the rim.
 fn draw_stand_back(out: Inst[>..]&, i: i64, b: Bottle, a: Anchors, look: StandLook) {
     let hx = a.hx;
     let base = at(a, a.base);
@@ -228,6 +229,10 @@ fn draw_stand_back(out: Inst[>..]&, i: i64, b: Bottle, a: Anchors, look: StandLo
         Plain, Vow, Siphon, Moonpetal => {},
     }
     match b.fixture {
+        Lantern => {
+            let lit = if look.lit >= 0.0 { look.lit } else if b.lit { 1.0 } else { 0.0 };
+            draw_lantern(out, a, lit, look.flare, i);
+        },
         Brazier => {
             var f = inst(Shape.Brazier, base - float2 { 0.0, hx * 0.75 }, float2 { hx * 1.4, hx * 0.75 }, rgba(1.0, 1.0, 1.0, 1.0));
             f.p0 = float4 { 0.0, look.flare, 0.0, 0.0 };
@@ -240,7 +245,7 @@ fn draw_stand_back(out: Inst[>..]&, i: i64, b: Bottle, a: Anchors, look: StandLo
             if !b.spent { glow(out, base, float2 { hx * 1.7, hx * 0.6 }, 1.0, float4 { 0.6, 0.3, 0.9, 0.3 + 0.15 * pulse }); }
             rune_circle(out, base + float2 { 0.0, hx * 0.04 }, hx * 1.3, c);
         },
-        None, Lantern, VineRoot => {},
+        None, VineRoot => {},
     }
 }
 
@@ -252,8 +257,7 @@ fn rune_circle(out: Inst[>..]&, center: float2, r: f32, color: float4) {
     out.push(g);
 }
 
-// In front: a brazier's bowl, the hearth's coals, the dial, a vine's roots,
-// a lantern overhead.
+// In front: a brazier's bowl, the hearth's coals, the dial, a vine's roots.
 fn draw_stand_front(out: Inst[>..]&, i: i64, b: Bottle, a: Anchors, look: StandLook) {
     let hx = a.hx;
     let base = at(a, a.base);
@@ -282,35 +286,32 @@ fn draw_stand_front(out: Inst[>..]&, i: i64, b: Bottle, a: Anchors, look: StandL
             f.p0 = float4 { 1.0, look.flare, 0.0, 0.0 };
             out.push(f);
         },
-        Lantern => {
-            let lit = if look.lit >= 0.0 { look.lit } else if b.lit { 1.0 } else { 0.0 };
-            draw_lantern(out, a, lit, look.flare, i);
-        },
         VineRoot => draw_roots(out, b, a, look.wither, 1.0),
-        None, Catalyst => {},
+        None, Lantern, Catalyst => {},
     }
 }
 
-// A lantern hangs off the rim on a short chain from a hook, on the side
-// a.hang says, small enough to stay clear of the next column's liquid.
-fn lantern_pos(a: Anchors) -> float2 { at(a, a.rim + float2 { a.hang * a.hx * 1.2, a.hx * 0.8 }) }
+// A lantern hangs over the rim from a shepherd's crook rising from behind
+// the flask on the side a.hang says. It stands in the free space over the
+// rim (a.room), as large as fits there, and is drawn behind everything in
+// front of it, so it covers no other flask's liquid or count.
+fn lantern_unit(a: Anchors) -> f32 { max(clamp((a.room - 0.1) / 1.76, 0.6, 1.0) * a.hx, 12.0) }
+fn lantern_pos(a: Anchors) -> float2 { at(a, a.rim) - float2 { 0.0, a.hx * 0.1 + lantern_unit(a) * 0.65 } }
 
 fn draw_lantern(out: Inst[>..]&, a: Anchors, lit: f32, flare: f32, seed: i64) {
     let hx = a.hx;
+    let u = lantern_unit(a);
     let c = lantern_pos(a);
-    let hook = at(a, a.rim + float2 { a.hang * hx * 0.88, -hx * 0.04 });
-    let top = c - float2 { 0.0, hx * 0.45 };
-    for k in 3 {
-        let f = (k + 0.5) / 3.0;
-        ring(out, float2 { hook.x + (top.x - hook.x) * f, hook.y + (top.y - hook.y) * f }, hx * 0.06, 1.1, float4 { 0.7, 0.55, 0.3, 1.0 });
-    }
-    rect(out, hook, float2 { hx * 0.08, hx * 0.05 }, hx * 0.04, float4 { 0.6, 0.45, 0.22, 1.0 });
     if lit > 0.0 {
-        glow(out, c + float2 { 0.0, hx * 0.06 }, float2 { hx * 1.3, hx * 1.3 }, 1.0, float4 { 1.0, 0.75, 0.4, 0.2 * lit + 0.3 * flare });
+        glow(out, c, float2 { hx * 2.2, hx * 2.0 }, 1.0, float4 { 1.0, 0.75, 0.4, 0.3 * lit + 0.4 * flare });
     }
-    var l = inst(Shape.Lantern, c, float2 { hx * 0.36, hx * 0.55 }, rgba(1.0, 1.0, 1.0, 1.0));
+    // The crook's post stands inside the flask's outline, its foot well down behind the glass.
+    let post = a.hang * min(hx * 0.72 / u, 1.2);
+    let foot = min((hx * 0.6 + u * 0.65) / u, 1.75);
+    var l = inst(Shape.Lantern, c, float2 { u * 1.3, u * 1.85 }, rgba(1.0, 1.0, 1.0, 1.0));
     l.p0 = float4 { lit, flare, seed * 1.7, 0.0 };
-    l.misc.z = hx * 0.36;
+    l.p1 = float4 { post, foot, 0.0, 0.0 };
+    l.misc.z = u * 0.4;
     out.push(l);
 }
 

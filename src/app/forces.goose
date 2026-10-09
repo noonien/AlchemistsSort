@@ -288,12 +288,14 @@ fn beat_waiting(kind: EventKind, i: i64) -> bool {
 fn slot_anchors(i: i64) -> Anchors {
     var a = flask_anchors(rest_pos(i), slots[i].half, 0.0, 1.0);
     a.hang = hang_side(i);
+    a.room = lantern_room(i);
     a
 }
 
 fn stand_anchors(i: i64) -> Anchors {
     var a = flask_anchors(slots[i].pos + v2(0.0, drop_offset(i)), slots[i].half, 0.0, 1.0);
     a.hang = hang_side(i);
+    a.room = lantern_room(i);
     a
 }
 

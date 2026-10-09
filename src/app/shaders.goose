@@ -21,7 +21,8 @@ enum Shape {
     Wax,        // a wax seal over the neck; color: the key; p0: softened 0..1, crack 0..1, seed
     Vines,      // a vine wrapped round a flask; p0: grown 0..1, withered 0..1, burnt 0..1, seed
     Tap,        // a siphon's brass tap
-    Lantern,    // a hanging lantern; p0: lit 0..1, flare, seed
+    Lantern,    // a lantern on a crook, 1.3 of its units wide; p0: lit 0..1, flare, seed;
+                // p1: the crook's post across and its foot down, in its units
     Wood,       // a wooden plank
     Backdrop,   // the room behind it all; p0: theme, unscaled half width, the table's far edge (0: none)
     Icon,       // toolbar icons; p0.x: which Icon
@@ -1046,19 +1047,35 @@ let FRAGMENT_SHADER = """
         float foot = sd_round_box(a - vec2(1.2 * u, hy - 0.03 * u), vec2(0.17 * u, 0.045 * u), vec4(0.03 * u));
         return min(min(min(post, finial), min(hub, axle)), min(bar, foot));
     }
-    // A lantern's brass: a ring to hang it by, a roof, the frame round its
-    // panes and a base.
+    // A lantern's brass: a ring to hang it by, a knob, a peaked cap with a
+    // brim, the posts either side of its panes, a base and a foot.
     float sd_lantern(vec2 q, float u) {
         vec2 a = vec2(abs(q.x), q.y);
-        float ring = abs(length(q - vec2(0.0, -0.74 * u)) - 0.09 * u) - 0.028 * u;
-        float slope = mix(0.1 * u, 0.46 * u, clamp((q.y + 0.64 * u) / (0.24 * u), 0.0, 1.0));
-        float roof = max(a.x - slope, abs(q.y + 0.52 * u) - 0.12 * u);
-        float bars = sd_box(a - vec2(0.36 * u, 0.02 * u), vec2(0.045 * u, 0.42 * u));
-        float mid = sd_box(q - vec2(0.0, 0.02 * u), vec2(0.018 * u, 0.42 * u));
-        float band = sd_box(q - vec2(0.0, -0.39 * u), vec2(0.4 * u, 0.035 * u));
-        float base = sd_round_box(q - vec2(0.0, 0.48 * u), vec2(0.44 * u, 0.07 * u), vec4(0.03 * u));
-        float foot = sd_round_box(q - vec2(0.0, 0.6 * u), vec2(0.2 * u, 0.05 * u), vec4(0.03 * u));
-        return min(min(min(ring, roof), min(bars, mid)), min(min(band, base), foot));
+        float ring = abs(length(q - vec2(0.0, -0.93 * u)) - 0.085 * u) - 0.03 * u;
+        float knob = sd_circle(q - vec2(0.0, -0.8 * u), 0.07 * u);
+        float slope = mix(0.08 * u, 0.5 * u, clamp((q.y + 0.75 * u) / (0.28 * u), 0.0, 1.0));
+        float cap = max(a.x - slope, abs(q.y + 0.6 * u) - 0.15 * u);
+        float brim = sd_round_box(q - vec2(0.0, -0.44 * u), vec2(0.53 * u, 0.055 * u), vec4(0.03 * u));
+        float posts = sd_round_box(a - vec2(0.43 * u, 0.0), vec2(0.065 * u, 0.42 * u), vec4(0.02 * u));
+        float mid = sd_box(q, vec2(0.018 * u, 0.4 * u));
+        float base = sd_round_box(q - vec2(0.0, 0.47 * u), vec2(0.52 * u, 0.08 * u), vec4(0.03 * u));
+        float foot = sd_round_box(q - vec2(0.0, 0.6 * u), vec2(0.32 * u, 0.055 * u), vec4(0.03 * u));
+        return min(min(min(ring, knob), min(cap, brim)), min(min(posts, mid), min(base, foot)));
+    }
+    // The shepherd's crook it hangs from: a post at x = px rising from
+    // y = bottom, bending over into an arm that ends past the ring.
+    float sd_crook(vec2 q, float u, float px, float bottom) {
+        vec2 c = vec2(q.x * sign(px), q.y);
+        float x = abs(px);
+        float r = 0.22 * u;
+        float arm = -1.07 * u;
+        float post = sd_segment(c, vec2(x, arm + r), vec2(x, bottom)) - 0.055 * u;
+        vec2 b = c - vec2(x - r, arm + r);
+        float bend = (b.x > 0.0 && b.y < 0.0) ? abs(length(b) - r) - 0.055 * u : 1e5;
+        float bar = sd_segment(c, vec2(-0.1 * u, arm), vec2(x - r, arm)) - 0.05 * u;
+        float tip = sd_circle(c - vec2(-0.13 * u, arm + 0.02 * u), 0.065 * u);
+        float hook = sd_segment(c, vec2(0.0, arm), vec2(0.0, -1.0 * u)) - 0.025 * u;
+        return min(min(post, bend), min(min(bar, tip), hook));
     }
 
     void main() {
@@ -1397,30 +1414,48 @@ let FRAGMENT_SHADER = """
             vec2 e = vec2(0.5, 0.0);
             vec2 g = vec2(sd_tap(p + e.xy, u) - sd_tap(p - e.xy, u), sd_tap(p + e.yx, u) - sd_tap(p - e.yx, u));
             col = vec4(metal(BRASS, d, g, 0.08 * u), fill_aa(d) * v_color.a);
-        } else if (kind == SHAPE_LANTERN) {             // a hanging lantern, dark until lit
-            float u = h.x / 0.55;
+        } else if (kind == SHAPE_LANTERN) {             // a lantern on its crook, dark until lit
+            float u = h.x / 1.3;
             float lit = v_p0.x;
             float flare = v_p0.y;
             float glowk = lit * (0.82 + 0.18 * light.a) + flare;
-            float pane = sd_box(p - vec2(0.0, 0.03 * u), vec2(0.34 * u, 0.39 * u));
+            // Unlit, its panes pulse faintly, waiting.
+            float wait = (1.0 - min(lit, 1.0)) * (0.5 + 0.5 * sin(t * 1.9 + v_p0.z));
+            float pane = sd_box(p, vec2(0.4 * u, 0.4 * u));
             float d = sd_lantern(p, u);
             vec2 e = vec2(0.5, 0.0);
             vec2 g = vec2(sd_lantern(p + e.xy, u) - sd_lantern(p - e.xy, u), sd_lantern(p + e.yx, u) - sd_lantern(p - e.yx, u));
-            // Its light round it, then the panes, the candle and the frame.
+            float dc = sd_crook(p, u, v_p1.x * u, v_p1.y * u);
+            vec2 gc = vec2(sd_crook(p + e.xy, u, v_p1.x * u, v_p1.y * u) - sd_crook(p - e.xy, u, v_p1.x * u, v_p1.y * u),
+                           sd_crook(p + e.yx, u, v_p1.x * u, v_p1.y * u) - sd_crook(p - e.yx, u, v_p1.x * u, v_p1.y * u));
+            // Its light round it: warm when lit, a cold glimmer while it waits.
             float edge = clamp(min(h.x + v_misc.z - abs(p.x), h.y + v_misc.z - abs(p.y)) / max(v_misc.z, 1.0), 0.0, 1.0);
-            float halo = exp(-max(pane, 0.0) / (0.3 * u)) * (1.0 - fill_aa(pane)) * glowk * 0.55 * edge * edge;
-            vec4 c = vec4(vec3(1.0, 0.78, 0.42), clamp(halo, 0.0, 1.0));
-            float inner = clamp(1.0 - length((p - vec2(0.0, 0.15 * u)) / u) * 1.1, 0.0, 1.0);
-            vec3 glass = mix(vec3(0.07, 0.06, 0.10), vec3(1.0, 0.70, 0.30), clamp(glowk * (0.35 + 0.75 * inner), 0.0, 1.0));
-            glass += vec3(0.2) * (1.0 - smoothstep(0.0, 0.035 * u, abs(p.x + 0.2 * u + p.y * 0.25))) * (1.0 - 0.6 * lit);
+            float near = exp(-max(pane, 0.0) / (0.45 * u)) * (1.0 - fill_aa(pane)) * edge * edge;
+            vec3 hc = mix(vec3(0.55, 0.72, 1.0), vec3(1.0, 0.78, 0.42), clamp(glowk, 0.0, 1.0));
+            vec4 c = vec4(hc, clamp(near * (glowk * 0.75 + (0.2 + 0.15 * wait) * (1.0 - min(lit, 1.0))), 0.0, 1.0));
+            // The crook, behind, its post fading out down behind the flask.
+            float fade = 1.0 - smoothstep(v_p1.y * u - 0.6 * u, v_p1.y * u, p.y);
+            c = over(c, vec3(0.06, 0.04, 0.02), fill_aa(dc - 0.05 * u) * 0.7 * fade);
+            c = over(c, metal(BRASS * 0.85, dc, gc, 0.05 * u), fill_aa(dc) * fade);
+            // A dark edge round the lantern so it stands out on any table.
+            c = over(c, vec3(0.06, 0.04, 0.02), fill_aa(d - 0.06 * u) * 0.8);
+            // The panes: dark glass with a cold glint, lit warm from inside.
+            float inner = clamp(1.0 - length((p - vec2(0.0, 0.1 * u)) / u) * 1.1, 0.0, 1.0);
+            vec3 glass = mix(vec3(0.11, 0.12, 0.2) + vec3(0.05, 0.07, 0.14) * wait, vec3(1.0, 0.72, 0.32),
+                             clamp(glowk * (0.4 + 0.8 * inner), 0.0, 1.0));
+            float glint = 1.0 - smoothstep(0.0, 0.05 * u, abs(p.x + 0.18 * u + p.y * 0.35));
+            glass += vec3(0.3, 0.38, 0.5) * glint * (1.0 - 0.7 * min(lit, 1.0)) * step(abs(p.y), 0.36 * u);
             c = over(c, glass, fill_aa(pane));
-            float wax = sd_round_box(p - vec2(0.0, 0.31 * u), vec2(0.065 * u, 0.1 * u), vec4(0.02 * u));
-            c = over(c, vec3(0.92, 0.86, 0.72) * (0.35 + 0.65 * min(glowk, 1.0)), fill_aa(wax));
+            // The candle and its wick.
+            float wax = sd_round_box(p - vec2(0.0, 0.29 * u), vec2(0.085 * u, 0.1 * u), vec4(0.025 * u));
+            c = over(c, vec3(0.92, 0.86, 0.72) * (0.7 + 0.3 * min(glowk, 1.0)), fill_aa(wax));
+            float wick = sd_segment(p, vec2(0.0, 0.2 * u), vec2(0.02 * u, 0.1 * u)) - 0.022 * u;
+            c = over(c, vec3(0.1, 0.07, 0.05), fill_aa(wick));
             if (lit > 0.01) {
-                vec4 fl = flame(p - vec2(0.0, 0.2 * u), 0.075 * u * (1.0 + flare * 0.8), light.a, v_p0.z, t);
+                vec4 fl = flame(p - vec2(0.0, 0.14 * u), 0.12 * u * (1.0 + flare * 0.8), light.a, v_p0.z, t);
                 c = over(c, fl.rgb, fl.a * min(lit, 1.0) * fill_aa(pane));
             }
-            c = over(c, metal(BRASS * 0.9, d, g, 0.05 * u), fill_aa(d));
+            c = over(c, metal(BRASS * 1.05, d, g, 0.06 * u), fill_aa(d));
             col = vec4(c.rgb, c.a * v_color.a);
         } else if (kind == SHAPE_WOOD) {                // wood
             float d = sd_round_box(p, h, vec4(v_p0.x));

@@ -341,8 +341,10 @@ functions.
   and every part stays within its own column: what stands at a flask's foot
   (a brazier's bowl, roots, the hearth) fits in that gap and is drawn over
   the flasks, so every flask's rim and liquid stay in view. A tall flask
-  stands on the table with its last row, its glass tinted with its color. A lantern hangs on the side of its
-  rim that is free. A siphon isn't tipped to pour: it is held with its tap
+  stands on the table with its last row, its glass tinted with its color. A lantern hangs over its
+  rim from a shepherd's crook rising from behind the flask, as large as the space up to the liquid of
+  the flask above allows; unlit, its dark panes glimmer, and lit, it warms its flask and its
+  neighbors. A siphon isn't tipped to pour: it is held with its tap
   over the target and its bottom run drains. The rules don't change, and
   taps hit the drawn flask (the front one where two overlap).
 - **Continuous colors:** adjacent segments of the same color are one band
