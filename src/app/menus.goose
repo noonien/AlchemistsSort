@@ -17,6 +17,7 @@ import .shaders;
 import .palette;
 import .text;
 import .sfx;
+import .goose;
 
 // Each chapter's potion color (Great Work last).
 let CHAPTER_POTION: const i64[7] = [5, 6, 2, 8, 4, 1, 3];
@@ -243,6 +244,7 @@ fn draw_home(out: Inst[>..]&) {
     let center = FLASK_AT;
     let half = FLASK_HALF;
     let sphere = flask_sphere();
+    update_goose();
     glow(out, sphere, v2(230.0, 210.0), 1.0, with_alpha(liquid, 0.16 + 0.04 * look.light.w));
     glow(out, v2(VW * 0.5, table), v2(250.0, 60.0), 1.0, float4 { 1.0, 0.7, 0.35, 0.10 + 0.05 * look.light.w });
     var plank = inst(Shape.Wood, v2(VW * 0.5, table + 9.0), v2(240.0, 10.0), float4 { 0.45, 0.28, 0.16, 1.0 });
@@ -251,7 +253,8 @@ fn draw_home(out: Inst[>..]&) {
     out.push(plank);
     small_flask(out, v2(112.0, table), [1, 1, 1, 1], 15.0);
     small_flask(out, v2(156.0, table), [7, 7, 7], 13.0);
-    small_flask(out, v2(390.0, table), [3, 3], 13.0);
+    let back = goose_vial_shown();
+    if back > 0.0 { small_flask(out, v2(GOOSE_VIAL_X, table), GOOSE_VIAL, GOOSE_VIAL_HX * back); }
     small_flask(out, v2(432.0, table), [9, 9, 9, 9], 15.0);
     // Candles, each with a pool of light about its flame.
     let candles: float4[2] = [float4 { 56.0, 58.0, 0.7, 0.0 }, float4 { 486.0, 44.0, 2.9, 0.0 }];
@@ -260,6 +263,7 @@ fn draw_home(out: Inst[>..]&) {
         glow(out, tip, v2(70.0, 80.0), 1.0, float4 { 1.0, 0.65, 0.3, 0.07 + 0.04 * look.light.w });
         candle(out, v2(c.x, table), c.y, c.z);
     }
+    draw_goose(out);
     // A brass stand over the burner.
     let ring_y = sphere.y + 70.0;
     for side in 2 {
@@ -284,9 +288,17 @@ fn draw_home(out: Inst[>..]&) {
     draw_rune_spark(out);
 
     // Where the player is, and the way in.
+    // While the goose shows off, a line of gilt in its place.
     let ch = chapter_of(save.level);
+    let credit = goose_credit();
     text(0, VW * 0.5, 672.0, str(chapter_info(ch).name, "  ·  Level ", save.level), TextStyle.Small,
-         white(0.75), Align.Center);
+         white(0.75 * (1.0 - credit)), Align.Center);
+    if credit > 0.0 {
+        let line = "Honk!  Brewed in Goose";
+        text(0, VW * 0.5 + 1.0, 674.0, line, TextStyle.Small, float4 { 0.0, 0.0, 0.0, 0.5 * credit }, Align.Center);
+        text(0, VW * 0.5, 672.8, line, TextStyle.Small, float4 { 0.45, 0.25, 0.08, credit }, Align.Center);
+        text(0, VW * 0.5, 672.0, line, TextStyle.Small, float4 { 0.98, 0.82, 0.45, credit }, Align.Center);
+    }
     if button(out, 0, v2(VW * 0.5, 728.0), v2(130.0, 30.0), "Play", ENAMEL_EMERALD, true) {
         open_map();
     }

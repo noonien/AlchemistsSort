@@ -10,25 +10,26 @@ enum Sfx {
     Select, Deselect, Pour, Denied, Complete, Win, Pop, Ice, Reveal, Tool, Lose, Bell, Swish,
     Sizzle, Crack, Chime, Whoosh, Rustle, Chirp, Gong,      // the forces
     Jingle, Clunk, Creak, Drape,                            // keys, locks, doors and curtains
+    Honk,                                                   // the title screen's goose
 }
 
-let ALL_SFX: const Sfx[24] = [Sfx.Select, Sfx.Deselect, Sfx.Pour, Sfx.Denied, Sfx.Complete, Sfx.Win,
+let ALL_SFX: const Sfx[25] = [Sfx.Select, Sfx.Deselect, Sfx.Pour, Sfx.Denied, Sfx.Complete, Sfx.Win,
                               Sfx.Pop, Sfx.Ice, Sfx.Reveal, Sfx.Tool, Sfx.Lose, Sfx.Bell, Sfx.Swish,
                               Sfx.Sizzle, Sfx.Crack, Sfx.Chime, Sfx.Whoosh, Sfx.Rustle, Sfx.Chirp, Sfx.Gong,
-                              Sfx.Jingle, Sfx.Clunk, Sfx.Creak, Sfx.Drape];
+                              Sfx.Jingle, Sfx.Clunk, Sfx.Creak, Sfx.Drape, Sfx.Honk];
 
 fn sfx_index(s: Sfx) -> i64 {
     match s {
         Select => 0, Deselect => 1, Pour => 2, Denied => 3, Complete => 4, Win => 5, Pop => 6,
         Ice => 7, Reveal => 8, Tool => 9, Lose => 10, Bell => 11, Swish => 12, Sizzle => 13, Crack => 14,
         Chime => 15, Whoosh => 16, Rustle => 17, Chirp => 18, Gong => 19, Jingle => 20, Clunk => 21,
-        Creak => 22, Drape => 23,
+        Creak => 22, Drape => 23, Honk => 24,
     }
 }
 
 let RATE = 44100;
 
-var sounds: audio::Sound[24];
+var sounds: audio::Sound[25];
 var sound_ready = false;
 var sound_on = true;
 
@@ -260,9 +261,40 @@ fn init_sounds() {
                 }
                 for k in 4 { tone(pcm, 0.05 + k * 0.07, 1900.0 + k * 140.0, 0.12, 0.035, 35.0); }
             },
+            Honk => honk(pcm),
         }
         make(id, pcm);
     }
+}
+
+// The goose: a reedy, nasal call whose pitch leaps up and sags, its
+// harmonics lifted round two formants, a rasp in it, and a breath before.
+fn honk(pcm: f32[>..]&) {
+    let length = 0.3;
+    let n = (length * RATE) as! i64;
+    var r = rng { 141 };
+    var phase = 0.0;
+    var low = 0.0;
+    var peak = 0.0;
+    for i in n {
+        let t = i as f64 / RATE;
+        let f = (360.0 + 130.0 * sin(PI * clamp(t / length * 1.2, 0.0, 1.0))) * (1.0 + 0.025 * sin(TAU * 29.0 * t));
+        phase += f / RATE;
+        var v = 0.0;
+        for k in 1..11 {
+            let fk = f * k;
+            let x1 = (fk - 950.0) / 380.0;
+            let x2 = (fk - 2300.0) / 550.0;
+            let a = (0.25 + exp(-x1 * x1) + 0.7 * exp(-x2 * x2)) / pow(k as f64, 0.7);
+            v += sin(TAU * phase * k) * a;
+        }
+        let env = min(1.0, t / 0.02) * clamp((length - t) / 0.08, 0.0, 1.0) * (0.82 + 0.18 * sin(TAU * 31.0 * t));
+        low = low + (r.rand_flt() * 2.0 - 1.0 - low) * 0.25;
+        let s = v * env + low * exp(-t * 40.0) * 0.6;
+        peak = max(peak, abs(s));
+        pcm.push(s as f32);
+    }
+    for &v in pcm { v = (v * 0.55 / max(peak, 1e-6)) as f32; }
 }
 
 fn play(id: Sfx) {
