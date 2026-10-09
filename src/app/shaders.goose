@@ -24,8 +24,8 @@ enum Shape {
     Wax,        // a wax seal over the neck; color: the key; p0: softened 0..1, crack 0..1, seed
     Vines,      // a vine wrapped round a flask; p0: grown 0..1, withered 0..1, burnt 0..1, seed
     Tap,        // a siphon's brass tap
-    Lantern,    // a lantern on a crook, 1.3 of its units wide; p0: lit 0..1, flare, seed;
-                // p1: the crook's post across and its foot down, in its units
+    Lantern,    // a lantern on a crook's arm, 1.3 of its units wide; p0: lit 0..1, flare, seed;
+                // p1.x: the crook's post across, in its units
     Wood,       // a wooden plank
     Backdrop,   // the room behind it all; p0: theme, unscaled half width, the table's far edge (0: none)
     Icon,       // toolbar icons; p0.x: which Icon
@@ -48,7 +48,7 @@ enum Shape {
     Furnace,    // an athanor's hearth; p0: 0 the bricks behind or 1 the coals in front, flare
     Bloom,      // a moonpetal's petals; p0: open 0..1, 0 behind the flask or 1 the bud on its neck
     Brazier,    // p0: 0 the flames behind the flask or 1 the bowl in front, flare
-    Roots,      // a creeping vine's roots and seed pod; p0: withered, ripeness 0..1, seed
+    Roots,      // a creeping vine's roots, tendrils and seed pod; p0: withered, ripeness 0..1, seed
     Door,       // a double door in its frame before a few flasks; color: the frame; p0: swung open
                 // 0..1, the key (1..3: its bow engraved on the lock); p1: the lock's metal
     Salamander, // the fire lizard; p0: seed, facing (1 right, -1 left), leap 0..1, glow
@@ -1756,7 +1756,8 @@ let FRAGMENT_SHADER = """
         return min(min(min(ring, knob), min(cap, brim)), min(min(posts, mid), min(base, foot)));
     }
     // The shepherd's crook it hangs from: a post at x = px rising from
-    // y = bottom, bending over into an arm that ends past the ring.
+    // y = bottom, bending over into an arm that ends past the ring (the rest
+    // of the post, down to the ledge, parts.goose draws).
     float sd_crook(vec2 q, float u, float px, float bottom) {
         vec2 c = vec2(q.x * sign(px), q.y);
         float x = abs(px);
@@ -3059,7 +3060,7 @@ let FRAGMENT_SHADER = """
                                  sd_segment(p, vec2(0.0, 0.3 * u), vec2(0.0, h.y - 0.04 * u)) - 0.04 * u);
                 vec4 c = vec4(0.0);
                 c = over(c, IRON * 0.8, fill_aa(legs));
-                vec4 cl = coals(q + vec2(0.0, 0.08 * u), 0.15 * u, 2.0, 0.85 + flare, t);
+                vec4 cl = coals(q + vec2(0.0, 0.08 * u), 0.15 * u, 2.0, 0.8 + 0.15 * sin(t * 1.3) + flare, t);
                 c = over(c, cl.rgb, cl.a * step(abs(q.x), 0.95 * u));
                 float iron = min(bowl, rim);
                 vec3 ic = metal(IRON, iron, normalize(q * vec2(1.0, 5.76) + vec2(0.0, 0.001)), 0.12 * u);
@@ -3195,34 +3196,37 @@ let FRAGMENT_SHADER = """
             col = vec4(c, max(fill_aa(d), tassel) * v_color.a);
     #endif
     #ifdef PROGRAM_GARDEN
-        } else if (kind == SHAPE_LANTERN) {             // a lantern on its crook, dark until lit
+        } else if (kind == SHAPE_LANTERN) {             // a lantern on its crook's arm, dark until lit
             float u = h.x / 1.3;
             float lit = v_p0.x;
             float flare = v_p0.y;
             float glowk = lit * (0.82 + 0.18 * light.a) + flare;
             // Unlit, its panes pulse faintly, waiting.
             float wait = (1.0 - min(lit, 1.0)) * (0.5 + 0.5 * sin(t * 1.9 + v_p0.z));
+            // The crook stays put; the lantern swings a little on its hook.
+            float px = v_p1.x * u;
+            float dc = sd_crook(p, u, px, -0.8 * u);
+            vec2 e = vec2(0.5, 0.0);
+            vec2 gc = vec2(sd_crook(p + e.xy, u, px, -0.8 * u) - sd_crook(p - e.xy, u, px, -0.8 * u),
+                           sd_crook(p + e.yx, u, px, -0.8 * u) - sd_crook(p - e.yx, u, px, -0.8 * u));
+            vec2 pivot = vec2(0.0, -0.93 * u);
+            p = rot(0.09 * sin(t * 1.15 + v_p0.z) + 0.025 * sin(t * 2.7 + v_p0.z * 1.3)) * (p - pivot) + pivot;
             float pane = sd_box(p, vec2(0.4 * u, 0.4 * u));
             float d = sd_lantern(p, u);
-            vec2 e = vec2(0.5, 0.0);
             vec2 g = vec2(sd_lantern(p + e.xy, u) - sd_lantern(p - e.xy, u), sd_lantern(p + e.yx, u) - sd_lantern(p - e.yx, u));
-            float dc = sd_crook(p, u, v_p1.x * u, v_p1.y * u);
-            vec2 gc = vec2(sd_crook(p + e.xy, u, v_p1.x * u, v_p1.y * u) - sd_crook(p - e.xy, u, v_p1.x * u, v_p1.y * u),
-                           sd_crook(p + e.yx, u, v_p1.x * u, v_p1.y * u) - sd_crook(p - e.yx, u, v_p1.x * u, v_p1.y * u));
             // Its light round it: warm when lit, a cold glimmer while it waits.
             float edge = clamp(min(h.x + v_misc.z - abs(p.x), h.y + v_misc.z - abs(p.y)) / max(v_misc.z, 1.0), 0.0, 1.0);
             float near = exp(-max(pane, 0.0) / (0.45 * u)) * (1.0 - fill_aa(pane)) * edge * edge;
             vec3 hc = mix(vec3(0.55, 0.72, 1.0), vec3(1.0, 0.78, 0.42), clamp(glowk, 0.0, 1.0));
-            vec4 c = vec4(hc, clamp(near * (glowk * 0.75 + (0.2 + 0.15 * wait) * (1.0 - min(lit, 1.0))), 0.0, 1.0));
-            // The crook, behind, its post fading out down behind the flask.
-            float fade = 1.0 - smoothstep(v_p1.y * u - 0.6 * u, v_p1.y * u, p.y);
-            c = over(c, vec3(0.06, 0.04, 0.02), fill_aa(dc - 0.05 * u) * 0.7 * fade);
-            c = over(c, metal(BRASS * 0.85, dc, gc, 0.05 * u), fill_aa(dc) * fade);
+            vec4 c = vec4(hc, clamp(near * (glowk * 0.75 + (0.25 + 0.2 * wait) * (1.0 - min(lit, 1.0))), 0.0, 1.0));
+            // The crook's bend and arm, with a dark edge.
+            c = over(c, vec3(0.06, 0.04, 0.02), fill_aa(dc - 0.05 * u) * 0.75);
+            c = over(c, metal(BRASS * 0.85, dc, gc, 0.05 * u), fill_aa(dc));
             // A dark edge round the lantern so it stands out on any table.
             c = over(c, vec3(0.06, 0.04, 0.02), fill_aa(d - 0.06 * u) * 0.8);
             // The panes: dark glass with a cold glint, lit warm from inside.
             float inner = clamp(1.0 - length((p - vec2(0.0, 0.1 * u)) / u) * 1.1, 0.0, 1.0);
-            vec3 glass = mix(vec3(0.11, 0.12, 0.2) + vec3(0.05, 0.07, 0.14) * wait, vec3(1.0, 0.72, 0.32),
+            vec3 glass = mix(vec3(0.11, 0.12, 0.2) + vec3(0.07, 0.1, 0.2) * wait, vec3(1.0, 0.72, 0.32),
                              clamp(glowk * (0.4 + 0.8 * inner), 0.0, 1.0));
             float glint = 1.0 - smoothstep(0.0, 0.05 * u, abs(p.x + 0.18 * u + p.y * 0.35));
             glass += vec3(0.3, 0.38, 0.5) * glint * (1.0 - 0.7 * min(lit, 1.0)) * step(abs(p.y), 0.36 * u);
@@ -3233,7 +3237,7 @@ let FRAGMENT_SHADER = """
             float wick = sd_segment(p, vec2(0.0, 0.2 * u), vec2(0.02 * u, 0.1 * u)) - 0.022 * u;
             c = over(c, vec3(0.1, 0.07, 0.05), fill_aa(wick));
             if (lit > 0.01) {
-                vec4 fl = flame(p - vec2(0.0, 0.14 * u), 0.12 * u * (1.0 + flare * 0.8), light.a, v_p0.z, t);
+                vec4 fl = flame(p - vec2(0.0, 0.16 * u), 0.16 * u * (1.0 + flare * 0.8), light.a, v_p0.z, t);
                 c = over(c, fl.rgb, fl.a * min(lit, 1.0) * fill_aa(pane));
             }
             c = over(c, metal(BRASS * 1.05, d, g, 0.06 * u), fill_aa(d));
@@ -3258,7 +3262,7 @@ let FRAGMENT_SHADER = """
             float ak = k * span;
             float pip = length(p - 0.64 * r * vec2(sin(ak), -cos(ak))) - r * 0.13;
             bool on = mod(k, total) < left - 0.5;
-            float warn = left < 1.5 ? 0.5 + 0.5 * sin(t * 6.0) : 0.0;
+            float warn = left < 1.5 ? 0.5 + 0.5 * sin(t * 3.0) : 0.0;
             vec3 pc = on ? mix(vec3(0.92, 0.5, 0.1), vec3(1.0, 0.86, 0.45), warn) : vec3(0.68, 0.6, 0.48);
             c = mix(c, pc, fill_aa(pip) * (on ? 1.0 : 0.6));
             float rim = abs(L - r * 0.9) - r * 0.11;
@@ -3316,11 +3320,12 @@ let FRAGMENT_SHADER = """
             vec3 cc = mix(c.rgb, vec3(0.08, 0.05, 0.03), smoothstep(fr + 0.12, fr - 0.06, v) * on);
             cc = mix(cc, vec3(1.0, 0.55, 0.15), rim);
             col = vec4(cc, c.a * keep * (1.0 - burnt) * v_color.a);
-        } else if (kind == SHAPE_ROOTS) {               // a creeping vine's roots and seed pod
+        } else if (kind == SHAPE_ROOTS) {               // a creeping vine's roots, tendrils and seed pod
             float u = h.x / 1.45;
             float wither = v_p0.x;
             float ripe = v_p0.y;
             float seed = v_p0.z;
+            float alive = 1.0 - wither;
             vec2 q = p + (vec2(noise(p / u * 6.0 + seed), noise(p / u * 6.0 + 4.0)) - 0.5) * 0.08 * u;
             vec2 A[5] = vec2[5](vec2(-0.3, -0.12), vec2(0.3, -0.12), vec2(-0.15, -0.05), vec2(0.18, -0.05), vec2(-0.55, -0.25));
             vec2 B[5] = vec2[5](vec2(-0.8, -0.18), vec2(0.85, -0.12), vec2(-0.45, 0.25), vec2(0.45, 0.22), vec2(-1.0, -0.4));
@@ -3329,24 +3334,53 @@ let FRAGMENT_SHADER = """
             float along = 0.0;
             float dc = 0.0;
             for (int k = 0; k < 5; k++) {
-                vec2 bz = sd_bezier(q, A[k] * u, B[k] * u, C[k] * u);
+                // Each root writhes slowly, its tip most.
+                float fk = float(k);
+                vec2 wb = vec2(sin(t * 0.8 + fk * 1.9), cos(t * 0.7 + fk * 2.7)) * 0.06 * alive;
+                vec2 wc = vec2(sin(t * 0.6 + fk * 2.3), sin(t * 0.9 + fk)) * 0.09 * alive;
+                vec2 bz = sd_bezier(q, A[k] * u, (B[k] + wb) * u, (C[k] + wc) * u);
                 float w = u * (0.12 - 0.09 * bz.y);
                 if (bz.x - w < d) { d = bz.x - w; along = bz.y; dc = clamp(1.0 - bz.x / w, 0.0, 1.0); }
             }
             vec3 bark = mix(vec3(0.52, 0.35, 0.2), vec3(0.42, 0.40, 0.37), wither);
-            vec3 c = bark * (0.5 + 0.6 * dc) * (0.85 + 0.2 * sin(along * 30.0 + q.x * 0.5));
+            vec3 green = vec3(0.36, 0.66, 0.24);
+            vec3 c = mix(bark, green, smoothstep(0.35, 1.0, along) * alive);
+            c *= (0.5 + 0.6 * dc) * (0.85 + 0.2 * sin(along * 30.0 + q.x * 0.5));
             float keep = step(smoothstep(0.4, 1.0, wither) * 1.05, noise(p / u * 3.0 + seed * 2.0));
             vec4 res = vec4(c, fill_aa(d) * keep);
-            // The seed pod, swelling and paling as the next spread nears.
-            vec2 pq = p - vec2(0.0, 0.02 * u);
+            // Two tendrils climbing out either side of the foot, reaching
+            // higher as the next spread nears, a leaf at each tip swaying.
+            for (int k = 0; k < 2; k++) {
+                float s = k == 0 ? -1.0 : 1.0;
+                float sway = sin(t * 1.1 + s * 1.7 + seed * 3.0) * alive;
+                float reach = 0.85 + 0.45 * ripe;
+                vec2 a0 = vec2(s * 0.5, -0.12) * u;
+                vec2 a1 = vec2(s * (1.25 + 0.05 * sway), -0.35 * reach) * u;
+                vec2 a2 = vec2(s * (1.15 + 0.1 * sway), -reach - 0.06 * sway) * u;
+                vec2 bz = sd_bezier(p, a0, a1, a2);
+                float td = bz.x - u * (0.075 - 0.04 * bz.y);
+                vec3 tc = mix(vec3(0.26, 0.5, 0.18), bark, wither) * (0.75 + 0.35 * clamp(1.0 - bz.x / (0.05 * u), 0.0, 1.0));
+                res = over(res, tc, fill_aa(td) * keep);
+                vec2 dir = normalize(a2 - a1);
+                vec2 lq = rot(s * (0.5 + 0.25 * sway) - atan(dir.x, -dir.y)) * (p - a2);
+                float leaf = sd_petal(lq, 0.5 * u * (0.8 + 0.2 * alive), 0.18 * u);
+                vec3 lc = mix(vec3(0.3, 0.62, 0.22), vec3(0.55, 0.38, 0.16), wither) * (lq.x > 0.0 ? 1.0 : 0.78);
+                res = over(res, lc, fill_aa(leaf) * keep);
+            }
+            // The seed pod, breathing, swelling and paling as the next spread
+            // nears, with a green glow round it that grows with it; on its
+            // last pour the glow beats.
+            float last = ripe > 0.99 ? 1.0 : 0.0;
+            float beat = 0.5 + 0.5 * sin(t * (1.6 + 1.4 * last) + seed);
+            vec2 pq = (p - vec2(0.0, 0.02 * u)) / (1.0 + (0.03 + 0.05 * ripe) * beat * alive);
             float pod = (length(pq / vec2(0.36, 0.28)) - u) * 0.28;
             vec3 pc = mix(vec3(0.22, 0.45, 0.16), vec3(0.72, 0.78, 0.25), ripe) * (0.7 + 0.4 * smoothstep(0.25 * u, -0.25 * u, pq.y + pq.x * 0.5));
             pc = mix(pc, pc * 0.7, fill_aa(abs(abs(pq.x) - 0.16 * u) - 0.6) * 0.6);
             pc = mix(pc, bark, wither);
-            float pulse = ripe > 0.99 ? 0.5 + 0.5 * sin(t * 5.0) : 0.0;
-            float sprout = min(sd_petal(rot(0.8) * (pq + vec2(0.06 * u, 0.24 * u)), 0.3 * u, 0.1 * u),
-                               sd_petal(rot(-0.7) * (pq + vec2(-0.06 * u, 0.24 * u)), 0.26 * u, 0.09 * u));
-            res = over(res, vec3(0.75, 0.95, 0.4), exp(-max(pod, 0.0) / (0.12 * u)) * pulse * 0.6 * (1.0 - fill_aa(pod)));
+            float halo = (0.25 + 0.3 * ripe + 0.35 * last) * (0.6 + 0.4 * beat) * alive;
+            float sprout = min(sd_petal(rot(0.8 + 0.12 * sin(t * 1.3)) * (pq + vec2(0.06 * u, 0.24 * u)), 0.3 * u, 0.1 * u),
+                               sd_petal(rot(-0.7 + 0.12 * sin(t * 1.5 + 1.0)) * (pq + vec2(-0.06 * u, 0.24 * u)), 0.26 * u, 0.09 * u));
+            res = over(res, vec3(0.6, 0.95, 0.35), exp(-max(pod, 0.0) / (0.35 * u)) * halo * (1.0 - fill_aa(pod)) * (1.0 - res.a));
             res = over(res, mix(vec3(0.25, 0.55, 0.2), bark, wither), fill_aa(sprout) * keep);
             res = over(res, pc, fill_aa(pod) * keep);
             col = vec4(res.rgb, res.a * v_color.a);

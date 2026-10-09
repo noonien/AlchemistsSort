@@ -222,10 +222,7 @@ fn draw_entry_picture(out: Inst[>..]&, e: Entry, foot: float2) {
     let i = entry_flask(e);
     if i < 0 || i >= shown.count { return; }
     let b = picture_flask(shown.bottles[i], e.feature);
-    // A lantern stands over its flask, under the rule above: the flask is
-    // smaller to leave it room.
-    var hx: f32 = min(14.0, 84.0 / (b.cap * SEGMENT + FLASK_EXTRA));
-    if b.fixture == Fixture.Lantern { hx = min(hx, 76.0 / (b.cap * SEGMENT + FLASK_EXTRA + 1.5)); }
+    let hx: f32 = min(14.0, 84.0 / (b.cap * SEGMENT + FLASK_EXTRA));
     parts_layer = 1;
     let half = bottle_half(hx, b.cap);
     var at_x = foot.x;
@@ -234,8 +231,7 @@ fn draw_entry_picture(out: Inst[>..]&, e: Entry, foot: float2) {
         draw_door(out, v2(foot.x + 2.0, foot.y - 60.0), v2(foot.x + 41.0, foot.y), b.key_color, 0.0, 0.0);
         at_x = foot.x - 14.0;
     }
-    var a = flask_anchors(v2(at_x, foot.y - half.y), half, 0.0, 1.0);
-    a.room = (at(a, a.rim).y - (foot.y - 76.0)) / hx;
+    let a = flask_anchors(v2(at_x, foot.y - half.y), half, 0.0, 1.0);
     draw_stand_back(out, i, b, a, StandLook {});
     draw_flask(out, i, b, a.center, a.half, 0.0, b.n, 0.0, 0.0, gold(1.0), true);
     draw_stand_front(out, i, b, a, StandLook {});

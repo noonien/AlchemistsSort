@@ -324,29 +324,38 @@ fn layout(board: Board) {
 
 fn foot_y(i: i64) -> f32 { slots[i].pos.y + slots[i].half.y }
 
-// The side a flask's lantern's crook rises on: the right, unless only the left of
-// its top row is free.
-fn hang_side(i: i64) -> f32 {
-    if i < 0 || i >= shown.count || shown.rows == 0 { return 1.0; }
+// The side a flask's lantern hangs on, beside its neck in the gap to the
+// next column, and whether that side is open (no flask there, or one set
+// lower down, so it can be larger). Each side costs what already stands in its gap: a neighbor, more
+// for one with its own lantern, an hourglass's posts and dial or a siphon's
+// tap reaching across, a shut door, or a cloth or vine wider than its glass;
+// past the screen's edge is out. The right wins a tie.
+fn hang_side(i: i64) -> f32, bool {
+    if i < 0 || i >= shown.count || shown.rows == 0 { return 1.0, true; }
     let r: i64 = shown.row[i];
     let c: i64 = shown.col[i];
-    let right = c + 1 < shown.cols && flask_at(shown, r, c + 1) >= 0;
-    let left = c > 0 && flask_at(shown, r, c - 1) >= 0;
-    if right && !left { -1.0 } else { 1.0 }
-}
-
-// The free space over a flask's rim, in half widths from the rim's middle:
-// up to the liquid of the flask above it in its column, or to the top of
-// the board area.
-fn lantern_room(i: i64) -> f32 {
-    if i < 0 || i >= shown.count { return 2.0; }
-    let hx = slots[i].half.x;
-    let rim = slots[i].pos.y - slots[i].half.y + hx * FLASK_E;
-    var limit: f32 = GRID_TOP - 36.0;
-    for j in shown.count {
-        if j != i && shown.col[j] == shown.col[i] && foot_y(j) < rim { limit = max(limit, foot_y(j) - hx * 0.25); }
+    fn cost(s: i64) -> f32 {
+        // Off the screen's edge it won't do at all.
+        let reach = slots[i].pos.x + s * slots[i].half.x * 1.85;
+        if reach < 4.0 || reach > VW - 4.0 { return 9.0; }
+        let j = flask_at(shown, r, c + s);
+        if j < 0 { return 0.0; }
+        let n = shown.bottles[j];
+        var k: f32 = 1.0;
+        if n.fixture == Fixture.Lantern { k += 3.0; }
+        if n.body == Body.Hourglass { k += 2.0; }
+        if n.body == Body.Siphon && s < 0 { k += 0.5; }
+        if n.behind { k += 1.5; }
+        if n.cover == Cover.Shroud || n.cover == Cover.Curtain || n.cover == Cover.Vine { k += 0.5; }
+        k
     }
-    (rim - limit) / hx
+    let me = shown.bottles[i];
+    let left = cost(-1) + (if c == 0 { -0.1 } else { 0.0 });
+    let right = cost(1) + (if me.body == Body.Siphon { 0.5 } else { 0.0 }) + (if c + 1 >= shown.cols { -0.1 } else { 0.0 });
+    let s = if left < right { -1 } else { 1 };
+    let j = flask_at(shown, r, c + s);
+    let lower = j >= 0 && slots[j].pos.y - slots[j].half.y > slots[i].pos.y - slots[i].half.y + slots[i].half.x;
+    return s, j < 0 || lower;
 }
 
 // Whether a flask is held up: picked to pour, or waiting to fly; not while
@@ -972,6 +981,7 @@ fn draw_flask_drained(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: flo
     flask_glass(out, i, b, pos, half, angle, 1.0, glow_amount, glow_color);
     draw_body(out, i, b, a, open, save.color_safe);
     if !overlays || angle != 0.0 { return; }
+    if i >= 0 { draw_tap_drip(out, i, b, a, save.color_safe); }
 
     // Color-blind symbols on what is in view, and "?" on murk in that mode.
     if !shrouded && !sealed && save.color_safe {
@@ -1044,7 +1054,7 @@ fn draw_board(out: Inst[>..]&) {
             hi = v2(max(hi.x, slots[j].pos.x + slots[j].half.x), max(hi.y, slots[j].pos.y + slots[j].half.y));
         }
         let h = slots[i].half;
-        let f = 0.03 * look.light.w;
+        let f = 0.03 * look.light.w + 0.06 * lantern_breath(i);
         glow(out, (lo + hi) * v2(0.5, 0.5), (hi - lo) * v2(0.5, 0.5) + v2(h.x * 1.5, h.x * 1.5),
              1.0, float4 { 1.0, 0.8, 0.45, 0.09 + f });
         // A warm wash behind each flask it reaches.
