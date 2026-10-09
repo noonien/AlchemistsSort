@@ -17,10 +17,10 @@
       forAll = f: nixpkgs.lib.genAttrs systems (system: f system nixpkgs.legacyPackages.${system});
 
       # What the builds read: a change anywhere else (the README, CI) rebuilds
-      # nothing.
+      # nothing. samples/ holds the recorded notes the music is played on.
       src = nixpkgs.lib.fileset.toSource {
         root = ./.;
-        fileset = nixpkgs.lib.fileset.unions [ ./src ./web ];
+        fileset = nixpkgs.lib.fileset.unions [ ./src ./web ./samples ];
       };
     in {
       packages = forAll (system: pkgs:
@@ -52,13 +52,15 @@
         tests = pkgs.callPackage ./nix/tests.nix { goose = self.packages.${system}.goose-compiler; inherit src; };
       });
 
-      # `nix develop`, then `goose src/main.goose` runs the game from source
-      # (in-process, no build step) and `goose src/tests.goose` the tests.
+      # `nix develop`, then `goose --include src/c/ogg.h src/main.goose` runs the game from source
+      # (in-process, no build step) and `goose --include src/c/ogg.h src/tests.goose` the tests
+      # (src/c/ogg.h brings in the Ogg Vorbis decoder the music needs).
       devShells = forAll (system: pkgs: {
         default = pkgs.mkShell {
           packages = [ self.packages.${system}.goose ];
           shellHook = self.packages.${system}.goose.runtimeEnv + ''
             export ALCHEMIST_SORT_DATA="$PWD/data"
+            export ALCHEMIST_SORT_SAMPLES="$PWD/samples"
             export ALCHEMIST_SORT_FONTS="${self.packages.${system}.game}/share/alchemists-sort/fonts"
           '';
         };

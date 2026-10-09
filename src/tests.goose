@@ -14,6 +14,8 @@ import core.explain;
 import core.difficulty;
 import core.variation;
 import app.shaders;
+import app.bank;
+import app.voices;
 import app.tunes;
 
 var failures = 0;
@@ -1667,25 +1669,52 @@ fn test_explain() {
     }
 }
 
+var test_pcm: f32[LOOP_SAMPLES];
+
 fn test_music() {
     test("music");
+    check(load_bank("samples"), "every instrument's recordings are read");
+    for z in bank_zones {
+        check(z.len > 0 && z.rate >= 8000.0 && z.midi > 24.0 && z.midi < 100.0 && z.loop_at + z.loop_len <= z.len,
+              str("a recorded note is whole: ", z.inst, " ", z.midi));
+        let held = z.inst != HARP && z.inst != DULCIMER;
+        check(held == (z.loop_len > 0), str("held notes loop and plucked ones ring out: ", z.inst, " ", z.midi));
+    }
+    for inst in SAMPLED { check(has_samples(inst), str("instrument ", inst, " has notes")); }
     var notes: Note[>..] = [];
-    var pcm: f32[>..] = [];
+    for room in MUSIC_ROOMS {
+        let errors = score_errors(room);
+        check(errors.len == 0, str(tune_name(room), "'s score: ", errors));
+        let job = tune_begin(room, 0, notes);
+        check(job.period > 60 * MUSIC_RATE && 2 * job.period <= LOOP_SAMPLES, str(tune_name(room), " lasts a minute or two"));
+        var stray: u8[>..] = [];
+        for n in notes {
+            let far = n.inst < SAMPLED && abs(bank_zones[zone_for(n.inst, n.midi)].midi - n.midi) > 7.0;
+            if n.start < 0 || n.start >= job.period || n.len <= 0 || n.len > job.warm || far {
+                format(stray, " instrument ", n.inst, " note ", n.midi, " at ", n.start, " for ", n.len, ";");
+            }
+        }
+        check(notes.len > 100 && stray.len == 0, str(tune_name(room), "'s notes are in the loop and in their instruments' ranges:", stray));
+    }
     for room in [0, 5] {
-        var job = tune_begin(room, 4, notes, pcm);
-        while !tune_step(job, notes, pcm, 1.0) {}
-        check(pcm.len == job.period && notes.len > 0, "a whole loop is made");
+        var job = tune_begin(room, 4, notes);
+        while !tune_step(job, notes, test_pcm, 1.0) {}
+        let pcm = test_pcm[..job.filled];
+        check(pcm.len == 2 * job.period && notes.len > 0, "a whole loop is made, left and right");
         var peak = 0.0;
-        var step = 0.0;
+        var step: f64[2] = [0.0; 2];
         for v, i in pcm {
             peak = max(peak, abs(v as f64));
-            if i > 0 { step = max(step, abs(v - pcm[i - 1])); }
+            if i > 1 { step[i % 2] = max(step[i % 2], abs(v - pcm[i - 2]) as f64); }
         }
-        let last = pcm.len - 1;
-        let wrap = abs(pcm[0] - pcm[last]) as f64;
-        let bend = abs((pcm[0] - pcm[last]) - (pcm[last] - pcm[last - 1])) as f64;
         check(peak > 0.05 && peak < 0.9, str("the peak is under 0.9: ", peak));
-        check(wrap <= step && bend < 0.01, str("the loop point is smooth: ", wrap, " ", bend));
+        for c in 2 {
+            // The last sample runs on into the first as any sample into the next.
+            let last = pcm.len - 2 + c;
+            let wrap = abs(pcm[c] - pcm[last]) as f64;
+            let bend = abs((pcm[c] - pcm[last]) - (pcm[last] - pcm[last - 2])) as f64;
+            check(wrap <= step[c] && bend < 0.01, str("the loop point is smooth: ", wrap, " ", bend));
+        }
     }
     check(music_room(95, 6, 91) == 0 && music_room(106, 6, 91) == 1 && music_room(20, 1, 16) == 1, "rooms for the music");
 }

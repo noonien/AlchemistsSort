@@ -8,7 +8,7 @@ stdenv.mkDerivation {
   nativeBuildInputs = [ goose ];
   buildPhase = ''
     goose --emit-runtime runtime.c
-    goose -O2 -o tests.c src/tests.goose
+    goose -O2 --include src/c/ogg.h -o tests.c src/tests.goose
     $CC -O2 tests.c runtime.c -o tests -lm -pthread
     ./tests
   '';

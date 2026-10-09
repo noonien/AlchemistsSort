@@ -1,0 +1,44 @@
+# The recorded notes: instrument, file (.ogg), the MIDI pitch it sounds at,
+# and the frames its loop starts at and ends after (0 0: it rings out).
+# Written by prepare.py.
+harp harp_c2 36.149 0 0
+harp harp_fs2 42.059 0 0
+harp harp_c3 47.955 0 0
+harp harp_fs3 54.005 0 0
+harp harp_c4 59.979 0 0
+harp harp_fs4 65.934 0 0
+harp harp_c5 71.974 0 0
+harp harp_fs5 78.031 0 0
+harp harp_c6 83.987 0 0
+dulcimer dulcimer_d3 50.001 0 0
+dulcimer dulcimer_a3 56.981 0 0
+dulcimer dulcimer_e4 63.986 0 0
+dulcimer dulcimer_b4 70.985 0 0
+dulcimer dulcimer_fs5 77.974 0 0
+cello cello_c2 35.986 29996 57329
+cello cello_g2 42.987 20983 57329
+cello cello_d3 50.077 22169 57329
+cello cello_a3 56.981 22662 57329
+cello cello_e4 63.943 25565 57329
+cello cello_b4 70.988 29108 57329
+strings strings_g3 54.979 26833 62399
+strings strings_d4 62.004 26093 62399
+strings strings_a4 68.957 22807 62399
+strings strings_e5 76.025 23000 62399
+strings strings_b5 82.982 30657 62399
+violin violin_a3 57.017 30817 62399
+violin violin_e4 64.048 29715 62399
+violin violin_a4 68.971 30540 62399
+violin violin_e5 76.055 28664 62399
+violin violin_a5 80.976 27329 62399
+violin violin_e6 88.146 29206 59999
+psaltery psaltery_as4 70.018 32203 67199
+psaltery psaltery_e5 75.996 28180 67199
+psaltery psaltery_as5 82.015 31023 62399
+psaltery psaltery_e6 88.017 28907 62399
+glass glass_ds5 75.300 30355 66149
+glass glass_fs5 77.893 31325 66149
+glass glass_d6 86.056 31441 66149
+flute flute_a4 69.017 28868 62399
+flute flute_e5 75.996 30646 62399
+flute flute_a5 80.999 25556 59999

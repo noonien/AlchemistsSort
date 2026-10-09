@@ -1,6 +1,6 @@
 # Alchemist's Sort, compiled to native code: Goose writes C, the C compiler
-# builds it against the gfx, ui and audio layers. The level files and fonts
-# go in share/, and the wrapper points the game at them.
+# builds it against the gfx, ui and audio layers. The fonts and the music's
+# instrument samples go in share/, and the wrapper points the game at them.
 { lib, stdenv, goose, src, cinzel, makeWrapper }:
 
 let
@@ -16,7 +16,7 @@ stdenv.mkDerivation {
   buildPhase = ''
     runHook preBuild
     goose --emit-runtime runtime.c
-    goose -O2 -o game.c src/main.goose
+    goose -O2 --include src/c/ogg.h -o game.c src/main.goose
     $CC -O2 -c runtime.c -o runtime.o
     $CC -O2 game.c runtime.o -o alchemists-sort \
       @$(goose --ui-link cc) @$(goose --gfx-link cc) @$(goose --audio-link cc) -lm -pthread
@@ -25,7 +25,8 @@ stdenv.mkDerivation {
 
   installPhase = ''
     runHook preInstall
-    mkdir -p $out/bin $out/libexec $out/${data}/fonts
+    mkdir -p $out/bin $out/libexec $out/${data}/fonts $out/${data}/samples
+    cp samples/*.ogg samples/bank.txt $out/${data}/samples/
     cp alchemists-sort $out/libexec/
     cp ${cinzel}/share/fonts/truetype/Cinzel-Bold.ttf $out/${data}/fonts/
     cp ${goose.source}/third_party/nuklear/extra_font/Raleway-Bold.ttf $out/${data}/fonts/
