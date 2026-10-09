@@ -68,28 +68,32 @@ fn draw_scene(out: Inst[>..]&, theme: i64) {
 }
 
 // What floats in each room's air, moved by time alone so a slow frame rate
-// only makes it step.
+// only makes it step. The motes stand at three depths: the far ones small,
+// sharp and slow, the near ones larger, softer and fainter, sliding past
+// quicker, as if out of focus in front of the work.
 fn draw_motes(out: Inst[>..]&, theme: i64) {
     let t = now;
-    for k in 16 {
+    for k in 24 {
+        let depth = k % 3;
+        let z: f64 = 0.6 + depth * 0.45;         // parallax: speed and size grow with nearness
         let fx = (k * 0.618034) % 1.0;
-        let speed = 6.0 + k % 5;
+        let speed = (6.0 + k % 5) * z;
         let span: f64 = VH + 40.0;
         var x: f64 = fx * VW;
         var y = 0.0;
         var size: f32 = 2.5;
         var c = float4 { 0.98, 0.82, 0.45, 0.25 };
         match theme {
-            1 => {      // snow, falling
-                x += sin(t * 0.5 + k) * 24.0;
+            1 => {      // snow, falling and drifting
+                x += sin(t * 0.5 * z + k) * 24.0 * z;
                 y = (t * (speed * 2.0) + k * 97.0) % span - 20.0;
-                size = 2.0 + (k % 3);
+                size = 1.6 + (k % 2);
                 c = float4 { 0.85, 0.93, 1.0, 0.45 };
             },
-            2 => {      // sparks from the furnace, rising fast
+            2 => {      // sparks from the kiln, rising fast and dying
                 x += sin(t * 1.3 + k * 2.0) * 14.0;
                 y = VH - (t * (speed * 7.0) + k * 131.0) % span;
-                size = 1.6;
+                size = 1.4;
                 c = float4 { 1.0, 0.6, 0.2, 0.7 * clamp(y / VH, 0.0, 1.0) as f32 };
             },
             3 => {      // starlight dust, slow and twinkling
@@ -97,26 +101,63 @@ fn draw_motes(out: Inst[>..]&, theme: i64) {
                 y = VH - (t * speed * 0.6 + k * 97.0) % span;
                 c = float4 { 0.8, 0.85, 1.0, (0.12 + 0.2 * (0.5 + 0.5 * sin(t * 2.0 + k * 1.7))) as f32 };
             },
-            4 => {      // fireflies wandering
-                x = fx * VW + sin(t * 0.31 + k * 1.9) * 50.0;
-                y = 200.0 + ((k * 0.381966) % 1.0) * 700.0 + sin(t * 0.43 + k) * 40.0;
-                size = 3.0;
-                let pulse = 0.5 + 0.5 * sin(t * 1.7 + k * 2.3);
-                c = float4 { 0.8, 1.0, 0.45, (0.1 + 0.5 * pulse * pulse) as f32 };
+            4 => {      // fireflies wandering, each its own slow blink
+                x = fx * VW + sin(t * 0.31 * z + k * 1.9) * 50.0 + sin(t * 0.13 + k) * 30.0;
+                y = 200.0 + ((k * 0.381966) % 1.0) * 700.0 + sin(t * 0.43 + k) * 40.0 * z;
+                size = 2.6;
+                let pulse = 0.5 + 0.5 * sin(t * (1.1 + (k % 4) * 0.3) + k * 2.3);
+                c = float4 { 0.8, 1.0, 0.45, (0.06 + 0.5 * pulse * pulse * pulse) as f32 };
             },
             5 => {      // embers rising
                 x += sin(t * 0.7 + k) * 22.0;
                 y = VH - (t * (speed * 3.0) + k * 97.0) % span;
-                size = 2.2;
+                size = 2.0;
                 c = float4 { 1.0, 0.4, 0.15, 0.55 * clamp(y / VH + 0.2, 0.0, 1.0) as f32 };
             },
-            _ => {      // dust in the candlelight
+            _ => {      // dust turning in the candlelight, brighter crossing the window's shaft
                 x += sin(t * 0.2 + k) * 30.0;
-                y = VH - (t * speed + k * 97.0) % span;
+                y = VH - (t * speed * 0.7 + k * 97.0) % span;
+                let across = abs((x - 90.0) - (y + 220.0) * 0.3) / (80.0 + (y + 220.0) * 0.13);
+                c.w = (0.12 + 0.3 * clamp(1.0 - across, 0.0, 1.0)) as f32;
             },
         }
+        let p = float2 { x as f32, y as f32 };
+        if depth == 2 {
+            // Out of focus: a wide, faint disc.
+            glow(out, p, float2 { size * 3.2, size * 3.2 }, 1.0, with_alpha(c, 0.32));
+        } else {
+            let s = size * (0.7 + depth * 0.35) as f32;
+            glow(out, p, float2 { s, s }, 0.9, with_alpha(c, (0.7 + depth * 0.3) as f32));
+            if theme == 4 || theme == 2 { glow(out, p, float2 { s * 4.0, s * 4.0 }, 1.0, with_alpha(c, 0.22)); }
+        }
+    }
+    if theme == 5 { draw_ember_burst(out, t); }
+}
+
+// A number 0..1 that looks random, from x.
+fn hash1(x: f64) -> f64 {
+    let s = sin(x * 12.9898 + 78.233) * 43758.5453;
+    s - floor(s)
+}
+
+// Every 19 seconds the athanor's coals settle and throw up a flurry of
+// embers, the room's glow flaring with them in the shader (ember_burst
+// there too): they fly up from below, slow, and wink out.
+fn draw_ember_burst(out: Inst[>..]&, t: f64) {
+    let n = floor(t / 19.0);
+    let u = t - n * 19.0;
+    if u > 4.0 { return; }
+    for j in 14 {
+        let h = hash1(n * 31.0 + j);
+        let h2 = hash1(n * 17.0 + j * 3.1);
+        let rise = u * (160.0 + h2 * 220.0) * (1.0 - u * 0.12);
+        let x = VW * 0.5 + (h - 0.5) * VW * 0.9 + sin(u * 2.0 + j) * 18.0 * u;
+        let y = VH + 10.0 - rise;
+        let a = clamp(1.0 - u / (2.2 + h2 * 1.8), 0.0, 1.0) * clamp(u * 6.0, 0.0, 1.0);
+        let size = (2.0 + h2 * 2.2) as f32;
+        let c = float4 { 1.0, (0.45 + 0.3 * h) as f32, 0.15, (0.9 * a) as f32 };
         glow(out, float2 { x as f32, y as f32 }, float2 { size, size }, 0.9, c);
-        if theme == 4 || theme == 2 { glow(out, float2 { x as f32, y as f32 }, float2 { size * 4.0, size * 4.0 }, 1.0, with_alpha(c, 0.25)); }
+        glow(out, float2 { x as f32, y as f32 }, float2 { size * 5.0, size * 5.0 }, 1.0, with_alpha(c, 0.25));
     }
 }
 
