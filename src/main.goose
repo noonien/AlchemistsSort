@@ -43,7 +43,7 @@ let VH: f32 = 960.0;
 enum Screen { Home, Play, Settings, Seed, Map }
 
 // What covers the board, if anything.
-enum Overlay { None, Win, Lose, Intro, Reset, Brewing, Grimoire }
+enum Overlay { None, Win, Lose, Intro, Reset, Brewing, Grimoire, Settings }
 
 enum PlayMode { Campaign, Seed, Hand }
 
@@ -1518,6 +1518,13 @@ fn draw_play(out: Inst[>..]&) {
         finish_animations();
         play(Sfx.Tool);
     }
+    // The settings, over the board, which waits under them.
+    if round_button(out, 0, v2(108.0, 52.0), 22.0, Icon.Gear, "", 0, true) || (gfx::key_pressed("O") && overlay == Overlay.None) {
+        overlay = Overlay.Settings;
+        overlay_t = now;
+        card_flask = -1;
+        play(Sfx.Tool);
+    }
     text_shadowed(0, VW * 0.5, 40.0, level_title(), TextStyle.Heading, gold(1.0), Align.Center);
     let d = info.difficulty;
     badge_pill(out, 0, v2(VW * 0.5, 78.0), difficulty_name(d), difficulty_color(d));
@@ -1683,6 +1690,14 @@ fn draw_overlay(out: Inst[>..]&) {
         clicks.clear();
     } else if overlay == Overlay.Grimoire {
         draw_grimoire(out);
+    } else if overlay == Overlay.Settings {
+        let c = v2(VW * 0.5, VH * 0.45);
+        panel(out, c, v2(220.0, 190.0));
+        text_shadowed(1, c.x, c.y - 145.0, "Settings", TextStyle.Heading, gold(1.0), Align.Center);
+        settings_toggles(out, 1, c.y - 80.0);
+        if button(out, 1, c + v2(0.0, 145.0), v2(90.0, 26.0), "Close", float4 { 0.35, 0.25, 0.5, 1.0 }, true) {
+            overlay = Overlay.None;
+        }
     } else if overlay == Overlay.Reset {
         let c = v2(VW * 0.5, VH * 0.45);
         panel(out, c, v2(210.0, 120.0));
@@ -1714,8 +1729,8 @@ fn close_intro() {
     }
 }
 
-fn toggle_row(out: Inst[>..]&, y: f32, label: const u8[:], on: bool) -> bool {
-    text(0, 90.0, y, label, TextStyle.Body, white(0.92), Align.Left);
+fn toggle_row(out: Inst[>..]&, layer: i64, y: f32, label: const u8[:], on: bool) -> bool {
+    text(layer, 90.0, y, label, TextStyle.Body, white(0.92), Align.Left);
     let c = v2(VW - 110.0, y);
     let track = if on { float4 { 0.2, 0.6, 0.4, 1.0 } } else { float4 { 0.3, 0.27, 0.36, 1.0 } };
     rect(out, c, v2(34.0, 17.0), 17.0, track);
@@ -1724,28 +1739,28 @@ fn toggle_row(out: Inst[>..]&, y: f32, label: const u8[:], on: bool) -> bool {
     clicked(v2(VW * 0.5, y), v2(VW * 0.42, 22.0))
 }
 
-fn draw_settings(out: Inst[>..]&) {
-    text_shadowed(0, VW * 0.5, 90.0, "Settings", TextStyle.Heading, gold(1.0), Align.Center);
-    panel(out, v2(VW * 0.5, 330.0), v2(220.0, 170.0));
-    if toggle_row(out, 190.0, "Sound", save.sound) {
+// Sound, music and the palette, from the top row at y down: on the
+// Settings screen and over the board alike.
+fn settings_toggles(out: Inst[>..]&, layer: i64, y: f32) {
+    if toggle_row(out, layer, y, "Sound", save.sound) {
         save.sound = !save.sound;
         sound_on = save.sound;
         write_save(save);
         play(Sfx.Tool);
     }
-    if toggle_row(out, 240.0, "Music", save.music) {
+    if toggle_row(out, layer, y + 50.0, "Music", save.music) {
         save.music = !save.music;
         music_on = save.music;
         write_save(save);
     }
-    if toggle_row(out, 290.0, "Color-blind palette", save.color_safe) {
+    if toggle_row(out, layer, y + 100.0, "Color-blind palette", save.color_safe) {
         save.color_safe = !save.color_safe;
         write_save(save);
     }
-    text(0, VW * 0.5, 325.0, "adds a symbol to every color", TextStyle.Tiny, white(0.6), Align.Center);
+    text(layer, VW * 0.5, y + 135.0, "adds a symbol to every color", TextStyle.Tiny, white(0.6), Align.Center);
     // A sample of the palette.
     for c in 1..15 {
-        let p = v2(VW * 0.5 + (c - 7.5) * 26.0, 365.0);
+        let p = v2(VW * 0.5 + (c - 7.5) * 26.0, y + 175.0);
         rect(out, p, v2(11.0, 11.0), 4.0, palette_color(c, save.color_safe));
         if save.color_safe {
             var s = inst(Shape.Symbol, p, v2(8.0, 8.0), white(1.0));
@@ -1753,6 +1768,12 @@ fn draw_settings(out: Inst[>..]&) {
             out.push(s);
         }
     }
+}
+
+fn draw_settings(out: Inst[>..]&) {
+    text_shadowed(0, VW * 0.5, 90.0, "Settings", TextStyle.Heading, gold(1.0), Align.Center);
+    panel(out, v2(VW * 0.5, 330.0), v2(220.0, 170.0));
+    settings_toggles(out, 0, 190.0);
     if button(out, 0, v2(VW * 0.5, 440.0), v2(130.0, 26.0), "Reset Progress", float4 { 0.6, 0.2, 0.25, 1.0 }, true) {
         overlay = Overlay.Reset;
         overlay_t = now;
@@ -1760,7 +1781,7 @@ fn draw_settings(out: Inst[>..]&) {
     text(0, VW * 0.5, 580.0, str("Next level: ", save.level), TextStyle.Small, white(0.7), Align.Center);
     text(0, VW * 0.5, 610.0, str("Saved in ", save_dir), TextStyle.Tiny, white(0.45), Align.Center);
     text_wrapped(0, VW * 0.5, 660.0, 440.0,
-                 "Keys: U undo, R restart, S shuffle, F extra flask, H hint, G grimoire, Esc back. Hold a flask (or right-click it) to read it.",
+                 "Keys: U undo, R restart, S shuffle, F extra flask, H hint, G grimoire, O settings, Esc back. Hold a flask (or right-click it) to read it.",
                  TextStyle.Tiny, white(0.55));
     if button(out, 0, v2(VW * 0.5, 850.0), v2(90.0, 26.0), "Back", float4 { 0.35, 0.25, 0.5, 1.0 }, true) {
         screen_id = Screen.Home;
@@ -1828,7 +1849,7 @@ fn draw_seed(out: Inst[>..]&) {
 fn handle_keys() {
     if gfx::key_pressed("Escape") {
         if overlay == Overlay.Intro { close_intro(); }
-        else if overlay == Overlay.Reset || overlay == Overlay.Grimoire { overlay = Overlay.None; }
+        else if overlay == Overlay.Reset || overlay == Overlay.Grimoire || overlay == Overlay.Settings { overlay = Overlay.None; }
         else if screen_id == Screen.Play && card_flask >= 0 { card_flask = -1; }
         else if screen_id != Screen.Home { screen_id = Screen.Home; overlay = Overlay.None; finish_animations(); }
         else { gfx::quit(); }
@@ -1837,7 +1858,7 @@ fn handle_keys() {
     let ctrl = gfx::key_down("Left Ctrl") || gfx::key_down("Right Ctrl");
     if overlay == Overlay.Win && (gfx::key_pressed("N") || gfx::key_pressed("Return")) { next_after_win(); return; }
     if overlay == Overlay.Intro && (gfx::key_pressed("Return") || gfx::key_pressed("Space")) { close_intro(); return; }
-    if won_at >= 0.0 { return; }
+    if won_at >= 0.0 || overlay == Overlay.Settings { return; }
     if gfx::key_pressed("U") || (ctrl && gfx::key_pressed("Z")) || gfx::key_pressed("Backspace") { do_undo(); }
     if gfx::key_pressed("R") { do_restart(); }
     if overlay != Overlay.None && overlay != Overlay.Lose { return; }
