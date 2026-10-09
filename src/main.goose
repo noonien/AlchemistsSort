@@ -1544,8 +1544,12 @@ fn button(out: Inst[>..]&, layer: i64, center: float2, half: float2, label: cons
     plate(out, center, sq, 0, if enabled { color } else { ENAMEL_SLATE }, if !enabled { -1.0 } else if hover { 1.0 } else { 0.0 },
           3.0, max(k, 0.0));
     let a: f32 = if enabled { 1.0 } else { 0.45 };
-    text(layer, center.x, center.y + 1.6, label, TextStyle.Label, cut(a), Align.Center);
-    text(layer, center.x, center.y, label, TextStyle.Label, if hover { float4 { 1.0, 0.95, 0.8, 1.0 } } else { engraved(a) },
+    // Cinzel is all capitals, which sit above the middle of the line the
+    // text is centered by (it keeps room for descenders): drop the label
+    // so its capitals stand in the middle of the plate.
+    let y = center.y + style_size(TextStyle.Label) * 0.19;
+    text(layer, center.x, y + 1.6, label, TextStyle.Label, cut(a), Align.Center);
+    text(layer, center.x, y, label, TextStyle.Label, if hover { float4 { 1.0, 0.95, 0.8, 1.0 } } else { engraved(a) },
          Align.Center);
     let hit = enabled && clicked(center, half);
     if hit { note_press(center); }
