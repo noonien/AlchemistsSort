@@ -1225,14 +1225,18 @@ let FRAGMENT_SHADER = """
                         // Now and then a bubble rises from the bottom.
                         float period = 7.0 + fract(seed * 7.13) * 5.0;
                         float cyc = t / period + seed;
-                        float rise = 2.4 / period;
+                        float rise = 3.2 / period;
                         if (fract(cyc) < rise && v_misc.y == 0.0 && lifted == 0.0 && fill > seg * 0.6) {
                             float k = fract(cyc) / rise;
                             vec2 bc = vec2((hash12(vec2(floor(cyc), seed * 13.0)) - 0.5) * w * 0.9 +
                                            sin(k * 9.0) * h.x * 0.06, base + ry * 0.6 - k * (fill - h.x * 0.1));
-                            float bd = length(p - bc) - h.x * (0.05 + 0.03 * k);
-                            c = mix(c, c * 0.8 + vec3(0.3), fill_aa(abs(bd) - 0.6) * 0.8);
-                            c += vec3(0.08) * fill_aa(bd);
+                            // Big enough, and soft enough at the edge, not to shimmer
+                            // as it crosses pixels.
+                            float br = max(h.x * (0.08 + 0.04 * k), 2.5);
+                            float bd = length(p - bc) - br;
+                            float rim = 1.0 - smoothstep(0.0, 1.4, abs(bd + 0.5));
+                            c = mix(c, c * 0.8 + vec3(0.3), rim * 0.7);
+                            c += vec3(0.08) * (1.0 - smoothstep(-1.0, 1.0, bd));
                         }
                     }
                     col = vec4(c, a * v_color.a);

@@ -51,6 +51,9 @@ let HINT_BUDGET = 80000;        // the board's search: a hint, the dead-end chec
 let SHUFFLE_BUDGET = 30000;     // each shuffled deal tried
 let SHUFFLE_TRIES = 40;
 
+// A frame's length when only the idle life moves: thirty a second.
+let IDLE_FRAME_MS: f64 = 33.0;
+
 // The most flasks the layout keeps readable.
 let MAX_ON_SCREEN = 22;
 
@@ -1834,9 +1837,13 @@ fn main() {
         if shots_from >= 0 && shot.len > 0 && drawn >= shots_from && (drawn - shots_from) % shots_every == 0 {
             gfx::screenshot(str(shot, "-", drawn, ".png"));
         }
-        // When nothing moves, draw a few frames a second instead of sixty:
-        // with software rendering every frame costs real CPU.
-        if frames < 0 && !lively() { sleep_ms(70); }
+        // When nothing but the idle life moves (bubbles, drifting surfaces,
+        // flames), draw thirty frames a second instead of sixty: smooth for
+        // slow motion, and with software rendering every frame costs real CPU.
+        if frames < 0 && !lively() {
+            let spent = (gfx::time() - now) * 1000.0;
+            if spent < IDLE_FRAME_MS { sleep_ms((IDLE_FRAME_MS - spent) as i64); }
+        }
         if drawn == frames { break; }
     }
     if shot.len > 0 {
