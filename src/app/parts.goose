@@ -179,32 +179,54 @@ fn draw_cover(out: Inst[>..]&, i: i64, b: Bottle, a: Anchors, look: CoverLook, s
                                 float4 { 0.17, 0.13, 0.32, 1.0 })),
         Seal => draw_wax(out, b.key, a, look.soft, look.crack, (i * 0.618) % 1.0, 1.0, safe),
         Vine => draw_vines(out, a, look.grow, look.wither, look.burn, (i * 0.414) % 1.0, 1.0),
-        Curtain => draw_curtain(out, a, b.badge, 0.0, safe),
+        Curtain => draw_curtain(out, a, b.badge, 0.0, 0.0, safe),
         None => {},
     }
 }
 
 let CURTAIN_COLOR = float4 { 0.5, 0.08, 0.12, 1.0 };
 
-// A curtain on a rod over the flask, `up` 0..1 drawn up and away, with its
-// color's badge on it.
-fn draw_curtain(out: Inst[>..]&, a: Anchors, badge: i64, up: f32, safe: bool) {
-    let hx = a.hx;
-    let alpha = 1.0 - up;
-    let c = a.center + float2 { up * hx * 0.3, hx * 0.05 - up * a.half.y * 1.1 };
-    var cl = inst(Shape.Cloth, c, a.half + float2 { hx * 0.18, hx * 0.1 }, with_alpha(CURTAIN_COLOR, alpha));
-    cl.p0 = float4 { 1.0, 0.0, 0.0, 0.0 };
-    cl.misc.z = 6.0;
+// The curtain's cloth over a flask drawn at `a`: as wide as the glass and a
+// little more, its rod just over the rim.
+fn curtain_box(a: Anchors) -> float2, float2 {
+    return a.center + float2 { 0.0, a.hx * 0.05 }, a.half + float2 { a.hx * 0.18, a.hx * 0.1 };
+}
+
+// Where a curtain's badge hangs: on the drapes, just under the valance.
+fn badge_at(a: Anchors) -> float2 {
+    let c, half = curtain_box(a);
+    c - float2 { 0.0, half.y - half.x * 0.55 - badge_r(a) * 1.05 }
+}
+
+fn badge_r(a: Anchors) -> f32 { max(a.hx * 0.45, 6.5) }
+
+// A curtain on a rod over the flask, `open` 0..1 drawn aside, with its
+// color's badge on it; `flash` 0..1 lights the badge up.
+fn draw_curtain(out: Inst[>..]&, a: Anchors, badge: i64, open: f32, flash: f32, safe: bool) {
+    let c, half = curtain_box(a);
+    let alpha = 1.0 - clamp((open - 0.75) / 0.25, 0.0, 1.0);
+    var cl = inst(Shape.Cloth, c, half, with_alpha(CURTAIN_COLOR, alpha));
+    cl.p0 = float4 { 1.0, open, (a.center.x * 0.013) % 1.0, 0.0 };
+    cl.misc.z = 11.0;
     out.push(cl);
-    // The badge: a disc of the color that opens it, on a gold ring.
-    let bp = c - float2 { 0.0, a.half.y * 0.15 };
-    let r = hx * 0.42;
-    glow(out, bp + float2 { 0.0, r * 0.2 }, float2 { r * 1.5, r * 1.5 }, 0.6, float4 { 0.0, 0.0, 0.0, 0.4 * alpha });
-    rect(out, bp, float2 { r, r }, r, with_alpha(palette_color(badge, safe), alpha));
-    ring(out, bp, r, max(1.5, r * 0.18), float4 { 0.95, 0.78, 0.42, alpha });
+    draw_badge(out, badge_at(a), badge_r(a), badge, flash, alpha * (1.0 - clamp(open * 2.5, 0.0, 1.0)), safe);
+}
+
+// A curtain's badge: a disc of the color that opens it, a gem, in a gold
+// ring on a dark mount so it reads on the velvet whatever its color.
+fn draw_badge(out: Inst[>..]&, c: float2, r: f32, color: i64, flash: f32, alpha: f32, safe: bool) {
+    if alpha <= 0.0 { return; }
+    let col = palette_color(color, safe);
+    if flash > 0.0 { glow(out, c, float2 { r * 3.2, r * 3.2 }, 1.0, with_alpha(col, 0.8 * flash * alpha)); }
+    glow(out, c + float2 { 0.0, r * 0.25 }, float2 { r * 1.7, r * 1.7 }, 0.6, float4 { 0.0, 0.0, 0.0, 0.45 * alpha });
+    rect(out, c, float2 { r * 1.3, r * 1.3 }, r * 1.3, float4 { 0.16, 0.06, 0.06, alpha });
+    ring(out, c, r * 1.12, max(1.4, r * 0.2), float4 { 0.95, 0.78, 0.42, alpha });
+    rect(out, c, float2 { r, r }, r, with_alpha(mix4(col, white(1.0), 0.25 * flash), alpha));
+    // The gem's shine.
+    glow(out, c - float2 { r * 0.32, r * 0.36 }, float2 { r * 0.38, r * 0.28 }, 1.0, float4 { 1.0, 1.0, 1.0, 0.55 * alpha });
     if safe {
-        var s = inst(Shape.Symbol, bp, float2 { r * 0.7, r * 0.7 }, rgba(1.0, 1.0, 1.0, 0.95 * alpha));
-        s.p0 = float4 { badge, 0.0, 0.0, 0.0 };
+        var s = inst(Shape.Symbol, c, float2 { r * 0.7, r * 0.7 }, rgba(1.0, 1.0, 1.0, 0.95 * alpha));
+        s.p0 = float4 { color, 0.0, 0.0, 0.0 };
         out.push(s);
     }
 }
@@ -214,40 +236,121 @@ fn draw_curtain(out: Inst[>..]&, a: Anchors, badge: i64, up: f32, safe: bool) {
 // A key's metal.
 fn key_tint(k: KeyColor) -> float4 {
     match k {
-        Brass => float4 { 0.86, 0.66, 0.3, 1.0 },
-        Silver => float4 { 0.8, 0.83, 0.88, 1.0 },
-        Copper => float4 { 0.8, 0.42, 0.24, 1.0 },
+        Brass => float4 { 0.9, 0.7, 0.3, 1.0 },
+        Silver => float4 { 0.84, 0.87, 0.93, 1.0 },
+        Copper => float4 { 0.88, 0.44, 0.27, 1.0 },
         None => float4 { 0.5, 0.5, 0.5, 1.0 },
     }
 }
 
-// A key `u` across each way from `c`, tilted a little; glint 0..1 flashes it.
-fn draw_key(out: Inst[>..]&, c: float2, u: f32, k: KeyColor, glint: f32, alpha: f32) {
+// A key `u` across each way from `c`, turned by `angle`; `glint` 0..1 sweeps
+// a gleam along it, and `liquid` (its alpha: how far under) is the liquid it
+// is seen through, which tints it.
+fn draw_key(out: Inst[>..]&, c: float2, u: f32, k: KeyColor, angle: f32, glint: f32, liquid: float4, alpha: f32) {
     var i = inst(Shape.Key, c, float2 { u, u * 0.5 }, with_alpha(key_tint(k), alpha));
-    i.p0 = float4 { glint, 0.0, 0.0, 0.0 };
-    i.misc.y = -0.25;
+    i.p0 = float4 { glint, key_index(k), liquid.w, (c.x * 0.37) % 1.0 };
+    i.p1 = liquid;
+    i.misc.y = angle;
     i.misc.z = u * 0.3;
     out.push(i);
 }
 
-// The key in a flask's liquid, at its layer: in view unless smoke or a
-// cover hides its layer.
-fn draw_flask_key(out: Inst[>..]&, b: Bottle, a: Anchors) {
-    let k = key_segment(b);
-    if b.key_color == KeyColor.None || k < 0 || murky(b, k) || contents_hidden(b) { return; }
-    draw_key(out, at(a, segment_center(a.half, k)), a.hx * 0.62, b.key_color, 0.0, 1.0);
+// How big a key is in a flask of half width hx.
+fn key_size(hx: f32) -> f32 { hx * 0.72 }
+let KEY_TILT: f32 = -0.22;
+
+// Where the middle of layer k is on the screen in a flask drawn at `a`,
+// `cap` deep, with `drain` layers run out of its bottom (less than none:
+// held off it), as the liquid shader lays the layers out: along the glass
+// when it is upright or the liquid turns with it (`rigid`); tipped, level,
+// gathered in the lower side.
+fn layer_spot(a: Anchors, cap: i64, k: i64, drain: f32, rigid: bool) -> float2 {
+    let hx = a.hx;
+    let seg = (a.half.y * 2.0 - hx * SHADER_EXTRA) / max(cap, CAP);
+    let w = hx * LIQUID_W;
+    let ry = w * FLASK_E;
+    let base = a.half.y - hx * FLASK_E * FLASK_BODY - hx * 0.05;
+    let v = (k + 0.5 - drain) * seg;
+    if rigid || abs(a.angle) < 0.001 { return at(a, float2 { 0.0, base + ry - v }); }
+    // Tipped: the level line holding the layer's middle (its volume under
+    // it), and the middle of that line's stretch across the column.
+    let ca = cos(a.angle);
+    let sl = clamp(sin(a.angle) / max(ca, 0.05), -6.0, 6.0);
+    let s = max(abs(sl), 0.0001);
+    let area = v * 2.0 * w;
+    let ms = if area >= 2.0 * s * w * w { area / (2.0 * w) } else { sqrt(2.0 * s * area) - s * w };
+    let m = ms - ry / max(ca, 0.05);
+    let lo = max(-w, -m / s);
+    let xm = (w + lo) * 0.5;
+    let x = if sl < 0.0 { -xm } else { xm };
+    at(a, float2 { x, base - (m + sl * x) })
 }
 
-// A door from lo to hi (its top left and bottom right), drawn `up` 0..1
-// slid up and faded as it opens.
-fn draw_door(out: Inst[>..]&, lo: float2, hi: float2, k: KeyColor, up: f32) {
+// A key catches the light now and then, each at its own moment: 0..1
+// while the gleam passes, 0 otherwise.
+fn key_glint(seed: f32) -> f32 {
+    let ph = ((now / 3.7 + seed) % 1.0) as f32;
+    if ph < 0.3 { ph / 0.3 } else { 0.0 }
+}
+
+// The key in a flask's liquid, at its layer, as the flask is drawn at `a`
+// holding `b` (see layer_spot): in view unless smoke or a cover hides it.
+fn draw_flask_key(out: Inst[>..]&, b: Bottle, a: Anchors, drain: f32, rigid: bool, safe: bool) {
+    let k = key_segment(b);
+    if b.key_color == KeyColor.None || k < 0 || murky(b, k) || contents_hidden(b) || k + 0.5 < drain { return; }
+    let c = layer_spot(a, b.cap, k, drain, rigid);
+    let u = key_size(a.hx);
+    let glint = key_glint((a.center.x * 0.0123 + a.center.y * 0.0071) % 1.0);
+    let turn = KEY_TILT + (if rigid { a.angle } else { 0.0 });
+    draw_key(out, c, u, b.key_color, turn, glint, with_alpha(palette_color(b.seg[k], safe), 1.0), 1.0);
+    if glint > 0.2 && glint < 0.95 {
+        let f = sin((glint - 0.2) / 0.75 * PI);
+        spark(out, c + float2 { -u * 0.7, -u * 0.32 }, u * 0.45 * f, white(0.9 * f));
+    }
+}
+
+// A door from lo to hi (its top left and bottom right), its key's metal `k`;
+// `swing` 0..1 its leaves swung open, `fade` 0..1 gone.
+fn draw_door(out: Inst[>..]&, lo: float2, hi: float2, k: KeyColor, swing: f32, fade: f32) {
     let half = (hi - lo) * float2 { 0.5, 0.5 };
-    let c = (lo + hi) * float2 { 0.5, 0.5 } - float2 { 0.0, up * half.y * 0.8 };
-    let alpha = 1.0 - up * up;
-    glow(out, c + float2 { 6.0, 8.0 }, half + float2 { 10.0, 10.0 }, 0.5, float4 { 0.0, 0.0, 0.0, 0.45 * alpha });
+    let c = (lo + hi) * float2 { 0.5, 0.5 };
+    let alpha = 1.0 - fade;
+    let shut = alpha * (1.0 - swing);
+    glow(out, c + float2 { 6.0, 10.0 }, half + float2 { 10.0, 8.0 }, 0.5, float4 { 0.0, 0.0, 0.0, 0.45 * shut });
+    // Where it stands on the table: a dark line, and the light from behind
+    // it spilling out under it.
+    let foot = float2 { c.x, hi.y };
+    glow(out, foot + float2 { 0.0, 2.0 }, float2 { half.x * 1.05, 7.0 }, 0.8, float4 { 0.0, 0.0, 0.0, 0.5 * shut });
+    glow(out, foot + float2 { 0.0, 4.0 }, float2 { half.x * 0.8, 9.0 }, 1.0, float4 { 1.0, 0.75, 0.4, 0.3 * shut });
     var d = inst(Shape.Door, c, half, float4 { 0.42, 0.27, 0.15, alpha });
+    d.p0 = float4 { swing, key_index(k), 0.0, 0.0 };
     d.p1 = key_tint(k);
+    d.misc.z = half.x * 0.45 + 10.0;
     out.push(d);
+}
+
+// Where a door from lo to hi has its keyhole, and how big its lock plate is
+// (as the shader draws it: door_frame, door_lock_r).
+fn keyhole_at(lo: float2, hi: float2) -> float2, f32 {
+    let half = (hi - lo) * float2 { 0.5, 0.5 };
+    let t = clamp(min(half.x, half.y) * 0.07, 3.0, 8.0);
+    let wl = half.x - t;
+    let top = -half.y + t * 1.4;
+    let tall = half.y - top;
+    let r = clamp(min(wl * 0.34, tall * 0.16), 7.0, 24.0);
+    return float2 { (lo.x + hi.x) * 0.5, (lo.y + hi.y) * 0.5 + top + tall * 0.47 + r * 0.32 }, r;
+}
+
+// A key the size for a lock plate r big, in its keyhole at `hole`: its bit
+// in the hole, its bow up over the plate. `turn` 0..1 turns it half round
+// on its shaft, so its bow goes edge on and back.
+let KEY_IN_LOCK: f32 = 1.1;
+
+fn key_in_lock_at(hole: float2, r: f32) -> float2 { hole - float2 { 0.0, r * KEY_IN_LOCK * 0.55 } }
+
+fn draw_key_in_lock(out: Inst[>..]&, hole: float2, r: f32, k: KeyColor, turn: f32, glint: f32, alpha: f32) {
+    draw_key(out, key_in_lock_at(hole, r), r * KEY_IN_LOCK, k, PI * 0.5, glint, float4_0, alpha);
+    out[out.len - 1].misc.w = max(abs(cos(turn * PI)), 0.08);
 }
 
 fn draw_wax(out: Inst[>..]&, key: i64, a: Anchors, soft: f32, crack: f32, seed: f32, alpha: f32, safe: bool) {

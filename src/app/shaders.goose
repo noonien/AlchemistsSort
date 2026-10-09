@@ -17,7 +17,8 @@ enum Shape {
     Symbol,     // color-blind symbol; p0.x: which
     Spark,      // four-pointed star
     Ice,        // a shell of rime over a flask; p0: thickness 0..1, shatter 0..1, seed
-    Cloth,      // a shroud draped over a flask, embroidered with stars; p0.x 1: a curtain on a rod instead
+    Cloth,      // a shroud draped over a flask, embroidered with stars; p0.x 1: a curtain on a rod
+                // instead, p0.y: drawn aside 0..1, p0.z: seed
     Wax,        // a wax seal over the neck; color: the key; p0: softened 0..1, crack 0..1, seed
     Vines,      // a vine wrapped round a flask; p0: grown 0..1, withered 0..1, burnt 0..1, seed
     Tap,        // a siphon's brass tap
@@ -46,11 +47,13 @@ enum Shape {
     Bloom,      // a moonpetal's petals; p0: open 0..1, 0 behind the flask or 1 the bud on its neck
     Brazier,    // p0: 0 the flames behind the flask or 1 the bowl in front, flare
     Roots,      // a creeping vine's roots and seed pod; p0: withered, ripeness 0..1, seed
-    Door,       // a door before a few flasks: planks, iron straps; color: the wood; p1: the keyhole's metal
+    Door,       // a double door in its frame before a few flasks; color: the frame; p0: swung open
+                // 0..1, the key (1..3: its bow engraved on the lock); p1: the lock's metal
     Salamander, // the fire lizard; p0: seed, facing (1 right, -1 left), leap 0..1, glow
     Heat,       // a heat pulse along a curve; p0: start, control; p1: end, width, head
     Shard,      // a flying bit; p0.x: 0 ice, 1 wax, 2 leaf, 3 ember
-    Key,        // a key, its bow on the left; color: its metal; p0.x: glint 0..1
+    Key,        // a key, its bow on the left; color: its metal; p0: glint 0..1, which (1..3: its
+                // bow's shape), under liquid 0..1, seed; p1: the liquid's color
 }
 
 let ALL_SHAPES: const Shape[42] = [
@@ -788,6 +791,31 @@ let FRAGMENT_SHADER = """
         float t2 = sd_box(p - vec2(0.5 * u, 0.17 * u), vec2(0.07 * u, 0.1 * u));
         return min(min(bow, shaft), min(t1, t2));
     }
+    // A key's bow, centered on q: style 1 a ring (brass), 2 a trefoil
+    // (silver), 3 a square ring turned to a diamond (copper), so the three
+    // metals differ in shape as well as in color.
+    float sd_key_bow(vec2 q, float u, int style) {
+        if (style == 2) {
+            float d = sd_circle(q, 0.15 * u);
+            for (int k = 0; k < 3; k++) {
+                float a = 3.14159265 + (float(k) - 1.0) * 1.4;
+                d = min(d, sd_circle(q - vec2(cos(a), sin(a)) * 0.16 * u, 0.13 * u));
+            }
+            return max(d, -sd_circle(q - vec2(-0.04 * u, 0.0), 0.075 * u));
+        }
+        if (style == 3) return abs(sd_round_box(rot(0.7853982) * q, vec2(0.18 * u), vec4(0.04 * u))) - 0.065 * u;
+        return abs(sd_circle(q, 0.2 * u)) - 0.085 * u;
+    }
+    // A finer key for the board, u across each way from its middle, its bow
+    // on the left: the bow, a collar, the shaft and a notched bit under its tip.
+    float sd_key_styled(vec2 p, float u, int style) {
+        float bow = sd_key_bow(p - vec2(-0.66 * u, 0.0), u, style);
+        float collar = sd_round_box(p - vec2(-0.36 * u, 0.0), vec2(0.06 * u, 0.15 * u), vec4(0.03 * u));
+        float shaft = sd_round_box(p - vec2(0.3 * u, 0.0), vec2(0.64 * u, 0.09 * u), vec4(0.04 * u));
+        float bit = sd_round_box(p - vec2(0.74 * u, 0.18 * u), vec2(0.17 * u, 0.15 * u), vec4(0.02 * u));
+        bit = max(bit, -sd_box(p - vec2(0.72 * u, 0.33 * u), vec2(0.05 * u, 0.1 * u)));
+        return min(min(bow, collar), min(shaft, bit));
+    }
     float sd_icon(vec2 p, int which, float r) {
         if (which == ICON_UNDO) {           // undo: an arc with an arrowhead
             float arc = sd_arc(p, r * 0.6, -2.4, 1.6, r * 0.11);
@@ -1096,6 +1124,69 @@ let FRAGMENT_SHADER = """
         return min(min(post, bend), min(min(bar, tip), hook));
     }
 
+    // A door's frame, how thick for a door h across each way (parts.goose's
+    // keyhole_at knows it too).
+    float door_frame(vec2 h) { return clamp(min(h.x, h.y) * 0.07, 3.0, 8.0); }
+    // The lock plate's middle and size, below the lintel at yTop.
+    float door_lock_r(float Wl, float H) { return clamp(min(Wl * 0.34, H * 0.16), 7.0, 24.0); }
+    float plate_sd(vec2 q, float R) { return sd_round_box(q, vec2(R * 0.78, R * 1.2), vec4(R * 0.6, R * 0.25, R * 0.6, R * 0.25)); }
+    // A double door's face as it stands shut, at f (from its middle, y down):
+    // two leaves of planks Wl wide meeting in the middle, from yTop down to
+    // the table, iron strap hinges, and across the meeting a lock plate of
+    // its key's metal (mc), the key's bow (style) engraved over the keyhole.
+    // While it is shut (`shut`), light from behind shows through the keyhole
+    // and the cracks.
+    vec3 door_face(vec2 f, vec2 h, float Wl, float yTop, int style, vec3 mc, float shut, float t) {
+        float H = h.y - yTop;
+        float lx = abs(f.x);
+        float pw = max(Wl / 2.5, 7.0);
+        float px = (fract(lx / pw) - 0.5) * pw;
+        float grain = noise(vec2(f.x * 0.09, f.y * 0.015)) * 0.6 + noise(vec2(f.x * 0.35, f.y * 0.05)) * 0.4;
+        vec3 c = vec3(0.42, 0.27, 0.15) * (0.68 + 0.45 * grain);
+        c *= 1.0 - 0.45 * (1.0 - smoothstep(0.0, 1.4, pw * 0.5 - abs(px)));      // the seams between planks
+        c *= 0.78 + 0.22 * smoothstep(yTop, yTop + H * 0.5, f.y);                // shade under the lintel
+        float edge = min(min(lx, Wl - lx), min(f.y - yTop, h.y - f.y));
+        c *= 0.6 + 0.4 * smoothstep(0.0, 2.5, edge);
+        vec3 warm = vec3(1.0, 0.78, 0.42);
+        float flick = (0.85 + 0.15 * sin(t * 2.3) * sin(t * 1.3 + 1.0)) * shut;
+        c += warm * exp(-lx / 0.9) * 0.6 * flick;
+        c += warm * exp(-(h.y - f.y) / 1.3) * 0.5 * flick;
+        // Iron strap hinges from the outer edges, studded.
+        vec3 iron = vec3(0.2, 0.2, 0.23);
+        float sw = clamp(H * 0.035, 1.8, 4.0);
+        float step_x = max(Wl * 0.2, 6.0);
+        for (int k = 0; k < 2; k++) {
+            float y = k == 0 ? yTop + H * 0.2 : h.y - H * 0.2;
+            vec2 q = vec2(Wl - lx, f.y - y);
+            float strap = min(sd_box(q - vec2(Wl * 0.33, 0.0), vec2(Wl * 0.33, sw)), sd_circle(q - vec2(Wl * 0.66, 0.0), sw * 1.5));
+            c = mix(c, vec3(0.0), fill_aa(strap - 1.0) * 0.4);
+            c = mix(c, iron * (1.0 + 0.6 * smoothstep(sw, -sw, q.y)), fill_aa(strap));
+            vec2 rv = vec2((fract(q.x / step_x) - 0.5) * step_x, q.y);
+            c = mix(c, vec3(0.55, 0.55, 0.58), fill_aa(sd_circle(rv, max(sw * 0.5, 1.0))) * step(q.x, Wl * 0.6) * step(2.0, q.x));
+        }
+        // The lock plate, shaded as metal, a dark line round it.
+        float R = door_lock_r(Wl, H);
+        vec2 lp = f - vec2(0.0, yTop + H * 0.47);
+        vec2 e = vec2(0.5, 0.0);
+        float plate = plate_sd(lp, R);
+        vec2 g = vec2(plate_sd(lp + e.xy, R) - plate_sd(lp - e.xy, R), plate_sd(lp + e.yx, R) - plate_sd(lp - e.yx, R));
+        c = mix(c, vec3(0.03), fill_aa(plate - 1.5) * 0.7);
+        vec3 m = metal(mc, plate, g, 0.22 * R);
+        // Rivets in its corners, the bow engraved, the keyhole.
+        float riv = 1e5;
+        for (int k = 0; k < 4; k++) {
+            vec2 rp = vec2(k % 2 == 0 ? -R * 0.55 : R * 0.55, k < 2 ? -R * 0.85 : R * 0.95);
+            riv = min(riv, sd_circle(lp - rp, max(R * 0.07, 0.9)));
+        }
+        m = mix(m, mc * 1.3 + 0.15, fill_aa(riv));
+        float bow = sd_key_bow(lp - vec2(0.0, -R * 0.48), R * 1.35, style);
+        m = mix(m, mc * 1.25 + 0.1, fill_aa(bow + 0.8) * 0.8);
+        m = mix(m, mc * 0.3, fill_aa(bow));
+        float hole = min(sd_circle(lp - vec2(0.0, R * 0.32), R * 0.17), sd_box(lp - vec2(0.0, R * 0.62), vec2(R * 0.08, R * 0.3)));
+        m = mix(m, mix(vec3(0.04, 0.03, 0.02), warm, 0.55 * flick), fill_aa(hole));
+        return mix(c, m, fill_aa(plate));
+    }
+
     void main() {
         int kind = int(v_misc.x + 0.5);
         vec2 p = v_local;
@@ -1369,20 +1460,43 @@ let FRAGMENT_SHADER = """
             a *= fill_aa(d) * (1.0 - smoothstep(0.4, 1.0, shatter));
             col = vec4(c, clamp(a, 0.0, 1.0) * v_color.a);
         } else if (kind == SHAPE_CLOTH && v_p0.x > 0.5) {   // a curtain: velvet folds on a rod, a gold fringe
+            // p0.y: drawn aside 0..1, each drape gathering toward its own side
+            // and its inner corner lifting.
+            float open = v_p0.y;
             float top = -h.y;
-            float hem = h.y - 4.0 + 1.5 * sin(p.x * 0.6);
-            float d = max(abs(p.x) - h.x, max(top - p.y, p.y - hem));
-            float folds = 0.5 + 0.5 * sin(p.x * 0.5 + 0.5 * sin(p.y * 0.04 + t * 0.4));
-            vec3 c = v_color.rgb * (0.45 + 0.75 * folds) * (0.92 + 0.08 * noise(p * 0.4));
-            c *= 1.0 - 0.45 * (1.0 - smoothstep(0.0, 3.0, abs(p.x)));     // where the two drapes meet
+            float W = h.x;
+            float ax = abs(p.x);
+            float keep = 1.0 - 0.8 * open;
+            float o = (W - ax) / keep;                  // from the drape's outer edge, as it hangs shut
+            float xl = sign(p.x) * (W - o);             // where that is on the drape shut
+            float hem = h.y - 4.0 + 1.5 * sin(xl * 0.6) - open * clamp(o / W, 0.0, 1.0) * h.y * 0.35;
+            float d = max(max(ax - W, o - W), max(top - p.y, p.y - hem));
+            float sway = 0.5 * sin(p.y * 0.04 + t * 0.4 + v_p0.z * 5.0);
+            float folds = 0.5 + 0.5 * sin(xl * 0.5 + sway);
+            vec3 c = v_color.rgb * (0.4 + 0.75 * folds) * (0.92 + 0.08 * noise(vec2(xl, p.y) * 0.4));
+            c += vec3(1.0, 0.75, 0.7) * v_color.rgb * 0.5 * pow(folds, 8.0);           // velvet's sheen on the crests
+            c *= 1.0 - 0.5 * (1.0 - smoothstep(0.0, 3.0, W - o));                        // where the two drapes meet
+            c *= 0.85 + 0.15 * smoothstep(top, top + h.y, p.y);
             vec3 thread = vec3(0.95, 0.78, 0.42);
-            float val = top + h.x * 0.5 + 2.5 * abs(sin(p.x * 0.3));       // the valance's scalloped edge
-            c = mix(c, v_color.rgb * (0.8 + 0.2 * sin(p.x * 0.3)), fill_aa(p.y - val));
-            c = mix(c, thread * 0.9, fill_aa(abs(p.y - val) - 1.2));
-            c = mix(c, thread * 0.8, fill_aa(abs(p.y - hem + 3.0) - 1.6));
-            float rod = sd_segment(p, vec2(-h.x - 3.0, top + 1.5), vec2(h.x + 3.0, top + 1.5)) - 2.2;
-            c = mix(c, vec3(0.6, 0.45, 0.22), fill_aa(rod));
-            col = vec4(c, max(fill_aa(d), fill_aa(rod)) * v_color.a);
+            c = mix(c, thread * 0.85, fill_aa(abs(p.y - hem + 3.0) - 1.6));
+            vec4 res = over(vec4(0.0), c, fill_aa(d));
+            // Little tassels along the hem.
+            float tx = (fract(xl / 7.0) - 0.5) * 7.0;
+            float tas = sd_round_box(vec2(tx, p.y - hem - 2.5), vec2(1.2, 2.5), vec4(1.2)) + step(W - 2.0, ax);
+            res = over(res, thread * 0.75, fill_aa(tas) * (1.0 - fill_aa(d)) * step(o, W));
+            // The valance, scalloped, a gold braid on its edge; it stays as the drapes go.
+            float val = top + W * 0.55 + 3.0 * abs(sin(p.x * 0.28));
+            float vd = max(ax - W - 1.0, max(top - p.y, p.y - val));
+            vec3 vc = v_color.rgb * (0.72 + 0.3 * abs(sin(p.x * 0.28))) * (0.9 + 0.1 * noise(p * 0.5));
+            vc = mix(vc, thread * 0.95, fill_aa(abs(p.y - val + 1.5) - 1.3));
+            res = over(res, vc, fill_aa(vd));
+            // The rod, brass, with a knob at each end.
+            float ry = top + 1.5;
+            float rd = min(sd_segment(p, vec2(-W - 4.0, ry), vec2(W + 4.0, ry)) - 2.2,
+                           min(sd_circle(p - vec2(-W - 6.0, ry), 3.6), sd_circle(p - vec2(W + 6.0, ry), 3.6)));
+            float ny = clamp((p.y - ry) / 3.6, -1.0, 1.0);
+            res = over(res, BRASS * (1.15 - 0.6 * ny) + vec3(0.3) * exp(-pow((ny + 0.45) * 3.0, 2.0)), fill_aa(rd));
+            col = vec4(res.rgb, res.a * v_color.a);
         } else if (kind == SHAPE_CLOTH) {               // a shroud: night blue, stars in gold thread
             float hem = h.y - 6.0 + 5.0 * sin(p.x * 0.18 + 1.3 + 0.3 * sin(t * 0.7)) + 3.0 * sin(p.x * 0.41);
             float top = -h.y;
@@ -1995,32 +2109,39 @@ let FRAGMENT_SHADER = """
             res = over(res, mix(vec3(0.25, 0.55, 0.2), bark, wither), fill_aa(sprout) * keep);
             res = over(res, pc, fill_aa(pod) * keep);
             col = vec4(res.rgb, res.a * v_color.a);
-        } else if (kind == SHAPE_DOOR) {                // a door: planks, iron straps, a keyhole in its key's metal
-            float d = sd_round_box(p, h, vec4(min(h.x, h.y) * 0.06));
-            float pw = max(h.x / 3.0, 9.0);
-            float px = (fract((p.x + h.x) / pw) - 0.5) * pw;
-            float grain = noise(vec2(p.x * 0.09, p.y * 0.015)) * 0.6 + noise(vec2(p.x * 0.35, p.y * 0.05)) * 0.4;
-            vec3 c = v_color.rgb * (0.68 + 0.45 * grain);
-            c *= 1.0 - 0.5 * (1.0 - smoothstep(0.0, 1.6, pw * 0.5 - abs(px)));   // the seams between planks
-            c *= 0.75 + 0.25 * smoothstep(-h.y, -h.y * 0.4, p.y);               // shade under the lintel
-            vec3 iron = vec3(0.2, 0.2, 0.23);
+        } else if (kind == SHAPE_DOOR) {                // a double door in its frame; p0.x: swung open 0..1
+            float T = door_frame(h);
+            float Wl = h.x - T;
+            float yTop = -h.y + T * 1.4;
+            int style = int(v_p0.y + 0.5);
+            float open = v_p0.x;
+            float th = open * 1.45;
+            float cw = cos(th);
+            float sw = sin(th);
+            vec3 warm = vec3(1.0, 0.8, 0.48);
+            // The light behind spills out as it opens.
+            float spill = sin(min(open * 1.6, 1.0) * 3.14159265) * step(abs(p.x), Wl) * step(yTop, p.y) * step(p.y, h.y);
+            vec4 res = vec4(warm, 0.22 * spill);
+            // The frame: two posts and a lintel, its top seen from above.
+            float frame = max(sd_box(p, h), -sd_box(p - vec2(0.0, (yTop + h.y) * 0.5 + 2.0), vec2(Wl, (h.y - yTop) * 0.5 + 2.0)));
+            vec3 fc = v_color.rgb * 0.62 * (0.8 + 0.35 * noise(p * vec2(0.4, 0.06)));
+            fc *= 0.8 + 0.3 * smoothstep(T * 0.5, -T * 0.5, min(abs(p.x) - Wl - T * 0.5, p.y - yTop + T * 0.7));
+            res = over(res, fc, fill_aa(frame));
+            float topf = sd_box(p - vec2(0.0, -h.y - T * 0.45), vec2(h.x + T * 0.25, T * 0.45));
+            res = over(res, v_color.rgb * (1.0 + 0.2 * noise(p * vec2(0.08, 0.5))) + light.rgb * 0.12, fill_aa(topf));
+            // The two leaves, each turning on its hinge toward us as it opens:
+            // narrower, darker, and its free edge lower.
             for (int k = 0; k < 2; k++) {
-                float y = (k == 0 ? -0.6 : 0.6) * h.y;
-                float strap = sd_box(p - vec2(0.0, y), vec2(h.x - 3.0, max(2.5, h.y * 0.045)));
-                c = mix(c, iron * (1.0 + 0.4 * smoothstep(2.0, -2.0, p.y - y)), fill_aa(strap));
-                vec2 rv = vec2((fract((p.x + h.x) / pw) - 0.5) * pw, p.y - y);
-                c = mix(c, vec3(0.45, 0.45, 0.48), fill_aa(sd_circle(rv, 1.6)) * step(abs(p.x), h.x - 4.0));
+                float sgn = k == 0 ? -1.0 : 1.0;
+                float s = (Wl - sgn * p.x) / max(Wl * cw, 0.01);
+                float y = p.y - s * sw * Wl * 0.4;
+                float inside = min(min(s, 1.0 - s) * Wl * cw, min(y - yTop, h.y - y));
+                if (inside > -1.0) {
+                    vec3 lc = door_face(vec2(sgn * Wl * (1.0 - s), y), h, Wl, yTop, style, v_p1.rgb, 1.0 - open, t);
+                    res = over(res, lc * (1.0 - 0.5 * sw), clamp(inside + 0.5, 0.0, 1.0));
+                }
             }
-            c = mix(c, c * 0.5, fill_aa(abs(d + 2.5) - 2.5));                   // the frame
-            float R = clamp(min(h.x * 0.28, h.y * 0.16), 8.0, 26.0);
-            vec2 e = vec2(0.5, 0.0);
-            float plate = sd_round_box(p, vec2(R * 0.7, R), vec4(R * 0.45));
-            vec2 g = vec2(sd_round_box(p + e.xy, vec2(R * 0.7, R), vec4(R * 0.45)) - sd_round_box(p - e.xy, vec2(R * 0.7, R), vec4(R * 0.45)),
-                          sd_round_box(p + e.yx, vec2(R * 0.7, R), vec4(R * 0.45)) - sd_round_box(p - e.yx, vec2(R * 0.7, R), vec4(R * 0.45)));
-            c = mix(c, metal(v_p1.rgb, plate, g, 0.25 * R), fill_aa(plate));
-            float hole = min(sd_circle(p - vec2(0.0, -R * 0.22), R * 0.22), sd_box(p - vec2(0.0, R * 0.18), vec2(R * 0.08, R * 0.34)));
-            c = mix(c, vec3(0.03, 0.02, 0.02), fill_aa(hole));
-            col = vec4(c, fill_aa(d) * v_color.a);
+            col = vec4(res.rgb, res.a * v_color.a);
         } else if (kind == SHAPE_SALAMANDER) {          // the fire lizard
             float u = h.x / 1.05;
             float seed = v_p0.x;
@@ -2086,13 +2207,25 @@ let FRAGMENT_SHADER = """
                 if (which == 0) c = mix(c, vec3(1.0), fill_aa(abs(d + 0.7) - 0.6) * 0.8);
                 col = vec4(c, fill_aa(d) * v_color.a * (which == 0 ? 0.85 : 1.0));
             }
-        } else if (kind == SHAPE_KEY) {                 // a key, with a dark edge so it reads in any liquid
+        } else if (kind == SHAPE_KEY) {                 // a key in its metal, seen through its liquid
             float u = h.x;
-            float d = sd_key(p, u);
+            int style = int(v_p0.y + 0.5);
+            float sub = v_p0.z;
+            // Through the liquid it wavers a little.
+            vec2 q = p + sub * 0.5 * vec2(sin(p.y * 0.4 + t * 2.1 + v_p0.w * 6.0), sin(p.x * 0.3 - t * 1.7 + v_p0.w * 3.0));
+            float d = sd_key_styled(q, u, style);
             vec2 e = vec2(0.5, 0.0);
-            vec2 g = vec2(sd_key(p + e.xy, u) - sd_key(p - e.xy, u), sd_key(p + e.yx, u) - sd_key(p - e.yx, u));
-            vec4 c = vec4(vec3(0.05, 0.04, 0.03), 0.7 * fill_aa(d - 1.6));
-            vec3 m = metal(v_color.rgb, d, g, 0.08 * u) + vec3(1.0, 0.95, 0.8) * v_p0.x * 0.6;
+            vec2 g = vec2(sd_key_styled(q + e.xy, u, style) - sd_key_styled(q - e.xy, u, style),
+                          sd_key_styled(q + e.yx, u, style) - sd_key_styled(q - e.yx, u, style));
+            vec3 m = metal(v_color.rgb, d, g, max(0.07 * u, 1.2));
+            // A glint sweeping along it.
+            float sweep = (q.x + q.y * 0.8) / u - mix(-1.8, 1.8, v_p0.x);
+            m += vec3(1.0, 0.96, 0.85) * exp(-sweep * sweep * 8.0) * sin(v_p0.x * 3.14159265);
+            // The liquid tints it and dims it a little, and its edge.
+            vec3 liq = v_p1.rgb;
+            m = mix(m, m * (0.6 + 0.55 * liq), 0.3 * sub);
+            vec3 edge = mix(vec3(0.05, 0.04, 0.03), liq * 0.15, sub * 0.5);
+            vec4 c = vec4(edge, 0.85 * fill_aa(d - 1.5));
             c = over(c, m, fill_aa(d));
             col = vec4(c.rgb, c.a * v_color.a);
         }

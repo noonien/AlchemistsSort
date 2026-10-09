@@ -408,11 +408,16 @@ functions.
   (A2); completion drops a stopper in and slides a label on (A5); every
   force has a visible effect (heat shimmer, light beams, the flip, the
   salamander's hop, vines growing and burning, the athanor's gold flash,
-  the catalyst's rune burst, a freed key flying to its door's keyhole, the
-  door lifting away, a curtain drawn up). A key is drawn in its layer
-  through the liquid; a shut door is a plank door with a keyhole of its
-  key's metal over its flasks' cells, and a curtain a drape with its
-  color's badge. Heat and light are shown going only to flasks
+  the catalyst's rune burst, a freed key rising out of its layer and flying
+  to its door's keyhole, turning there as the door swings open, a ribbon
+  from the completed flask to a curtain's badge as the drapes are drawn
+  aside). A key is drawn in its layer through the liquid (tipped, poured or
+  turned over with it), glinting now and then; its bow's shape tells its
+  metal (Brass a ring, Silver a trefoil, Copper a diamond). A shut door is a
+  double plank door in a frame over its flasks' cells, with a lock plate of
+  its key's metal engraved with that bow and light from behind showing at
+  its cracks; a curtain is a velvet drape on a rod with its color's badge
+  (and symbol, in the color-blind mode). Heat and light are shown going only to flasks
   they change. A tipped flask's liquid stays level and leaves over the lip;
   an hourglass turns over on its pivots and its liquid falls back down.
   Whatever moves (a flask being poured from, an hourglass turning, the
