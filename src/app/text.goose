@@ -18,27 +18,28 @@ enum TextStyle {
     Body,       // Raleway, for sentences
     Small,      // Raleway, small
     Tiny,       // Raleway, for badges
+    Grand,      // Cinzel, the title screen's name
 }
 
-let ALL_STYLES: const TextStyle[6] = [TextStyle.Title, TextStyle.Heading, TextStyle.Label, TextStyle.Body,
-                                      TextStyle.Small, TextStyle.Tiny];
+let ALL_STYLES: const TextStyle[7] = [TextStyle.Title, TextStyle.Heading, TextStyle.Label, TextStyle.Body,
+                                      TextStyle.Small, TextStyle.Tiny, TextStyle.Grand];
 
 fn style_index(f: TextStyle) -> i64 {
-    match f { Title => 0, Heading => 1, Label => 2, Body => 3, Small => 4, Tiny => 5 }
+    match f { Title => 0, Heading => 1, Label => 2, Body => 3, Small => 4, Tiny => 5, Grand => 6 }
 }
 
 fn style_size(f: TextStyle) -> f32 {
-    match f { Title => 54.0, Heading => 34.0, Label => 24.0, Body => 22.0, Small => 18.0, Tiny => 14.0 }
+    match f { Title => 54.0, Heading => 34.0, Label => 24.0, Body => 22.0, Small => 18.0, Tiny => 14.0, Grand => 80.0 }
 }
 
 fn style_is_title(f: TextStyle) -> bool {
-    match f { Title, Heading, Label => true, Body, Small, Tiny => false }
+    match f { Title, Heading, Label, Grand => true, Body, Small, Tiny => false }
 }
 
 enum Align { Left, Center, Right }
 
 var atlas = ui::FontAtlas { 0 };
-var fonts: ui::Font[6];
+var fonts: ui::Font[7];
 var contexts: ui::Context[2];
 var text_scale: f32 = 0.0;
 var text_offset = float2_0;     // the canvas's top-left corner in pixels, over the scale

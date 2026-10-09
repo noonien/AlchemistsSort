@@ -1905,8 +1905,9 @@ fn draw_frame(dt: f32) {
     motion.clear();
     let theme = current_theme();
     look.light = scene_light(theme, now);
-    // The room (scene.goose); no clicks while the ink moves between screens.
-    draw_scene(base, theme);
+    // The room (scene.goose), but the title screen and the map draw their
+    // own (menus.goose); no clicks while the ink moves between screens.
+    if screen_id != Screen.Home && screen_id != Screen.Map { draw_scene(base, theme); }
     if screen_id == Screen.Play {
         update_back_shelf(shown);
         draw_back_shelf(base);
