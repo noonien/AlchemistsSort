@@ -60,11 +60,33 @@ fn scene_light(theme: i64, t: f64) -> float4 {
 fn draw_scene(out: Inst[>..]&, theme: i64) {
     var bg = inst(Shape.Backdrop, float2 { VW * 0.5, VH * 0.5 }, float2 { VW * 0.5 + 400.0, VH * 0.5 + 200.0 },
                   rgba(1.0, 1.0, 1.0, 1.0));
-    // In a level, the flasks stand on the room's table.
-    let edge: f32 = if screen_id == Screen.Play { TABLE_EDGE } else { 0.0 };
-    bg.p0 = float4 { theme, VW * 0.5 + 400.0, edge, 0.0 };
+    // In a level the flasks stand in the room itself, its middle calmed
+    // behind them.
+    let calm: f32 = if screen_id == Screen.Play { 1.0 } else { 0.0 };
+    bg.p0 = float4 { theme, VW * 0.5 + 400.0, 0.0, calm };
     out.push(bg);
     draw_motes(out, theme);
+}
+
+// The ledges the flasks stand on in a level, one each, floating in the
+// room's air: they stay where the flask's slot is while it is lifted or
+// pours, and catch a little of the room's light underneath.
+fn draw_plinths(out: Inst[>..]&) {
+    let theme = current_theme();
+    let lc = theme_light(theme);
+    for i in shown.count {
+        if shown.bottles[i].behind { continue; }
+        let hx = slots[i].half.x;
+        let base = slots[i].pos + float2 { 0.0, slots[i].half.y - hx * FLASK_E * FLASK_BODY };
+        let r = hx * 1.32;
+        let ry = r * FLASK_E;
+        let thick = hx * 0.2;
+        glow(out, base + float2 { 0.0, ry + thick + hx * 0.3 }, float2 { r * 0.8, hx * 0.25 }, 1.0,
+             with_alpha(lc, 0.10 + 0.03 * look.light.w));
+        var p = inst(Shape.Plinth, base + float2 { 0.0, thick * 0.5 }, float2 { r, ry + thick * 0.5 }, white(1.0));
+        p.p0 = float4 { theme, i * 7 % 13, 0.0, 0.0 };
+        out.push(p);
+    }
 }
 
 // What floats in each room's air, moved by time alone so a slow frame rate
@@ -164,7 +186,6 @@ fn draw_ember_burst(out: Inst[>..]&, t: f64) {
 // --- the back shelf --------------------------------------------------------------------
 
 let SHELF_Y: f32 = 117.0;
-let TABLE_EDGE: f32 = 146.0;        // the table's far edge, in a level
 
 var shelf_colors: i64[..16];        // the level's colors, in order
 var shelf_lit_at: f64[16];          // when each color's bottle lit, or -1
@@ -202,14 +223,27 @@ fn vial_pos(k: i64, n: i64) -> float2 {
     float2 { 412.0 + (k - left) * step, SHELF_Y - 11.0 }
 }
 
+// Two short shelves under the top bar, hung on cords from above, a candle
+// at the inner end of each and the level's bottles along them.
 fn draw_back_shelf(out: Inst[>..]&) {
-    glow(out, float2 { VW * 0.5, SHELF_Y + 6.0 }, float2 { 250.0, 6.0 }, 0.9, float4 { 0.0, 0.0, 0.0, 0.35 });
-    var plank = inst(Shape.Wood, float2 { VW * 0.5, SHELF_Y + 2.0 }, float2 { 252.0, 3.5 }, float4 { 0.36, 0.22, 0.13, 0.9 });
-    plank.p0 = float4 { 2.0, 0.0, 0.0, 0.0 };
-    out.push(plank);
+    let n = shelf_colors.len;
+    let x0 = min(130.0, vial_pos(0, n).x - 16.0);
+    let x1 = max(410.0, vial_pos(n - 1, n).x + 16.0);
+    let spans: float2[2] = [float2 { x0, 182.0 }, float2 { 358.0, x1 }];
+    for sp in spans {
+        let mid = (sp.x + sp.y) * 0.5;
+        let half = (sp.y - sp.x) * 0.5;
+        for e in 2 {
+            let cx: f32 = if e == 0 { sp.x + 8.0 } else { sp.y - 8.0 };
+            rect(out, float2 { cx, SHELF_Y * 0.5 }, float2 { 0.8, SHELF_Y * 0.5 }, 0.0, float4 { 0.45, 0.33, 0.2, 0.55 });
+        }
+        glow(out, float2 { mid, SHELF_Y + 8.0 }, float2 { half + 8.0, 6.0 }, 0.9, float4 { 0.0, 0.0, 0.0, 0.35 });
+        var plank = inst(Shape.Wood, float2 { mid, SHELF_Y + 2.0 }, float2 { half, 3.5 }, float4 { 0.36, 0.22, 0.13, 0.95 });
+        plank.p0 = float4 { 2.0, 0.0, 0.0, 0.0 };
+        out.push(plank);
+    }
     candle(out, float2 { 156.0, SHELF_Y - 1.0 }, 34.0, 1.3);
     candle(out, float2 { 384.0, SHELF_Y - 1.0 }, 28.0, 4.1);
-    let n = shelf_colors.len;
     for c, k in shelf_colors {
         let p = vial_pos(k, n);
         let lit_t = shelf_lit_at[k];

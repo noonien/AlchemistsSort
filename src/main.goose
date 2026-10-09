@@ -943,7 +943,8 @@ fn draw_board(out: Inst[>..]&) {
     for a in pours { if a.active { moving[a.from] = true; } }
     var turning: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
     for i in shown.count { turning[i] = flip_pose(i).on; }
-    // Each flask's soft shadow on the table.
+    // The ledges they stand on (scene.goose), and each flask's soft shadow on its own.
+    draw_plinths(out);
     for i in shown.count {
         if shown.bottles[i].behind { continue; }
         let a = stand_anchors(i);

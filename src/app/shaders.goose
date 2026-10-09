@@ -63,9 +63,10 @@ enum Shape {
     Medallion,  // a chapter's roundel on the map; p0: theme, 0 locked 1 open 2 done; p1: its potion
     GildPath,   // a gilt line along a curve, faint ink dots past its head; p0: start, control;
                 // p1: end, width, head 0..1
+    Plinth,     // the ledge a flask stands on in a level; p0: theme, seed
 }
 
-let ALL_SHAPES: const Shape[49] = [
+let ALL_SHAPES: const Shape[50] = [
     Shape.Rect, Shape.Glow, Shape.FlaskBack, Shape.Liquid, Shape.Glass, Shape.Stream, Shape.Symbol,
     Shape.Spark, Shape.Ice, Shape.Cloth, Shape.Wax, Shape.Vines, Shape.Tap, Shape.Lantern, Shape.Wood,
     Shape.Backdrop, Shape.Icon, Shape.Seal, Shape.Ring, Shape.Candle, Shape.Beam, Shape.Glyph, Shape.Stone,
@@ -73,6 +74,7 @@ let ALL_SHAPES: const Shape[49] = [
     Shape.Frame, Shape.Dial, Shape.Furnace, Shape.Bloom, Shape.Brazier, Shape.Roots, Shape.Door,
     Shape.Salamander, Shape.Heat, Shape.Shard, Shape.Key,
     Shape.Sanctum, Shape.Astrolabe, Shape.Wisp, Shape.Flourish, Shape.Parchment, Shape.Medallion, Shape.GildPath,
+    Shape.Plinth,
 ];
 
 fn shape_index(s: Shape) -> i64 {
@@ -84,7 +86,7 @@ fn shape_index(s: Shape) -> i64 {
         Vial => 28, Smoke => 29, Ribbon => 30, Frame => 31, Dial => 32, Furnace => 33, Bloom => 34,
         Brazier => 35, Roots => 36, Door => 37, Salamander => 38, Heat => 39, Shard => 40, Key => 41,
         Sanctum => 42, Astrolabe => 43, Wisp => 44, Flourish => 45, Parchment => 46, Medallion => 47,
-        GildPath => 48,
+        GildPath => 48, Plinth => 49,
     }
 }
 
@@ -105,7 +107,7 @@ fn shape_define(s: Shape) -> const u8[:] {
         Salamander => "SHAPE_SALAMANDER", Heat => "SHAPE_HEAT", Shard => "SHAPE_SHARD", Key => "SHAPE_KEY",
         Sanctum => "SHAPE_SANCTUM", Astrolabe => "SHAPE_ASTROLABE", Wisp => "SHAPE_WISP",
         Flourish => "SHAPE_FLOURISH", Parchment => "SHAPE_PARCHMENT", Medallion => "SHAPE_MEDALLION",
-        GildPath => "SHAPE_GILDPATH",
+        GildPath => "SHAPE_GILDPATH", Plinth => "SHAPE_PLINTH",
     }
 }
 
@@ -229,6 +231,7 @@ let FRAGMENT_SHADER = """
     #define SHAPE_PARCHMENT 46
     #define SHAPE_MEDALLION 47
     #define SHAPE_GILDPATH 48
+    #define SHAPE_PLINTH 49
     #define ICON_UNDO 0
     #define ICON_RESTART 1
     #define ICON_SHUFFLE 2
@@ -470,16 +473,20 @@ let FRAGMENT_SHADER = """
     }
 
     // --- the rooms: one per chapter, at canvas position cv (540 x 960) -----
-    // Each is painted back to front: the wall and its ground, the
-    // architecture, what stands or hangs in it, the light, and last what
-    // moves. They stay dim and soft, a stage set behind the work: nothing in
-    // them is as bright as a flask's glass. In a level only a strip of the
-    // room shows above the table (canvas 40..320 or so, seen from farther
-    // off), so each room keeps the things that name it up there.
+    // In a level the flasks stand in the room itself, each on a ledge of its
+    // own (Shape.Plinth), so each room is a whole picture from top to bottom:
+    // a back wall and the room's landmark, the architecture around them, a
+    // floor running away from the eye, and dark shapes close in front at the
+    // edges, with the air thickening into the distance between. Each room is
+    // painted back to front; then the backdrop's own pass calms and darkens
+    // the middle, where the board stands (SHAPE_BACKDROP), so the brightest
+    // things in a room keep to its edges and nothing in it outshines a flask.
     //
-    // Time moves everything, and the rare events (a moth, a falling star, a
-    // rune catching fire) come round on long periods of their own, each
-    // period's hash choosing where, so two of them seldom meet.
+    // Everything moves slowly with time. The rare events (a moth, a falling
+    // star, an ember burst) come round on long periods of their own, each
+    // period's hash choosing where, so two of them seldom meet. The canvas
+    // runs past 0..540 across on a wide window, so each room keeps going
+    // sideways rather than stopping at the edges.
 
     float fbm(vec2 p) { return noise(p) * 0.62 + noise(p * 2.13 + 17.0) * 0.38; }
     // A painter's ground: long strokes on a slant and a fine tooth, so a flat
@@ -491,7 +498,30 @@ let FRAGMENT_SHADER = """
     float bricks(vec2 cv, vec2 size, float line) {
         vec2 b = vec2(cv.x / size.x + step(0.5, fract(cv.y / size.y * 0.5)) * 0.5, cv.y / size.y);
         vec2 f = abs(fract(b) - 0.5) * size;
-        return smoothstep(size.x * 0.5 - line, size.x * 0.5, f.x) + smoothstep(size.y * 0.5 - line, size.y * 0.5, f.y);
+        return clamp(smoothstep(size.x * 0.5 - line, size.x * 0.5, f.x) + smoothstep(size.y * 0.5 - line, size.y * 0.5, f.y), 0.0, 1.0);
+    }
+    // Which brick cv is in, as a number 0..1 to vary it by.
+    float brick_id(vec2 cv, vec2 size) {
+        return hash12(floor(vec2(cv.x / size.x + step(0.5, fract(cv.y / size.y * 0.5)) * 0.5, cv.y / size.y)));
+    }
+    // Planks running away from the eye: q is the floor's own coordinates.
+    vec3 planks(vec2 q, vec3 wood, float width, float seed) {
+        float k = floor(q.x / width);
+        float u = q.x / width - k;
+        float grain = noise(vec2(q.x * 0.09, q.y * 0.012 + k * 7.0 + seed)) * 0.55 +
+                      noise(vec2(q.x * 0.4, q.y * 0.03 + k * 3.0)) * 0.3;
+        vec3 c = wood * (0.72 + 0.5 * grain) * (0.9 + 0.2 * hash12(vec2(k, seed)));
+        c *= 1.0 - 0.45 * (1.0 - smoothstep(0.0, 0.025, u)) - 0.25 * smoothstep(0.975, 1.0, u);
+        float j = fract(q.y / 260.0 + hash12(vec2(k, 3.0 + seed)));
+        c *= 1.0 - 0.35 * (1.0 - smoothstep(0.0, 0.006, abs(j - 0.5)));
+        return c;
+    }
+    // The floor below the wall's foot at height `base`, seen from an eye 300
+    // above it: x across and z away in floor units, and in .z how far off
+    // the point is, 1 at the wall and less nearer.
+    vec3 floor_at(vec2 cv, float base) {
+        float d = max(cv.y - (base - 300.0), 1.0);
+        return vec3((cv.x - 270.0) * 300.0 / d, 90000.0 / d, 300.0 / d);
     }
     // A round-headed arch: its springing line through p's origin, w half
     // wide, the jambs running h down from it.
@@ -553,7 +583,7 @@ let FRAGMENT_SHADER = """
         return exp(-k * 0.6);
     }
     // The athanor's ember bursts, one every 19 seconds: 0..1, quick to
-    // flare and slow to settle.
+    // flare and slow to settle (draw_ember_burst throws up the embers).
     float ember_burst(float t) {
         float u = mod(t, 19.0);
         return u < 3.0 ? exp(-u * 1.6) * (1.0 - exp(-u * 12.0)) : 0.0;
@@ -573,44 +603,85 @@ let FRAGMENT_SHADER = """
         tint = mix(tint, vec3(0.32, 0.18, 0.34), step(0.8, hash12(vec2(jx, seed + 5.0))));
         return hj < 0.12 ? 1e3 : min(body, neck);
     }
-    // A shelf's plank at height sy between x0 and x1, lit from below.
+    // Jars standing on a shelf: a glass body in its tint, a highlight down
+    // the side the light comes from, and a glint now and then.
+    vec3 jar_row(vec3 c, vec2 cv, float sy, float step, float seed, float from, float t) {
+        vec3 tint;
+        float jar = jars(cv, sy, step, seed, tint);
+        if (jar > 3.0) return c;
+        float u = fract(cv.x / step) - 0.5;
+        vec3 g = tint * (0.42 + 0.25 * smoothstep(0.3, -0.3, u * from));
+        g += vec3(0.55, 0.45, 0.3) * fill_aa(abs(u * step + from * step * 0.12) - 1.0) * 0.25;
+        float tw = pow(max(0.0, sin(t * 0.4 + hash12(vec2(floor(cv.x / step), seed)) * 40.0)), 30.0);
+        g += vec3(1.0, 0.9, 0.7) * tw * 0.4 * fill_aa(length(vec2(u * step + from * step * 0.12, cv.y - sy + step * 0.5)) - 2.0);
+        return mix(c, g, fill_aa(jar) * 0.9);
+    }
+    // A shelf's plank at height sy between x0 and x1, its shadow under it.
     vec3 shelf(vec3 c, vec2 cv, float sy, float x0, float x1) {
-        float d = max(abs(cv.y - sy - 4.0) - 4.0, max(x0 - cv.x, cv.x - x1));
-        c = mix(c, c * 0.45, fill_aa(max(abs(cv.y - sy - 14.0) - 6.0, max(x0 - cv.x, cv.x - x1))) * 0.6);
-        return mix(c, vec3(0.30, 0.18, 0.10) * (0.85 + 0.3 * noise(cv * vec2(0.08, 0.5))), fill_aa(d));
+        float across = max(x0 - cv.x, cv.x - x1);
+        c = mix(c, c * 0.45, fill_aa(max(abs(cv.y - sy - 14.0) - 6.0, across)) * 0.6);
+        vec3 wood = vec3(0.30, 0.18, 0.10) * (0.85 + 0.3 * noise(cv * vec2(0.08, 0.5)));
+        wood += vec3(0.12, 0.07, 0.03) * (1.0 - smoothstep(0.0, 2.0, cv.y - sy));
+        return mix(c, wood, fill_aa(max(abs(cv.y - sy - 4.0) - 4.0, across)));
+    }
+    // A link chain hanging from the top at x down to y1, swaying with phase.
+    float chain(vec2 cv, float x, float y1, float phase, float t) {
+        float sway = sin(t * 0.4 + phase) * 0.012 * cv.y;
+        vec2 q = vec2(cv.x - x - sway, cv.y);
+        float k = floor(q.y / 14.0);
+        vec2 l = vec2(q.x, mod(q.y, 14.0) - 7.0);
+        float link = mod(k, 2.0) < 1.0 ? abs(length(l / vec2(4.0, 8.0)) - 1.0) * 4.0 - 1.1 : abs(l.x) - 1.3;
+        return max(link, cv.y - y1);
+    }
+    // Leaves: a cluster of broad pointed leaves around `at`, swaying; the
+    // distance to them.
+    float leaves(vec2 cv, vec2 at, float size, float seed, float t) {
+        float d = 1e3;
+        for (int i = 0; i < 4; i++) {
+            float fi = float(i);
+            float a = seed + fi * 1.7 + sin(t * 0.35 + fi + seed) * 0.08;
+            vec2 q = rot(a) * (cv - at);
+            float len = size * (0.7 + 0.5 * hash12(vec2(fi, seed)));
+            q.x -= len * 0.55;
+            float w = len * 0.28 * (1.0 - pow(abs(q.x) / (len * 0.55), 2.0));
+            d = min(d, max(abs(q.y) - w, abs(q.x) - len * 0.55));
+        }
+        return d;
     }
 
     vec3 room_apothecary(vec2 cv, float t) {
         float f = light.a;
+        float base = 780.0;
         // Warm plaster, the brick showing where it has fallen away.
-        vec3 c = mix(vec3(0.10, 0.06, 0.08), vec3(0.24, 0.14, 0.11), smoothstep(-50.0, 900.0, cv.y));
+        vec3 c = mix(vec3(0.09, 0.05, 0.07), vec3(0.23, 0.13, 0.10), smoothstep(-50.0, base, cv.y));
         float bare = smoothstep(0.56, 0.62, fbm(cv * 0.007 + 3.0));
-        c *= 1.0 - bare * (0.12 + 0.2 * clamp(bricks(cv, vec2(56.0, 26.0), 2.0), 0.0, 1.0));
+        c *= 1.0 - bare * (0.12 + 0.2 * bricks(cv, vec2(56.0, 26.0), 2.0));
         c = brushed(c, cv);
-        // Two niches either side, shelves of jars in them; their shadows
-        // lean as the candles below flicker.
+        // Tall niches either side, shelves of jars up them; their shadows
+        // lean as the candles flicker.
         float side = cv.x < 270.0 ? 1.0 : -1.0;
-        vec2 np = vec2(abs(cv.x - 270.0) - 192.0, cv.y - 96.0);
-        float niche = sd_arch(np, 64.0, 250.0);
-        if (niche < 6.0) {
-            vec3 back = c * mix(0.4, 0.7, smoothstep(-60.0, 250.0, np.y));
+        float nx = 270.0 - side * 205.0;
+        vec2 np = vec2(cv.x - nx, cv.y - 150.0);
+        float niche = sd_arch(np, 70.0, base - 160.0);
+        if (niche < 8.0) {
+            vec3 back = c * mix(0.35, 0.65, smoothstep(-70.0, 600.0, np.y));
             c = mix(c, back, fill_aa(niche));
-            c = mix(c, c * 1.35 + vec3(0.03, 0.02, 0.0), fill_aa(abs(niche + 3.0) - 3.0) * 0.6);
+            // Rim light down the niche's inner edge, from the room's middle.
+            c += vec3(0.5, 0.33, 0.18) * fill_aa(abs(niche + 2.0) - 1.5) * 0.25 * smoothstep(0.0, 1.0, -np.x * side / 70.0 + 0.5);
             vec2 sway = vec2(side * (4.0 + 3.0 * f), -4.0 - 2.0 * f);
-            for (int s = 0; s < 3; s++) {
-                float sy = 150.0 + float(s) * 86.0;
+            for (int s = 0; s < 6; s++) {
+                float sy = 205.0 + float(s) * 92.0;
                 vec3 tint;
                 float sh = jars(cv - sway, sy, 26.0, float(s) + side * 3.0, tint);
                 c = mix(c, c * 0.55, fill_aa(sh - 2.0) * 0.6 * fill_aa(niche));
-                float jar = jars(cv, sy, 26.0, float(s) + side * 3.0, tint);
-                c = mix(c, tint * 0.45, fill_aa(jar) * fill_aa(niche + 4.0) * 0.85);
-                c += vec3(0.5, 0.4, 0.25) * fill_aa(abs(jar + 2.0) - 0.8) * fill_aa(niche + 4.0) * 0.12 * (0.7 + 0.3 * f);
-                c = shelf(c, cv, sy, 270.0 - 192.0 * side - 64.0, 270.0 - 192.0 * side + 64.0);
+                c = jar_row(c, cv, sy, 26.0, float(s) + side * 3.0, side, t);
+                c = shelf(c, cv, sy, nx - 70.0, nx + 70.0);
             }
+            c = mix(c, c * 0.5, (1.0 - fill_aa(niche + 4.0)) * fill_aa(niche + 0.0));
         }
         // The rose window high in the middle: six petals of leaded glass,
         // dusk outside, and its shaft of light falling across the room.
-        vec2 wp = cv - vec2(270.0, 128.0);
+        vec2 wp = cv - vec2(270.0, 112.0);
         float wr = length(wp);
         float win = wr - 64.0;
         float sector = 1.0471976;
@@ -621,46 +692,52 @@ let FRAGMENT_SHADER = """
         float lead = min(min(abs(wr - 20.0), abs(length(pp - vec2(42.0, 0.0)) - 20.0)), abs(pp.y) + step(wr, 20.0) * 99.0) - 1.6;
         vec3 glass = mix(vec3(0.62, 0.34, 0.22), vec3(0.36, 0.22, 0.42), hash12(vec2(pid, 2.0)));
         glass = mix(glass, vec3(0.75, 0.55, 0.3), step(wr, 20.0));
-        glass *= 0.42 + 0.2 * smoothstep(-64.0, 64.0, wp.y) + 0.1 * noise(wp * 0.08);
+        glass *= 0.3 + 0.16 * smoothstep(-64.0, 64.0, wp.y) + 0.08 * noise(wp * 0.08) + 0.05 * sin(t * 0.3 + pid);
         c = mix(c, vec3(0.06, 0.04, 0.05), fill_aa(win - 10.0));
         c = mix(c, vec3(0.30, 0.20, 0.15) * (0.8 + 0.3 * noise(wp * 0.2)), fill_aa(abs(win - 5.0) - 4.0));
         c = mix(c, glass, fill_aa(win) * fill_aa(-lead));
-        c += vec3(0.5, 0.32, 0.2) * exp(-max(win, 0.0) / 40.0) * 0.06;
-        float sh = shaft(cv, vec2(250.0, 140.0), normalize(vec2(0.42, 1.0)), 52.0, 0.28, 800.0) * step(0.0, win);
+        c += vec3(0.5, 0.32, 0.2) * exp(-max(win, 0.0) / 50.0) * 0.07;
+        float sh = shaft(cv, vec2(250.0, 130.0), normalize(vec2(0.42, 1.0)), 52.0, 0.3, 900.0) * step(0.0, win);
         float haze = 0.8 + 0.4 * noise(vec2(cv.x * 0.01 - t * 0.03, cv.y * 0.004));
         c += vec3(0.9, 0.62, 0.38) * sh * 0.07 * haze;
         c += vec3(1.0, 0.85, 0.6) * dust(cv, t) * sh * 0.3;
-        // Bundles of herbs drying from the beam, turning a little in the draught.
-        for (int i = 0; i < 2; i++) {
-            float hx = i == 0 ? 158.0 : 384.0;
-            vec2 hp = rot(sin(t * 0.37 + float(i) * 2.0) * 0.05) * (cv - vec2(hx, 22.0));
-            float string = sd_segment(hp, vec2(0.0, 0.0), vec2(0.0, 52.0)) - 0.7;
-            float bunch = sd_triangle(hp, vec2(0.0, 50.0), vec2(-17.0, 118.0), vec2(17.0, 118.0)) + 4.0 * noise(hp * 0.25);
-            vec3 herb = mix(vec3(0.10, 0.11, 0.05), vec3(0.20, 0.17, 0.08), noise(hp * vec2(0.4, 0.08)));
-            c = mix(c, vec3(0.08, 0.06, 0.05), fill_aa(string) * 0.8);
-            c = mix(c, herb, fill_aa(bunch) * 0.9);
-        }
-        // A circle of the Art chalked on the wall below the window, turning so
-        // slowly you only notice it has moved; a rune glows as a light runs round.
+        // A circle of the Art chalked on the wall, turning so slowly you only
+        // notice it has moved; a light runs round its runes.
         float rune;
-        float sg = sigil(cv - vec2(270.0, 330.0), 108.0, t * 0.012, 20.0, 0.7, rune);
-        c += vec3(0.75, 0.62, 0.48) * fill_aa(sg) * 0.08;
-        if (rune >= 0.0) c += vec3(1.0, 0.7, 0.35) * fill_aa(sg) * 0.3 * rune_run(rune, 20.0, t, 1.6);
-        // Wooden paneling below.
-        float panel = smoothstep(640.0, 642.0, cv.y);
-        float grain = noise(vec2(cv.x * 0.08, cv.y * 0.006)) * 0.5 + noise(vec2(cv.x * 0.3, cv.y * 0.02)) * 0.25;
-        vec3 wood = vec3(0.22, 0.12, 0.07) * (0.8 + grain);
-        wood *= 1.0 - 0.35 * smoothstep(27.0, 30.0, abs(mod(cv.x, 60.0) - 30.0));
-        c = mix(c, wood, panel);
-        c = mix(c, vec3(0.36, 0.22, 0.12), fill_aa(abs(cv.y - 640.0) - 5.0));
-        // Now and then a moth comes in at the window and crosses to the candles.
+        float sg = sigil(cv - vec2(270.0, 460.0), 170.0, t * 0.012, 24.0, 0.8, rune);
+        c += vec3(0.75, 0.62, 0.48) * fill_aa(sg) * 0.07;
+        if (rune >= 0.0) c += vec3(1.0, 0.7, 0.35) * fill_aa(sg) * 0.3 * rune_run(rune, 24.0, t, 1.6);
+        // The floor: old boards going away, the candlelight lying on them.
+        if (cv.y > base) {
+            vec3 fl = floor_at(cv, base);
+            vec3 boards = planks(fl.xy, vec3(0.30, 0.17, 0.09), 90.0, 0.0);
+            boards *= 0.55 + 0.45 * (1.0 - fl.z);
+            boards += light.rgb * 0.12 * exp(-abs(fl.x) / 260.0) * (0.8 + 0.2 * f) * (1.0 - fl.z * 0.5);
+            boards += vec3(0.6, 0.4, 0.25) * sh * 0.08;
+            c = boards;
+            c = mix(c, vec3(0.05, 0.03, 0.03), 1.0 - smoothstep(0.0, 10.0, cv.y - base));
+        }
+        c = mix(c, vec3(0.30, 0.18, 0.10), fill_aa(abs(cv.y - base + 8.0) - 5.0));      // the skirting
+        // Close in front: bunches of herbs hanging at the top corners, soft
+        // and dark, turning a little in the draught.
+        for (int i = 0; i < 2; i++) {
+            float hx = i == 0 ? 18.0 : 524.0;
+            vec2 hp = rot(sin(t * 0.3 + float(i) * 2.0) * 0.05) * (cv - vec2(hx, -10.0));
+            float string = sd_segment(hp, vec2(0.0, 0.0), vec2(0.0, 70.0)) - 1.2;
+            float bunch = sd_triangle(hp, vec2(0.0, 60.0), vec2(-34.0, 200.0), vec2(34.0, 200.0)) + 8.0 * noise(hp * 0.12);
+            float d = min(string, bunch);
+            vec3 herb = mix(vec3(0.03, 0.03, 0.015), vec3(0.08, 0.07, 0.03), noise(hp * vec2(0.3, 0.06)));
+            herb += vec3(0.25, 0.15, 0.06) * smoothstep(-6.0, 0.0, bunch) * 0.4;    // rim light
+            c = mix(c, herb, smoothstep(3.0, -3.0, d));
+        }
+        // Now and then a moth comes in at the window and crosses the room.
         float period = 37.0;
         float n = floor(t / period);
         float u = (t - n * period) / 9.0;
         if (u < 1.0) {
             float hy = hash12(vec2(n, 7.0));
             float dir = hy > 0.5 ? 1.0 : -1.0;
-            vec2 mp = vec2(270.0 + dir * (u - 0.5) * 640.0, 150.0 + hy * 160.0 + sin(u * 19.0) * 26.0 + u * 60.0);
+            vec2 mp = vec2(270.0 + dir * (u - 0.5) * 680.0, 150.0 + hy * 200.0 + sin(u * 19.0) * 26.0 + u * 60.0);
             vec2 m = (cv - mp) / 1.7;
             if (dot(m, m) < 400.0) {
                 float flap = 0.35 + 0.65 * abs(sin(t * 23.0));
@@ -674,147 +751,196 @@ let FRAGMENT_SHADER = """
         }
         return c;
     }
+
+    // The frost cellar: a vaulted passage running away from the eye, rib
+    // after rib, to a grate with the moon in it. Every surface (vault,
+    // walls, floor) is found from the eye by its depth s (1 near, smaller
+    // farther), so the ribs and the stones fall in perspective of themselves.
     vec3 room_frost(vec2 cv, float t) {
-        // Cold stone in big blocks, frost on it.
-        vec3 c = mix(vec3(0.06, 0.08, 0.14), vec3(0.13, 0.17, 0.25), smoothstep(0.0, 900.0, cv.y));
-        float m = clamp(bricks(cv, vec2(120.0, 76.0), 3.0), 0.0, 1.0);
-        c *= (1.0 - 0.3 * m) * (0.85 + 0.25 * noise(cv * 0.025));
-        c = brushed(c, cv);
-        // A low barrel vault opening into the cellar beyond: racks of bottles
-        // laid down in the dark, their ends catching a little light.
-        vec2 vp = cv - vec2(270.0, 250.0);
-        float vault = sd_arch(vp, 196.0, 390.0);
-        if (vault < 24.0) {
-            vec3 deep = mix(vec3(0.03, 0.04, 0.08), vec3(0.06, 0.08, 0.13), smoothstep(-200.0, 400.0, vp.y));
-            vec2 g = vec2(mod(cv.x + 8.0, 30.0) - 15.0, mod(cv.y, 28.0) - 14.0);
-            float rack = step(abs(vp.x), 150.0) * step(-120.0, vp.y) * step(vp.y, 360.0);
-            float bottle = length(g) - 9.0;
-            deep = mix(deep, vec3(0.07, 0.09, 0.14) * (0.6 + 0.6 * hash12(floor((cv + 8.0) / vec2(30.0, 28.0)))), fill_aa(bottle) * rack);
-            deep += vec3(0.4, 0.5, 0.6) * fill_aa(length(g - vec2(-3.0, -3.0)) - 2.0) * rack * 0.12;
-            deep = mix(deep, vec3(0.04, 0.05, 0.08), fill_aa(abs(g.y + 14.0) - 1.6) * rack);
-            c = mix(c, deep, fill_aa(vault));
-            // The vault's voussoirs, rimed.
-            float ring = abs(vault + 12.0) - 12.0;
-            float joint = abs(fract(atan(vp.y, vp.x) / 6.2831853 * 26.0) - 0.5);
-            vec3 stone = vec3(0.16, 0.20, 0.28) * (1.0 - 0.4 * smoothstep(0.44, 0.5, joint) * step(vp.y, 0.0));
-            c = mix(c, stone, fill_aa(ring));
+        vec2 v = vec2(270.0, 430.0);            // where the passage vanishes
+        vec2 p = cv - v;
+        float W = 330.0;                        // the passage's half width, near
+        float S = 260.0;                        // the vault's springing, above the eye
+        float F = 560.0;                        // the floor, below it
+        float s_wall = abs(p.x) / W;
+        float s_floor = p.y / F;
+        float pp = dot(p, p);
+        float s_vault = (520.0 * p.y + sqrt(270400.0 * p.y * p.y + 165200.0 * pp)) / 82600.0;
+        float s; vec2 uv; int surf;
+        if (p.y > 0.0 && s_floor > s_wall) { s = s_floor; uv = vec2(p.x / s, 1.0 / s); surf = 0; }
+        else if (p.y < -S * s_wall) { s = s_vault; uv = vec2(atan(p.y + S * s, p.x) * W, 1.0 / s); surf = 2; }
+        else { s = s_wall; uv = vec2(p.y / s, 1.0 / s); surf = 1; }
+        float z = 1.0 / max(s, 0.001);
+        float end = 4.6;                        // the far wall, where the grate is
+        vec3 c;
+        vec3 moon = vec3(0.45, 0.6, 0.85);
+        if (z > end) {
+            // The far wall, the grate in it, moonlight pouring through.
+            vec2 q = p * end;
+            vec2 gp = p - vec2(0.0, -40.0);
+            float grate = sd_round_box(gp, vec2(30.0, 22.0), vec4(10.0, 2.0, 10.0, 2.0));
+            c = vec3(0.07, 0.09, 0.14) * (1.0 - 0.3 * bricks(q, vec2(110.0, 70.0), 4.0));
+            vec3 night = mix(vec3(0.25, 0.34, 0.5), vec3(0.55, 0.65, 0.8), smoothstep(20.0, -20.0, gp.y + gp.x * 0.3));
+            night = mix(night, vec3(0.04, 0.05, 0.08), fill_aa(abs(mod(gp.x + 5.0, 10.0) - 5.0) - 1.2));
+            c = mix(c, night, fill_aa(grate));
+        } else {
+            vec2 g = surf == 0 ? vec2(uv.x, uv.y * 120.0) : vec2(uv.y * 120.0, uv.x);
+            vec2 size = surf == 0 ? vec2(130.0, 90.0) : vec2(100.0, 64.0);
+            float m = bricks(g, size, 3.0 * z);
+            float id = brick_id(g, size);
+            vec3 stone = vec3(0.085, 0.11, 0.16) * (0.8 + 0.3 * id) * (1.0 - 0.45 * m);
+            if (surf == 0) stone *= 0.8;
+            if (surf == 2) stone *= 0.85;
+            // Racks of bottles laid down along the walls, their ends catching the light.
+            if (surf == 1 && uv.x > -200.0 && uv.x < 230.0) {
+                vec2 r = vec2(mod(uv.y * 120.0, 34.0) - 17.0, mod(uv.x, 30.0) - 15.0);
+                float bottle = length(r) - 11.0;
+                float bay = step(0.3, fract(uv.y * 120.0 / 220.0));
+                vec3 glass = mix(vec3(0.05, 0.06, 0.08), vec3(0.06, 0.08, 0.08), hash12(floor(vec2(uv.y * 120.0 / 34.0, uv.x / 30.0))));
+                vec3 rack = mix(stone * 0.3, glass, fill_aa(bottle * s));
+                rack += vec3(0.5, 0.65, 0.8) * fill_aa((length(r - vec2(-3.0, -4.0)) - 2.5) * s) * 0.2;
+                stone = mix(stone, rack, bay);
+            }
+            // The ribs: an arch every 0.55 of depth, its stone a little paler.
+            float rk = (z - 1.0) / 0.55;
+            float rib = abs(fract(rk + 0.5) - 0.5) * 0.55;
+            float ribw = 0.06;
+            float px = W * s * s;                  // pixels per unit of depth here
+            stone = mix(stone, vec3(0.12, 0.15, 0.21) * (0.9 + 0.2 * noise(uv * 0.05)), fill_aa((rib - ribw) * px));
+            stone += vec3(0.25, 0.32, 0.42) * fill_aa(abs(rib - ribw) * px - 0.8) * 0.15;
+            c = stone;
+            // Moonlight from the grate along the floor and up the walls.
+            float lit = exp(-abs(z - end) * 0.9) * (surf == 0 ? exp(-abs(uv.x) / 160.0) : 0.6);
+            c += moon * lit * 0.08;
+            // Rime: thick where the passage is near, creeping and receding, glinting.
+            vec2 rq = uv * vec2(0.012, 1.4);
+            float creep = 0.06 * sin(t * 0.07) + 0.03 * sin(t * 0.19 + 1.0);
+            float rime = smoothstep(0.58, 0.7, fbm(rq + vec2(0.0, float(surf) * 7.0)) * 0.6 + (1.0 - smoothstep(1.0, 2.6, z)) * 0.35 + creep);
+            float fern = noise(rq * vec2(6.0, 2.0) + noise(rq * 3.0) * 2.0);
+            c = mix(c, vec3(0.36, 0.46, 0.6) * (0.6 + 0.5 * fern), rime * 0.25);
+            float sweep = mod(t, 23.0) * 160.0 - 400.0;
+            float glint = exp(-pow((cv.x + cv.y * 0.6 - sweep) / 50.0, 2.0));
+            c += vec3(0.85, 0.93, 1.0) * rime * (speckle(cv / 9.0, t, 1.3, 0.1) * (0.3 + 1.5 * glint) + glint * 0.06);
         }
-        // The floor: worn flags, darker than the walls.
-        float flags = clamp(bricks(cv * vec2(1.0, 2.2), vec2(150.0, 80.0), 3.0), 0.0, 1.0);
-        vec3 ground = vec3(0.06, 0.08, 0.12) * (1.0 - 0.35 * flags) * (0.85 + 0.3 * noise(cv * 0.03));
-        c = mix(c, ground, smoothstep(638.0, 642.0, cv.y));
-        c = mix(c, vec3(0.18, 0.23, 0.31), fill_aa(abs(cv.y - 640.0) - 2.5));
-        // A grate high in the vault, and the moon's cold shaft through it.
-        vec2 gp = cv - vec2(270.0, 96.0);
-        float grate = sd_round_box(gp, vec2(42.0, 24.0), vec4(4.0));
-        vec3 night = mix(vec3(0.14, 0.2, 0.32), vec3(0.32, 0.42, 0.55), smoothstep(30.0, -30.0, gp.y + gp.x * 0.3));
-        night = mix(night, vec3(0.05, 0.06, 0.1), fill_aa(abs(mod(gp.x + 7.0, 14.0) - 7.0) - 1.6));
-        c = mix(c, night, fill_aa(grate));
-        c = mix(c, vec3(0.20, 0.25, 0.33), fill_aa(abs(grate - 3.0) - 3.0));
-        float sh = shaft(cv, vec2(270.0, 96.0), normalize(vec2(-0.3, 1.0)), 40.0, 0.22, 900.0);
-        c += vec3(0.45, 0.6, 0.85) * sh * (0.08 + 0.03 * noise(vec2(cv.x * 0.01, t * 0.1)));
-        c += vec3(0.8, 0.9, 1.0) * dust(cv, t * 0.6) * sh * 0.25;
-        // Frost creeping over the stone from the top and the sides, slowly
-        // coming and going, glinting.
-        float edge = 1.0 - smoothstep(0.0, 260.0, min(min(cv.x, 540.0 - cv.x) * 1.4, cv.y));
-        float creep = 0.06 * sin(t * 0.07) + 0.03 * sin(t * 0.19 + 1.0);
-        float rime = smoothstep(0.6, 0.7, fbm(cv * 0.014) * 0.5 + edge * 0.6 + creep);
-        float fern = noise(cv * vec2(0.09, 0.03) + noise(cv * 0.05) * 2.0);
-        c = mix(c, vec3(0.42, 0.54, 0.68) * (0.6 + 0.5 * fern), rime * 0.3);
-        // The light catching the rime: a glint sweeping over it now and then.
-        float sweep = mod(t, 23.0) * 160.0 - 400.0;
-        float glint = exp(-pow((cv.x + cv.y * 0.6 - sweep) / 50.0, 2.0));
-        c += vec3(0.85, 0.93, 1.0) * rime * (speckle(cv / 9.0, t, 1.3, 0.1) * (0.35 + 1.5 * glint) + glint * 0.08);
-        // Icicles from the vault above.
-        float col = floor(cv.x / 22.0);
-        float len = 18.0 + hash12(vec2(col, 3.0)) * 70.0;
-        float ix = abs(mod(cv.x, 22.0) - 11.0);
-        float icicle = ix - 8.0 * (1.0 - cv.y / len);
-        if (hash12(vec2(col, 5.0)) > 0.3) c = mix(c, vec3(0.72, 0.85, 0.96), fill_aa(icicle) * 0.55 * (1.0 - cv.y / len * 0.5));
+        // The cold air thickens down the passage.
+        float fogk = smoothstep(1.0, end, z);
+        c = mix(c, vec3(0.07, 0.10, 0.16), fogk * 0.65);
+        c += moon * exp(-length(p - vec2(0.0, -40.0)) / 90.0) * 0.12;
+        // The moon's shaft coming down the passage, dust in it.
+        float sh = shaft(cv, v + vec2(0.0, -40.0), normalize(vec2(0.0, 1.0)), 30.0, 0.35, 900.0);
+        c += moon * sh * (0.05 + 0.02 * noise(vec2(cv.x * 0.01, t * 0.1)));
+        c += vec3(0.8, 0.9, 1.0) * dust(cv, t * 0.6) * sh * 0.18;
         // Cold mist low over the floor, drifting.
-        float mist = noise(vec2(cv.x * 0.005 + t * 0.02, cv.y * 0.01 - t * 0.01)) * smoothstep(500.0, 960.0, cv.y);
-        c += vec3(0.3, 0.38, 0.5) * mist * 0.18;
-        // Embers glowing low in a brazier.
-        c += vec3(0.5, 0.18, 0.04) * exp(-pow(length((cv - vec2(270.0, 1010.0)) * vec2(0.6, 1.0)) / 260.0, 2.0)) * 0.6;
+        float mist = noise(vec2(cv.x * 0.005 + t * 0.02, cv.y * 0.01 - t * 0.01)) * smoothstep(600.0, 960.0, cv.y);
+        c += vec3(0.3, 0.38, 0.5) * mist * 0.16;
+        // Close in front: icicles hanging from the nearest rib, out of focus.
+        float col = floor(cv.x / 26.0);
+        float len = 20.0 + hash12(vec2(col, 3.0)) * 60.0;
+        float ix = abs(mod(cv.x, 26.0) - 13.0);
+        float icicle = ix - 9.0 * (1.0 - cv.y / len);
+        if (hash12(vec2(col, 5.0)) > 0.35) {
+            float a = smoothstep(2.0, -2.0, icicle) * (1.0 - cv.y / len * 0.6);
+            c = mix(c, vec3(0.22, 0.30, 0.40), a * 0.8);
+            c += vec3(0.6, 0.75, 0.9) * smoothstep(1.5, 0.0, abs(mod(cv.x, 26.0) - 10.0)) * a * 0.25;
+        }
         return c;
     }
+
     vec3 room_glassworks(vec2 cv, float t) {
         float f = light.a;
+        float base = 770.0;
         // The kiln breathes: a slow swell with the flicker on top.
         float breath = 0.82 + 0.12 * sin(t * 0.55) + 0.06 * f;
         // Over the kiln the air shimmers, and the wall with it.
-        vec2 kp = cv - vec2(270.0, 250.0);
-        float above = smoothstep(60.0, -20.0, kp.y) * (1.0 - smoothstep(60.0, 160.0, abs(kp.x)));
+        vec2 kp = cv - vec2(270.0, 200.0);
+        float above = smoothstep(40.0, -40.0, kp.y + 160.0) * (1.0 - smoothstep(40.0, 140.0, abs(kp.x)));
         vec2 w = cv + vec2(noise(vec2(cv.x * 0.05, cv.y * 0.03 + t * 1.4)) - 0.5, 0.0) * 9.0 * above;
-        vec3 c = mix(vec3(0.10, 0.05, 0.05), vec3(0.21, 0.10, 0.07), smoothstep(0.0, 900.0, cv.y));
-        float m = clamp(bricks(w, vec2(48.0, 22.0), 1.6), 0.0, 1.0);
-        c *= (1.0 - 0.32 * m) * (0.82 + 0.28 * hash12(floor(vec2(w.x / 48.0 + step(0.5, fract(w.y / 44.0)) * 0.5, w.y / 22.0))));
+        vec3 c = mix(vec3(0.09, 0.045, 0.045), vec3(0.20, 0.09, 0.065), smoothstep(0.0, base, cv.y));
+        float m = bricks(w, vec2(48.0, 22.0), 1.6);
+        c *= (1.0 - 0.32 * m) * (0.82 + 0.28 * brick_id(w, vec2(48.0, 22.0)));
         c = brushed(c, cv);
+        // The firelight warms the wall round the kiln.
+        c += vec3(0.4, 0.15, 0.04) * exp(-length(kp * vec2(0.8, 1.0)) / 220.0) * 0.25 * breath;
         // The kiln: a beehive dome of firebrick, its mouth burning, two
         // glory holes either side.
-        float dome = sd_arch(kp, 170.0, 400.0);
+        float dome = sd_arch(kp, 150.0, base - 200.0);
         float rows = abs(fract(length(kp) / 18.0) - 0.5);
-        vec3 fire_brick = vec3(0.24, 0.11, 0.07) * (0.8 + 0.3 * noise(kp * 0.1));
+        vec3 fire_brick = vec3(0.22, 0.10, 0.065) * (0.8 + 0.3 * noise(kp * 0.1));
         fire_brick *= 1.0 - 0.35 * smoothstep(0.42, 0.5, rows) * step(kp.y, 0.0);
-        fire_brick += vec3(0.6, 0.25, 0.06) * exp(-length(kp - vec2(0.0, 40.0)) / 90.0) * 0.35 * breath;
+        fire_brick *= 1.0 - 0.3 * bricks(cv, vec2(36.0, 18.0), 1.4) * step(0.0, kp.y);
+        fire_brick += vec3(0.6, 0.25, 0.06) * exp(-length(kp - vec2(0.0, 20.0)) / 80.0) * 0.3 * breath;
+        // Rim light round the dome, from the furnace below.
+        fire_brick += vec3(0.7, 0.3, 0.08) * fill_aa(abs(dome + 3.0) - 2.5) * 0.25 * smoothstep(-150.0, 50.0, kp.y);
         c = mix(c, fire_brick, fill_aa(dome));
         c = mix(c, vec3(0.05, 0.03, 0.03), fill_aa(abs(dome) - 2.0) * 0.7);
-        vec2 mp = kp - vec2(0.0, 40.0);
-        float mouth = sd_arch(mp, 58.0, 40.0);
+        vec2 mp = kp - vec2(0.0, 20.0);
+        float mouth = sd_arch(mp, 52.0, 36.0);
         float heat = noise(vec2(mp.x * 0.06, mp.y * 0.05 + t * 1.8));
-        vec3 fire = mix(vec3(1.0, 0.72, 0.32), vec3(0.75, 0.25, 0.06), smoothstep(-50.0, 40.0, mp.y + heat * 30.0));
-        c = mix(c, fire * 0.62 * breath, fill_aa(mouth));
-        c = mix(c, vec3(0.32, 0.16, 0.10), fill_aa(abs(mouth - 4.0) - 4.0));
+        vec3 fire = mix(vec3(1.0, 0.72, 0.32), vec3(0.75, 0.25, 0.06), smoothstep(-50.0, 36.0, mp.y + heat * 30.0));
+        c = mix(c, fire * 0.55 * breath, fill_aa(mouth));
+        c = mix(c, vec3(0.30, 0.15, 0.09), fill_aa(abs(mouth - 4.0) - 4.0));
         for (int i = 0; i < 2; i++) {
-            vec2 hp = kp - vec2(i == 0 ? -112.0 : 112.0, 18.0);
-            float hole = length(hp) - 15.0;
-            c = mix(c, vec3(0.95, 0.55, 0.18) * 0.55 * (breath + 0.1 * sin(t * 1.3 + float(i) * 2.0)), fill_aa(hole));
+            vec2 hp = kp - vec2(i == 0 ? -98.0 : 98.0, 0.0);
+            float hole = length(hp) - 13.0;
+            c = mix(c, vec3(0.95, 0.55, 0.18) * 0.5 * (breath + 0.1 * sin(t * 1.3 + float(i) * 2.0)), fill_aa(hole));
             c = mix(c, vec3(0.30, 0.15, 0.09), fill_aa(abs(hole - 3.0) - 3.0));
         }
-        c += vec3(0.6, 0.24, 0.06) * exp(-max(mouth, 0.0) / 70.0) * 0.18 * breath * step(0.0, mouth);
-        // A flue up from the dome's crown.
-        float flue = max(abs(cv.x - 270.0) - 26.0, cv.y - 82.0);
+        c += vec3(0.6, 0.24, 0.06) * exp(-max(mouth, 0.0) / 60.0) * 0.16 * breath * step(0.0, mouth);
+        // The flue up from the dome's crown.
+        float flue = max(abs(cv.x - 270.0) - 24.0, cv.y - 55.0);
         c = mix(c, vec3(0.12, 0.06, 0.05) * (0.8 + 0.4 * noise(cv * vec2(0.3, 0.05))), fill_aa(flue));
-        // Racks of finished glass either side, their shoulders catching the fire.
+        // Racks of finished glass up both walls, their shoulders catching the fire.
         float side = cv.x < 270.0 ? 1.0 : -1.0;
-        for (int s = 0; s < 2; s++) {
-            float sy = 170.0 + float(s) * 96.0;
-            if (abs(cv.x - 270.0) > 196.0) {
-                vec3 tint;
-                float jar = jars(cv, sy, 30.0, float(s) + 20.0 + side, tint);
-                float rim = fill_aa(abs(jar + 1.5) - 1.0) * smoothstep(0.0, 1.0, (cv.x - 270.0) * -side / 270.0 + 0.6);
-                c = mix(c, mix(tint, vec3(0.3, 0.18, 0.12), 0.5) * 0.35, fill_aa(jar) * 0.85);
-                c += vec3(1.0, 0.6, 0.25) * rim * 0.35 * breath;
-                c = shelf(c, cv, sy, side > 0.0 ? -10.0 : 470.0, side > 0.0 ? 70.0 : 550.0);
+        float rx = 270.0 - side * 222.0;
+        if (abs(cv.x - rx) < 70.0) {
+            for (int s = 0; s < 6; s++) {
+                float sy = 170.0 + float(s) * 96.0;
+                c = jar_row(c, cv, sy, 30.0, float(s) + 20.0 + side, side, t);
+                c += vec3(1.0, 0.55, 0.2) * 0.08 * breath * fill_aa(abs(cv.y - sy + 18.0) - 16.0) * smoothstep(70.0, 0.0, abs(cv.x - rx)) * 0.4;
+                c = shelf(c, cv, sy, rx - 66.0, rx + 66.0);
             }
         }
-        // Glass tubes: one along the wall, one down its side, the melt flowing in them.
-        float tube = min(abs(cv.y - 330.0), abs(cv.x - 20.0) + step(cv.y, 330.0) * 1e4) - 7.0;
-        float elbow = abs(length(cv - vec2(48.0, 358.0)) - 28.0) - 7.0;
-        if (cv.x < 48.0 && cv.y < 358.0 && cv.y > 300.0) tube = elbow;
-        if (abs(cv.x - 270.0) < 175.0 && cv.y < 400.0) tube = 1e3;
-        float flow = 0.5 + 0.5 * sin((cv.x - cv.y) * 0.05 - t * 1.5);
+        // Glass tubes along the wall, the melt flowing in them.
+        float tube = abs(cv.y - 128.0) - 6.0;
+        if (abs(cv.x - 270.0) < 160.0) tube = 1e3;
+        float flow = 0.5 + 0.5 * sin((cv.x - cv.y) * 0.05 - t * 1.2);
         c = mix(c, vec3(0.9, 0.55, 0.15) * (0.3 + 0.15 * flow), fill_aa(tube) * 0.7);
         c = mix(c, vec3(0.7, 0.75, 0.8), fill_aa(abs(tube + 1.5) - 1.0) * 0.3);
-        // The furnace mouth below, glowing.
-        vec2 fm = cv - vec2(270.0, 1060.0);
-        float arch = sd_round_box(fm, vec2(190.0, 150.0), vec4(170.0, 0.0, 170.0, 0.0));
-        vec3 low = mix(vec3(0.85, 0.42, 0.12), vec3(0.42, 0.11, 0.04), smoothstep(-150.0, 0.0, fm.y));
-        c = mix(c, low * breath, fill_aa(arch) * 0.32);
-        c += vec3(0.5, 0.2, 0.05) * exp(-max(arch, 0.0) / 90.0) * 0.18 * breath;
+        // The floor: firebrick laid flat, the kiln's light pooling on it.
+        if (cv.y > base) {
+            vec3 fl = floor_at(cv, base);
+            vec2 g = fl.xy * vec2(1.0, 1.0);
+            float fm = bricks(g, vec2(70.0, 36.0), 2.5 / fl.z);
+            vec3 fc = vec3(0.17, 0.08, 0.055) * (0.75 + 0.4 * brick_id(g, vec2(70.0, 36.0))) * (1.0 - 0.5 * fm);
+            fc *= 0.6 + 0.4 * (1.0 - fl.z);
+            fc += vec3(0.5, 0.2, 0.05) * exp(-abs(fl.x) / 200.0) * fl.z * 0.25 * breath;
+            c = mix(vec3(0.04, 0.02, 0.02), fc, smoothstep(0.0, 10.0, cv.y - base));
+        }
+        // Close in front: chains hanging at the edges, and a blowpipe on a hook.
+        float ch = min(chain(cv, 14.0, 520.0, 0.0, t), chain(cv, 528.0, 430.0, 2.0, t));
+        c = mix(c, vec3(0.05, 0.035, 0.03), fill_aa(ch));
+        c += vec3(0.6, 0.3, 0.1) * fill_aa(abs(ch + 1.0) - 0.6) * 0.15;
         return c;
     }
+
     vec3 room_observatory(vec2 cv, float t) {
-        vec3 wall = mix(vec3(0.07, 0.05, 0.10), vec3(0.16, 0.10, 0.12), smoothstep(0.0, 900.0, cv.y));
+        float base = 760.0;
+        vec3 wall = mix(vec3(0.06, 0.045, 0.09), vec3(0.15, 0.10, 0.12), smoothstep(0.0, base, cv.y));
         wall *= 0.85 + 0.25 * noise(vec2(cv.x * 0.05, cv.y * 0.004));
         wall = brushed(wall, cv);
+        // The dome's ribs curving down to the wall's top.
+        float ribs = abs(mod(atan(cv.y + 400.0, cv.x - 270.0) * 9.0, 1.0) - 0.5);
+        wall *= 1.0 - 0.25 * smoothstep(0.43, 0.5, ribs) * smoothstep(80.0, 0.0, cv.y);
         // A tall arched window onto the night sky.
         vec2 wp = cv - vec2(270.0, 330.0);
-        float win = sd_round_box(wp, vec2(235.0, 300.0), vec4(235.0, 0.0, 235.0, 0.0));
+        float win = sd_round_box(wp, vec2(235.0, 330.0), vec4(235.0, 0.0, 235.0, 0.0));
         vec3 c = wall;
         if (win < 6.0) {
-            vec3 sky = mix(vec3(0.02, 0.03, 0.10), vec3(0.08, 0.09, 0.22), smoothstep(30.0, 630.0, cv.y));
+            vec3 sky = mix(vec3(0.02, 0.03, 0.10), vec3(0.08, 0.09, 0.22), smoothstep(30.0, 660.0, cv.y));
             sky += vec3(0.12, 0.07, 0.18) * smoothstep(0.5, 0.85, fbm(cv * 0.006 + vec2(3.0, 1.0))) * 0.5;
+            // The Milky Way, a faint band of haze and fine stars.
+            float band = exp(-pow((cv.y - cv.x * 0.7 - 120.0) / 90.0, 2.0));
+            sky += vec3(0.2, 0.18, 0.3) * band * fbm(cv * 0.02) * 0.35;
             // An aurora's curtains, slowly folding.
             float ay = 190.0 + 70.0 * noise(vec2(cv.x * 0.004 + t * 0.015, 1.0)) + 26.0 * sin(cv.x * 0.012 + t * 0.09);
             float curtain = exp(-pow((cv.y - ay) / 46.0, 2.0)) * (cv.y < ay ? 1.0 : 0.6);
@@ -823,7 +949,7 @@ let FRAGMENT_SHADER = """
             sky += aur * curtain * folds * (0.13 + 0.05 * sin(t * 0.2));
             // The stars, wheeling about the pole very slowly.
             vec2 sp = rot(t * 0.004) * (cv - vec2(330.0, 90.0));
-            float stars = speckle(sp / 26.0, t, 0.8, 0.09) * 0.8 + dots(sp / 17.0 + 3.3, 0.06) * 0.35;
+            float stars = speckle(sp / 26.0, t, 0.8, 0.09) * 0.8 + dots(sp / 17.0 + 3.3, 0.06) * (0.35 + 0.5 * band);
             sky += vec3(0.85, 0.88, 1.0) * stars;
             // A constellation, faintly joined: the Swan.
             vec2 a0 = vec2(150.0, 120.0), a1 = vec2(190.0, 175.0), a2 = vec2(222.0, 228.0), a3 = vec2(268.0, 290.0);
@@ -851,124 +977,205 @@ let FRAGMENT_SHADER = """
                 sky += vec3(0.9, 0.95, 1.0) * fill_aa(st.x - 0.9 * st.y) * st.y * fade;
                 sky += vec3(0.6, 0.7, 1.0) * exp(-length(cv - head) / 7.0) * fade * 0.6;
             }
+            // Hills far off on the horizon.
+            float hill = cv.y - (600.0 + 30.0 * noise(vec2(cv.x * 0.01, 2.0)) + 15.0 * noise(vec2(cv.x * 0.04, 5.0)));
+            sky = mix(sky, vec3(0.03, 0.035, 0.07), fill_aa(-hill));
             c = mix(wall, sky, fill_aa(win));
-            // Brass: the window frame and its bars.
+            // Brass: the window frame and its bars, a glint running up them.
             float frame = abs(win) - 4.0;
             float bars = max(min(abs(wp.x) - 2.0, abs(wp.y - 40.0) - 2.0), win);
-            c = mix(c, vec3(0.62, 0.48, 0.25) * (0.8 + 0.2 * sin(cv.y * 0.05)), fill_aa(min(frame, bars)));
+            float glint = exp(-pow((cv.y - mod(t * 30.0, 1400.0) + 200.0) / 30.0, 2.0));
+            c = mix(c, vec3(0.62, 0.48, 0.25) * (0.8 + 0.2 * sin(cv.y * 0.05) + glint), fill_aa(min(frame, bars)));
         }
         // The great telescope across the window, on its mount: a dark tube
         // with brass bands, its eye end low on the left.
-        vec2 tp = rot(-0.62) * (cv - vec2(170.0, 360.0));
-        float tw = mix(16.0, 25.0, clamp((tp.x + 170.0) / 360.0, 0.0, 1.0));
+        vec2 tp = rot(-0.62) * (cv - vec2(130.0, 420.0));
+        float tw = mix(14.0, 22.0, clamp((tp.x + 170.0) / 360.0, 0.0, 1.0));
         float tube = max(abs(tp.y) - tw, abs(tp.x - 10.0) - 180.0);
         float bands = step(abs(mod(tp.x + 20.0, 110.0) - 55.0), 5.0) + step(abs(tp.x - 190.0), 8.0);
         vec3 tc = mix(vec3(0.06, 0.05, 0.08), vec3(0.42, 0.32, 0.17), clamp(bands, 0.0, 1.0));
         tc *= 0.75 + 0.5 * smoothstep(tw, -tw, tp.y);
+        tc += vec3(0.4, 0.45, 0.6) * fill_aa(abs(tp.y + tw - 2.0) - 1.0) * 0.25;           // moonlight along its top
         c = mix(c, tc, fill_aa(tube));
-        float post = sd_segment(cv, vec2(170.0, 360.0), vec2(160.0, 640.0)) - 7.0;
-        post = min(post, sd_segment(cv, vec2(165.0, 560.0), vec2(105.0, 650.0)) - 4.0);
-        post = min(post, sd_segment(cv, vec2(165.0, 560.0), vec2(225.0, 650.0)) - 4.0);
+        float post = sd_segment(cv, vec2(130.0, 420.0), vec2(120.0, base - 20.0)) - 7.0;
+        post = min(post, sd_segment(cv, vec2(125.0, 660.0), vec2(65.0, base + 30.0)) - 4.0);
+        post = min(post, sd_segment(cv, vec2(125.0, 660.0), vec2(185.0, base + 30.0)) - 4.0);
         c = mix(c, vec3(0.08, 0.06, 0.07), fill_aa(post));
-        c = mix(c, vec3(0.5, 0.38, 0.2), fill_aa(length(cv - vec2(170.0, 360.0)) - 10.0));
-        // An armillary sphere on the right, its rings slowly turning.
-        vec2 ap = cv - vec2(430.0, 520.0);
+        c = mix(c, vec3(0.5, 0.38, 0.2), fill_aa(length(cv - vec2(130.0, 420.0)) - 10.0));
+        // An armillary sphere on its stand on the right, its rings slowly turning.
+        vec2 ap = cv - vec2(440.0, 600.0);
         float ring = abs(length(ap) - 52.0) - 1.6;
         float tilt = sin(t * 0.15);
         ring = min(ring, abs(length(ap * vec2(1.0, 1.0 / max(abs(tilt), 0.08))) - 52.0) * max(abs(tilt), 0.08) - 1.4);
         ring = min(ring, abs(length(ap * vec2(1.0 / max(abs(cos(t * 0.1)), 0.08), 1.0)) - 52.0) * max(abs(cos(t * 0.1)), 0.08) - 1.4);
         ring = min(ring, abs(length(rot(0.41) * ap * vec2(1.0, 3.2)) - 52.0) / 3.2 - 1.6);
+        ring = min(ring, max(abs(ap.x) - 3.0, abs(ap.y - 110.0) - 56.0));
+        ring = min(ring, sd_round_box(ap - vec2(0.0, 166.0), vec2(30.0, 5.0), vec4(3.0)));
         c = mix(c, vec3(0.62, 0.46, 0.22) * 0.8, fill_aa(ring) * 0.85);
         c = mix(c, vec3(0.8, 0.62, 0.3), fill_aa(length(ap) - 5.0));
-        // The floor's brass ring.
-        float fr = abs(length((cv - vec2(270.0, 760.0)) * vec2(1.0, 2.6)) - 300.0) - 2.0;
-        c = mix(c, vec3(0.55, 0.42, 0.22), fill_aa(fr) * 0.5);
+        // The floor: dark boards, a brass circle inlaid, moonlight on it.
+        if (cv.y > base) {
+            vec3 fl = floor_at(cv, base);
+            vec3 boards = planks(fl.xy, vec3(0.16, 0.09, 0.08), 110.0, 5.0);
+            boards *= 0.6 + 0.4 * (1.0 - fl.z);
+            float r = length(fl.xy - vec2(0.0, 250.0));
+            float inlay = min(abs(r - 160.0), abs(r - 140.0));
+            float spokes = abs(mod(atan(fl.y - 250.0, fl.x) * 8.0 / 3.14159, 1.0) - 0.5) * r * 0.39;
+            inlay = min(inlay, max(spokes, abs(r - 80.0) - 60.0));
+            boards = mix(boards, vec3(0.6, 0.45, 0.22) * 0.7, fill_aa((inlay - 2.0) * fl.z * 0.7) * 0.8);
+            float lit = (1.0 - smoothstep(-30.0, 20.0, sd_round_box(fl.xy - vec2(60.0 + 10.0 * sin(t * 0.013), 120.0), vec2(170.0, 200.0), vec4(0.0))));
+            boards += vec3(0.25, 0.3, 0.5) * lit * 0.12;
+            c = mix(vec3(0.03, 0.02, 0.04), boards, smoothstep(0.0, 10.0, cv.y - base));
+        }
         // Moonlight from the window, cool, lying across the room.
-        float sh = shaft(cv, vec2(330.0, 200.0), normalize(vec2(-0.35, 1.0)), 120.0, 0.2, 1000.0);
+        float sh = shaft(cv, vec2(330.0, 200.0), normalize(vec2(-0.25, 1.0)), 120.0, 0.2, 1000.0);
         c += vec3(0.45, 0.5, 0.8) * sh * 0.05;
         c += vec3(0.8, 0.85, 1.0) * dust(cv, t * 0.5) * sh * 0.18;
+        // Close in front: heavy velvet curtains drawn back at the sides, swaying.
+        float cx = abs(cv.x - 270.0);
+        float edge = 236.0 + 26.0 * smoothstep(100.0, 600.0, cv.y) - 30.0 * smoothstep(600.0, 760.0, cv.y) + 4.0 * sin(t * 0.3 + cv.y * 0.01);
+        float drape = edge - cx;
+        float folds = 0.5 + 0.5 * sin((cx - edge) * 0.16 + sin(cv.y * 0.01 + t * 0.25) * 1.2);
+        vec3 velvet = vec3(0.10, 0.05, 0.14) * (0.45 + 0.75 * folds);
+        velvet += vec3(0.35, 0.3, 0.55) * fill_aa(abs(drape) - 1.5) * 0.25;                // rim
+        c = mix(c, velvet, smoothstep(1.0, -2.0, drape));
+        // A gold tieback holding each one.
+        c = mix(c, vec3(0.55, 0.42, 0.2), fill_aa(length(vec2(cx - edge - 10.0, cv.y - 560.0) * vec2(0.5, 1.0)) - 6.0) * step(edge, cx));
         return c;
     }
+
     vec3 room_greenhouse(vec2 cv, float t) {
+        float base = 770.0;
         // Night outside the glass, the moon high on the left.
-        vec3 c = mix(vec3(0.03, 0.07, 0.10), vec3(0.07, 0.15, 0.15), smoothstep(0.0, 900.0, cv.y));
+        vec3 c = mix(vec3(0.03, 0.07, 0.10), vec3(0.06, 0.13, 0.14), smoothstep(0.0, base, cv.y));
         vec2 mp = cv - vec2(118.0, 92.0);
         c += vec3(0.25, 0.32, 0.38) * exp(-length(mp) / 200.0) * 0.6;
         c = mix(c, vec3(0.75, 0.82, 0.78), fill_aa(length(mp) - 26.0) * 0.8);
         c += vec3(0.7, 0.8, 0.9) * dots(cv / 21.0 + 1.3, 0.05) * 0.25 * (1.0 - smoothstep(100.0, 500.0, cv.y));
-        // The glasshouse: pointed iron ribs, panes between them, a sheen
+        // Trees far off beyond the glass, a darker band.
+        float trees = cv.y - (520.0 + 50.0 * fbm(vec2(cv.x * 0.01, 1.0)) - 30.0 * noise(vec2(cv.x * 0.05, 4.0)));
+        c = mix(c, vec3(0.03, 0.06, 0.06), smoothstep(-2.0, 2.0, trees) * 0.8);
+        // The glasshouse: pointed iron bays, panes between them, a sheen
         // passing over the glass.
         vec2 g = vec2(mod(cv.x + 45.0, 90.0) - 45.0, mod(cv.y + 30.0, 130.0) - 65.0);
         float bay = sd_pointed(vec2(g.x, cv.y - 180.0), 40.0, 1e4, 1.5);
         float mull = min(-bay, 65.0 - abs(g.y) + step(cv.y, 180.0) * 1e3);
         float pane = noise(floor((cv + vec2(45.0, 30.0)) / vec2(90.0, 130.0)) * 3.7);
-        c += vec3(0.04, 0.07, 0.07) * (0.5 + pane) * smoothstep(0.0, 40.0, mull) * step(cv.y, 700.0);
+        c += vec3(0.04, 0.07, 0.07) * (0.5 + pane) * smoothstep(0.0, 40.0, mull) * step(cv.y, base);
         float sheen = exp(-pow((cv.x - cv.y * 0.5 - mod(t * 18.0, 1400.0) + 500.0) / 60.0, 2.0));
-        c += vec3(0.1, 0.14, 0.14) * sheen * step(0.0, mull) * step(cv.y, 700.0);
-        c = mix(c, vec3(0.04, 0.06, 0.06), fill_aa(mull - 2.5) * 0.85 * step(cv.y, 720.0));
+        c += vec3(0.1, 0.14, 0.14) * sheen * step(0.0, mull) * step(cv.y, base);
+        c = mix(c, vec3(0.04, 0.06, 0.06), fill_aa(mull - 2.5) * 0.85 * step(cv.y, base));
+        c += vec3(0.2, 0.3, 0.3) * fill_aa(abs(mull - 3.5) - 0.8) * 0.15 * step(cv.y, base);       // moonlit edge of the iron
         // Moonlight through the panes, the mullions' shadows in it.
-        float sh = shaft(cv, vec2(118.0, 92.0), normalize(vec2(0.45, 1.0)), 60.0, 0.32, 1000.0);
+        float sh = shaft(cv, vec2(118.0, 92.0), normalize(vec2(0.45, 1.0)), 60.0, 0.32, 1100.0);
         c += vec3(0.5, 0.65, 0.65) * sh * 0.07 * (0.6 + 0.4 * smoothstep(0.0, 6.0, mull));
         c += vec3(0.8, 0.95, 0.85) * dust(cv, t * 0.4) * sh * 0.15;
+        // Benches of potted plants along the glass, low behind the board.
+        float bench = abs(cv.y - 700.0) - 5.0;
+        c = mix(c, vec3(0.10, 0.07, 0.05), fill_aa(bench));
+        float pot = floor(cv.x / 60.0);
+        vec2 pq = vec2(mod(cv.x, 60.0) - 30.0, cv.y - 680.0);
+        float potd = sd_round_box(pq, vec2(14.0 - pq.y * 0.2, 15.0), vec4(2.0));
+        c = mix(c, vec3(0.30, 0.13, 0.08) * (0.7 + 0.4 * hash12(vec2(pot, 1.0))), fill_aa(potd));
+        float sprig = leaves(cv, vec2(pot * 60.0 + 30.0, 665.0), 34.0 + 20.0 * hash12(vec2(pot, 2.0)), pot * 2.3 - 2.2, t);
+        c = mix(c, vec3(0.05, 0.14, 0.08) * (0.8 + 0.4 * noise(cv * 0.1)), fill_aa(sprig));
+        // The floor: tiles of a path between the beds, moss in the joints.
+        if (cv.y > base) {
+            vec3 fl = floor_at(cv, base);
+            float tm = bricks(fl.xy, vec2(80.0, 80.0), 3.0 / fl.z);
+            vec3 tile = vec3(0.22, 0.12, 0.08) * (0.7 + 0.4 * brick_id(fl.xy, vec2(80.0, 80.0)));
+            float moss = smoothstep(0.4, 0.7, noise(fl.xy * 0.02) * 0.7 + tm * 0.5);
+            tile = mix(tile, vec3(0.08, 0.18, 0.08), moss * 0.85);
+            tile *= 0.6 + 0.4 * (1.0 - fl.z);
+            tile += vec3(0.2, 0.3, 0.3) * sh * 0.08;
+            c = mix(vec3(0.02, 0.04, 0.03), tile, smoothstep(0.0, 10.0, cv.y - base));
+        }
         // Leaves crowding in from the sides and hanging from above, swaying.
         float sway = sin(t * 0.33) * 6.0 + sin(t * 0.71 + cv.y * 0.01) * 3.0;
         vec2 lp = cv + vec2(sway * smoothstep(0.0, 300.0, cv.y), 0.0);
         float side = min(lp.x, 540.0 - lp.x);
         float leaf = noise(lp * 0.035) * 0.7 + noise(lp * 0.09 + 3.0) * 0.3;
         float hang = smoothstep(220.0, 0.0, cv.y) * 0.25 * (0.5 + 0.5 * sin(lp.x * 0.03 + 1.0));
-        float foliage = smoothstep(0.52, 0.56, leaf + 0.42 - side / 150.0 + hang);
+        float foliage = smoothstep(0.52, 0.56, leaf + 0.40 - side / 120.0 + hang);
         float vein = noise(lp * vec2(0.2, 0.05));
-        vec3 green = vec3(0.05, 0.17, 0.09) * (0.6 + 0.6 * vein) + vec3(0.1, 0.12, 0.1) * sh;
+        vec3 green = vec3(0.05, 0.16, 0.09) * (0.6 + 0.6 * vein) + vec3(0.1, 0.12, 0.1) * sh;
         c = mix(c, green, foliage * 0.92);
-        c = mix(c, c * 1.4, fill_aa(abs(leaf + 0.42 - side / 150.0 + hang - 0.54) * 60.0 - 0.6) * 0.3);
         // Vines trailing from the roof ribs.
         for (int i = 0; i < 3; i++) {
             float vx = 135.0 + float(i) * 135.0;
-            float vlen = 150.0 + 90.0 * hash12(vec2(float(i), 4.0));
+            float vlen = 110.0 + 70.0 * hash12(vec2(float(i), 4.0));
             float y = clamp(cv.y, 0.0, vlen);
             float x = vx + sin(y * 0.04 + float(i)) * 8.0 + sin(t * 0.5 + float(i) * 1.7) * y * 0.05;
             float vine = abs(cv.x - x) - 1.4 + step(vlen, cv.y) * 1e3;
             float lv = length(vec2(abs(cv.x - x) - 5.0, mod(cv.y + float(i) * 7.0, 18.0) - 9.0) * vec2(1.0, 0.7)) - 4.0 + step(vlen, cv.y) * 1e3;
             c = mix(c, vec3(0.06, 0.14, 0.08), fill_aa(min(vine, lv)) * 0.9);
         }
+        // Close in front: broad leaves at the corners, dark and soft.
+        float near = min(leaves(cv, vec2(-30.0, 860.0), 190.0, -0.9, t), leaves(cv, vec2(575.0, 820.0), 170.0, 2.4, t));
+        near = min(near, leaves(cv, vec2(560.0, 60.0), 130.0, 1.9, t * 0.8));
+        vec3 dark = vec3(0.02, 0.05, 0.03) + vec3(0.12, 0.2, 0.14) * smoothstep(-8.0, 0.0, near) * 0.5;
+        c = mix(c, dark, smoothstep(3.0, -3.0, near));
         // Mist drifting low.
         float mist = noise(vec2(cv.x * 0.006 + t * 0.03, cv.y * 0.012)) * smoothstep(560.0, 960.0, cv.y);
-        c += vec3(0.25, 0.32, 0.32) * mist * 0.45;
+        c += vec3(0.25, 0.32, 0.32) * mist * 0.22;
         return c;
     }
+
     vec3 room_athanor(vec2 cv, float t) {
         float f = light.a;
+        float base = 770.0;
         // Embers burst from the furnace now and then; the room flares with them.
         float burst = ember_burst(t);
         float pulse = 0.78 + 0.14 * sin(t * 0.8) + 0.08 * f + 0.35 * burst;
-        vec3 c = mix(vec3(0.08, 0.03, 0.04), vec3(0.19, 0.06, 0.05), smoothstep(0.0, 900.0, cv.y));
-        float m = clamp(bricks(cv, vec2(100.0, 70.0), 2.5), 0.0, 1.0);
+        vec3 c = mix(vec3(0.07, 0.025, 0.035), vec3(0.17, 0.05, 0.045), smoothstep(0.0, base, cv.y));
+        float m = bricks(cv, vec2(100.0, 70.0), 2.5);
         c *= (1.0 - 0.3 * m) * (0.85 + 0.25 * noise(cv * 0.03));
         c = brushed(c, cv);
-        // Pillars and pointed arches either side, banners of the Work hanging in them.
-        vec2 ap = vec2(abs(cv.x - 270.0) - 228.0, cv.y - 150.0);
-        float arch = sd_pointed(ap, 50.0, 900.0, 1.6);
+        // Pointed arches either side, banners of the Work hanging in them.
+        vec2 ap = vec2(abs(cv.x - 270.0) - 222.0, cv.y - 150.0);
+        float arch = sd_pointed(ap, 54.0, base - 150.0, 1.6);
         c = mix(c, c * 0.45, fill_aa(arch));
         c = mix(c, vec3(0.20, 0.08, 0.06), fill_aa(abs(arch + 5.0) - 5.0));
-        vec2 bp = vec2(abs(cv.x - 270.0) - 228.0, cv.y - 110.0);
-        float banner = max(abs(bp.x) - 30.0, max(-bp.y, bp.y - 230.0 + abs(bp.x) * 0.7 - 20.0));
-        float wave = sin(bp.y * 0.03 - t * 0.6) * 0.06;
-        vec3 cloth = vec3(0.30, 0.06, 0.06) * (0.75 + 0.5 * (0.5 + 0.5 * sin(bp.x * 0.1 + bp.y * 0.02))) * (1.0 + wave);
-        float emblem = abs(length(bp - vec2(0.0, 110.0)) - 14.0) - 1.4;
-        emblem = min(emblem, abs(sd_triangle(bp - vec2(0.0, 110.0), vec2(0.0, -12.0), vec2(10.4, 6.0), vec2(-10.4, 6.0))) - 1.2);
+        c += vec3(0.7, 0.25, 0.08) * fill_aa(abs(arch + 1.0) - 1.0) * 0.2 * smoothstep(0.0, 1.0, -ap.x / 50.0) * pulse;
+        vec2 bp = vec2(abs(cv.x - 270.0) - 222.0, cv.y - 110.0);
+        float wave = sin(bp.y * 0.03 - t * 0.6) * 3.0 * smoothstep(0.0, 300.0, bp.y);
+        bp.x += wave;
+        float banner = max(abs(bp.x) - 30.0, max(-bp.y, bp.y - 330.0 + abs(bp.x) * 0.7 - 20.0));
+        vec3 cloth = vec3(0.30, 0.06, 0.06) * (0.7 + 0.5 * (0.5 + 0.5 * sin(bp.x * 0.1 + bp.y * 0.02 + wave)));
+        float emblem = abs(length(bp - vec2(0.0, 130.0)) - 14.0) - 1.4;
+        emblem = min(emblem, abs(sd_triangle(bp - vec2(0.0, 130.0), vec2(0.0, -12.0), vec2(10.4, 6.0), vec2(-10.4, 6.0))) - 1.2);
         cloth = mix(cloth, vec3(0.75, 0.52, 0.2) * 0.6, fill_aa(emblem));
         cloth = mix(cloth, vec3(0.6, 0.42, 0.18) * 0.6, fill_aa(abs(banner + 3.0) - 1.2));
         c = mix(c, cloth, fill_aa(banner));
         // The great circle of runes, turning slowly behind the work; a light
         // runs round its runes, and they all flare with a burst.
         float rune;
-        vec2 rp = cv - vec2(270.0, 330.0);
-        float sg = sigil(rp, 210.0, t * 0.02, 32.0, 1.0, rune);
+        vec2 rp = cv - vec2(270.0, 420.0);
+        float sg = sigil(rp, 225.0, t * 0.02, 32.0, 1.0, rune);
         float lit = rune >= 0.0 ? rune_run(rune, 32.0, t, 0.6) : 0.0;
-        c += vec3(0.85, 0.5, 0.18) * fill_aa(sg) * (0.14 + 0.5 * lit + 0.4 * burst) * pulse;
-        c += vec3(0.8, 0.3, 0.1) * exp(-abs(length(rp) - 193.0) / 30.0) * (0.05 + 0.1 * burst);
+        c += vec3(0.85, 0.5, 0.18) * fill_aa(sg) * (0.13 + 0.5 * lit + 0.4 * burst) * pulse;
+        c += vec3(0.8, 0.3, 0.1) * exp(-abs(length(rp) - 207.0) / 30.0) * (0.04 + 0.1 * burst);
+        // The floor: dark stone, cracks glowing with the heat below, the
+        // furnace's light pooling on it.
+        if (cv.y > base) {
+            vec3 fl = floor_at(cv, base);
+            float sm = bricks(fl.xy, vec2(120.0, 90.0), 2.5 / fl.z);
+            vec3 st = vec3(0.12, 0.06, 0.06) * (0.7 + 0.4 * brick_id(fl.xy, vec2(120.0, 90.0))) * (1.0 - 0.5 * sm);
+            float crack = 1.0 - smoothstep(0.0, 0.02 / fl.z, abs(noise(fl.xy * 0.008 + 3.0) - 0.5));
+            st += vec3(1.0, 0.35, 0.08) * crack * (0.25 + 0.15 * sin(t * 0.7 + fl.x * 0.01)) * pulse;
+            st *= 0.6 + 0.4 * (1.0 - fl.z);
+            c = mix(vec3(0.03, 0.01, 0.01), st, smoothstep(0.0, 10.0, cv.y - base));
+        }
         // The athanor's red glow from below, breathing.
-        c += vec3(0.65, 0.12, 0.03) * exp(-pow(length((cv - vec2(270.0, 1020.0)) * vec2(0.55, 1.0)) / 280.0, 2.0)) * 0.7 * pulse;
+        c += vec3(0.65, 0.12, 0.03) * exp(-pow(length((cv - vec2(270.0, 1040.0)) * vec2(0.55, 1.0)) / 280.0, 2.0)) * 0.6 * pulse;
+        // Close in front: pillars at the very edges, chains hung between.
+        float pil = abs(cv.x - 270.0) - 262.0;
+        vec3 pc = vec3(0.06, 0.02, 0.025) * (0.8 + 0.4 * noise(vec2(cv.x * 0.2, cv.y * 0.01)));
+        c = mix(c, pc, smoothstep(-2.0, 2.0, pil));
+        c += vec3(0.7, 0.25, 0.08) * fill_aa(abs(pil) - 1.0) * 0.25 * pulse;
+        float ch = chain(cv, 34.0, 360.0, 1.0, t);
+        c = mix(c, vec3(0.04, 0.015, 0.015), fill_aa(ch));
+        c += vec3(0.7, 0.3, 0.1) * fill_aa(abs(ch + 1.0) - 0.6) * 0.18 * pulse;
         // Heat haze over it all.
         c *= 1.0 + 0.05 * (noise(vec2(cv.x * 0.03, cv.y * 0.02 + t * 0.8)) - 0.5) * smoothstep(300.0, 900.0, cv.y);
         return c;
@@ -982,163 +1189,50 @@ let FRAGMENT_SHADER = """
         return room_apothecary(cv, t);
     }
 
-    // --- the tables: in a level the flasks stand on one, seen from above at a
-    // slant, its far edge at canvas height `edge` with the room beyond -----
-    // Planks running away from the eye: q is the table's own coordinates.
-    vec3 planks(vec2 q, vec3 wood, float width, float seed) {
-        float k = floor(q.x / width);
-        float u = q.x / width - k;
-        float grain = noise(vec2(q.x * 0.09, q.y * 0.012 + k * 7.0 + seed)) * 0.55 +
-                      noise(vec2(q.x * 0.4, q.y * 0.03 + k * 3.0)) * 0.3;
-        vec3 c = wood * (0.72 + 0.5 * grain) * (0.9 + 0.2 * hash12(vec2(k, seed)));
-        c *= 1.0 - 0.45 * (1.0 - smoothstep(0.0, 0.025, u)) - 0.25 * smoothstep(0.975, 1.0, u);
-        // A joint now and then along a plank.
-        float j = fract(q.y / 260.0 + hash12(vec2(k, 3.0 + seed)));
-        c *= 1.0 - 0.35 * (1.0 - smoothstep(0.0, 0.006, abs(j - 0.5)));
-        return c;
-    }
-    vec3 table_top(int theme, vec2 q, float t) {
-        if (theme == 1) {           // frost cellar: frosted stone slabs
-            vec2 g = q / vec2(118.0, 92.0);
-            vec2 f = abs(fract(g + vec2(step(0.5, fract(g.y * 0.5)) * 0.5, 0.0)) - 0.5);
-            float seam = 1.0 - smoothstep(0.47, 0.49, max(f.x, f.y));
-            vec3 c = vec3(0.18, 0.22, 0.29) * (0.8 + 0.3 * noise(q * 0.02) + 0.12 * noise(q * 0.11));
-            c *= 0.6 + 0.4 * seam;
-            float frost = smoothstep(0.5, 0.85, noise(q * 0.012 + 4.0) * 0.7 + noise(q * 0.06) * 0.3);
-            c = mix(c, vec3(0.5, 0.6, 0.72), frost * 0.3);
-            c += vec3(0.9, 0.95, 1.0) * speckle(q / 9.0, t, 1.2, 0.1) * 0.4 * frost;
-            return c;
+    // The ledge a flask stands on in a level: a short drum floating in the
+    // room's air, of the room's own stuff, its top lit by the work above it.
+    // Its quad is the drum: the top's ellipse (FLASK_E of the half width)
+    // at the top, the bottom's at the bottom.
+    vec4 plinth(vec2 p, vec2 h, int theme, float seed, float t) {
+        float rx = h.x;
+        float ry = rx * 0.36;
+        float yt = -h.y + ry;
+        float yb = h.y - ry;
+        float top = (length((p - vec2(0.0, yt)) / vec2(rx, ry)) - 1.0) * ry;
+        float bot = (length((p - vec2(0.0, yb)) / vec2(rx, ry)) - 1.0) * ry;
+        float side = max(abs(p.x) - rx, abs(p.y - (yt + yb) * 0.5) - (yb - yt) * 0.5);
+        float body = min(min(top, bot), side);
+        vec2 tq = (p - vec2(0.0, yt)) / vec2(rx, ry);      // the top, in its own unit circle
+        float u = p.x / rx;
+        vec3 mat; vec3 rim; vec3 lit = light.rgb;
+        if (theme == 1) { mat = vec3(0.17, 0.22, 0.30); rim = vec3(0.6, 0.75, 0.9); }
+        else if (theme == 2) { mat = vec3(0.26, 0.13, 0.08); rim = vec3(1.0, 0.55, 0.2); }
+        else if (theme == 3) { mat = vec3(0.16, 0.12, 0.14); rim = vec3(0.85, 0.66, 0.32); }
+        else if (theme == 4) { mat = vec3(0.24, 0.24, 0.20); rim = vec3(0.55, 0.75, 0.6); }
+        else if (theme == 5) { mat = vec3(0.12, 0.07, 0.08); rim = vec3(1.0, 0.45, 0.15); }
+        else { mat = vec3(0.34, 0.20, 0.11); rim = vec3(0.95, 0.7, 0.4); }
+        // The side: rounded by the light, darker below.
+        vec3 c = mat * (0.45 + 0.35 * (1.0 - u * u)) * mix(0.9, 0.55, clamp((p.y - yt) / max(yb - yt + ry, 1.0), 0.0, 1.0));
+        if (theme == 0 || theme == 3) c *= 0.85 + 0.3 * noise(vec2(p.x * 0.3, p.y * 0.05 + seed));     // grain
+        else c *= 0.85 + 0.3 * noise(p * 0.15 + seed);
+        // The top: a pool of the room's light under the flask, fading out.
+        float r = length(tq);
+        vec3 tc = mat * (0.75 + 0.2 * noise(tq * 3.0 + seed));
+        tc += lit * 0.25 * exp(-r * r * 2.0);
+        if (theme == 1) tc = mix(tc, vec3(0.75, 0.85, 0.95), smoothstep(0.55, 0.8, noise(tq * 4.0 + seed) * 0.6 + r * 0.4) * 0.3);
+        if (theme == 3) tc = mix(tc, rim * 0.8, fill_aa((abs(r - 0.82) - 0.03) * ry * 2.0));
+        if (theme == 4) tc = mix(tc, vec3(0.12, 0.28, 0.1), smoothstep(0.5, 0.7, noise(tq * 3.0 + seed) * 0.6 + r * 0.5) * 0.9);
+        if (theme == 5) {
+            float a = atan(tq.y, tq.x);
+            float runes = fill_aa((abs(r - 0.8) - 0.06) * ry * 2.0) * step(0.4, fract(a * 2.5 + t * 0.1 + seed));
+            tc += rim * runes * (0.35 + 0.25 * sin(t * 0.8 + seed));
         }
-        if (theme == 2) {           // glassworks: a scorched workbench
-            vec3 c = planks(q, vec3(0.30, 0.17, 0.09), 84.0, 2.0);
-            float scorch = smoothstep(0.5, 0.85, noise(q * 0.008 + 1.3) * 0.65 + noise(q * 0.035) * 0.35);
-            c = mix(c, vec3(0.06, 0.035, 0.03), scorch * 0.8);
-            // Rings left by hot crucibles, and a few embers in the char.
-            vec2 rc = vec2(mod(q.x + 40.0, 230.0) - 115.0, mod(q.y + 70.0, 300.0) - 150.0);
-            c *= 1.0 - 0.4 * fill_aa(abs(length(rc) - 46.0) - 3.0) * step(0.5, hash12(floor((q + vec2(40.0, 70.0)) / vec2(230.0, 300.0))));
-            c += vec3(1.0, 0.4, 0.1) * speckle(q / 14.0, t, 0.7, 0.08) * scorch * 0.8;
-            return c;
-        }
-        if (theme == 3) {           // observatory: dark wood, brass inlay, a star chart
-            vec3 c = planks(q, vec3(0.20, 0.11, 0.08), 120.0, 5.0) * 0.9;
-            vec2 m = q - vec2(0.0, 420.0);
-            float r = length(m * vec2(1.0, 1.05));
-            float chart = 1.0 - smoothstep(236.0, 240.0, r);
-            c = mix(c, vec3(0.08, 0.09, 0.17) * (0.85 + 0.3 * noise(q * 0.02)), chart * 0.85);
-            float stars = dots(q / 22.0 + 1.7, 0.08) * chart;
-            c += vec3(0.85, 0.8, 0.6) * stars * 0.7;
-            float a = atan(m.y, m.x);
-            float lines = (abs(r - 236.0) < 4.0 ? 1.0 : 0.0) + fill_aa(abs(r - 160.0) - 0.8) * 0.6 +
-                          fill_aa(abs(mod(a, 0.5236) - 0.2618) * r - 0.8) * step(r, 236.0) * step(40.0, r) * 0.35;
-            vec3 brass = vec3(0.78, 0.6, 0.3);
-            c = mix(c, brass, clamp(lines, 0.0, 1.0) * 0.8);
-            // The inlaid border.
-            float border = min(abs(abs(q.x) - 300.0), abs(q.y - 30.0));
-            c = mix(c, brass * 0.9, fill_aa(border - 2.5) * 0.9);
-            return c;
-        }
-        if (theme == 4) {           // greenhouse: a mossy potting bench
-            float k = q.x / 64.0;
-            float gap = smoothstep(0.0, 0.06, fract(k)) * (1.0 - smoothstep(0.94, 1.0, fract(k)));
-            vec3 c = planks(q, vec3(0.30, 0.22, 0.13), 64.0, 8.0);
-            c = mix(vec3(0.04, 0.05, 0.03), c, gap);
-            float moss = smoothstep(0.5, 0.75, noise(q * 0.01 + 7.0) * 0.6 + noise(q * 0.05) * 0.4);
-            c = mix(c, vec3(0.18, 0.32, 0.12) * (0.7 + 0.6 * noise(q * 0.3)), moss * 0.85 * gap);
-            c = mix(c, vec3(0.13, 0.09, 0.06), dots(q / 7.0, 0.18) * 0.5 * (1.0 - moss));
-            return c;
-        }
-        if (theme == 5) {           // athanor: dark stone, runes inlaid
-            vec3 c = vec3(0.17, 0.10, 0.10) * (0.75 + 0.35 * noise(q * 0.015) + 0.2 * noise(q * 0.09));
-            float crack = 1.0 - smoothstep(0.0, 0.03, abs(noise(q * 0.01 + 3.0) - 0.5));
-            c *= 1.0 - 0.35 * crack;
-            vec2 m = q - vec2(0.0, 430.0);
-            float r = length(m);
-            float a = atan(m.y, m.x) + t * 0.015;
-            float ring = min(abs(r - 250.0) - 2.0, abs(r - 214.0) - 1.5);
-            float cell = fract(a / 6.2831853 * 28.0);
-            float rune = max(abs(r - 232.0) - 9.0, abs(cell - 0.5) * 34.0 - (hash12(vec2(floor(a / 6.2831853 * 28.0), 2.0)) > 0.5 ? 2.0 : 5.0));
-            float glow = fill_aa(min(ring, rune));
-            float burst = ember_burst(t);
-            float pulse = 0.7 + 0.3 * sin(t * 0.8) + 0.4 * burst;
-            float lit = abs(r - 232.0) < 12.0 ? rune_run(mod(floor(a / 6.2831853 * 28.0), 28.0), 28.0, t + 7.0, 0.6) : 0.0;
-            c = mix(c, vec3(1.0, 0.55, 0.2) * pulse, glow * (0.45 + 0.4 * lit));
-            c += vec3(0.6, 0.2, 0.05) * exp(-abs(r - 232.0) / 26.0) * 0.12 * pulse;
-            return c;
-        }
-        return planks(q, vec3(0.42, 0.25, 0.13), 96.0, 0.0);   // apothecary: warm wood
-    }
-    // What the room's light does on the table: a shaft from its window,
-    // candlelight pooling, leaves' shadows, frost from the edges. In canvas
-    // units, so it lines up with the room behind; the flasks stand in it.
-    vec3 table_light(int theme, vec3 c, vec2 cv, vec2 q, float t) {
-        float f = light.a;
-        if (theme == 1) {           // frost cellar: rime creeping in from the edges, the moon's cold shaft
-            float edge = 1.0 - smoothstep(0.0, 170.0, min(min(cv.x, 540.0 - cv.x), 990.0 - cv.y));
-            float creep = 0.05 * sin(t * 0.07) + 0.025 * sin(t * 0.23 + 2.0);
-            float rime = smoothstep(0.62, 0.74, fbm(q * 0.018 + 9.0) * 0.5 + edge * 0.55 + creep);
-            float fern = noise(q * vec2(0.1, 0.03) + noise(q * 0.05) * 2.0);
-            c = mix(c, vec3(0.5, 0.62, 0.76) * (0.6 + 0.5 * fern), rime * 0.45);
-            c += vec3(0.85, 0.93, 1.0) * rime * speckle(cv / 8.0, t, 1.1, 0.1) * 0.6;
-            float sh = shaft(cv, vec2(420.0, -160.0), normalize(vec2(-0.32, 1.0)), 80.0, 0.12, 1500.0);
-            c *= 1.0 + 0.16 * sh;
-            c += vec3(0.8, 0.9, 1.0) * dust(cv, t * 0.6) * sh * 0.12;
-        } else if (theme == 2) {    // glassworks: the kiln's light from beyond the far edge, breathing
-            float breath = 0.82 + 0.12 * sin(t * 0.55) + 0.06 * f;
-            float near_kiln = exp(-pow(length((cv - vec2(270.0, 120.0)) * vec2(0.8, 1.0)) / 380.0, 2.0));
-            c *= 1.0 + 0.25 * near_kiln * breath;
-            c += vec3(0.35, 0.12, 0.02) * near_kiln * breath * 0.12;
-        } else if (theme == 3) {    // observatory: the arched window laid on the table in moonlight
-            vec2 wp = cv - vec2(250.0 + 18.0 * sin(t * 0.013), 560.0);
-            wp.x -= wp.y * 0.3;
-            float win = sd_round_box(wp, vec2(150.0, 300.0), vec4(150.0, 0.0, 150.0, 0.0));
-            float bars = min(abs(wp.x) - 5.0, abs(wp.y - 40.0) - 5.0);
-            float lit = (1.0 - smoothstep(-30.0, 10.0, win)) * smoothstep(-2.0, 6.0, bars);
-            c *= 1.0 + 0.28 * lit;
-            c += vec3(0.25, 0.3, 0.5) * lit * 0.05;
-            c += vec3(0.8, 0.85, 1.0) * dust(cv, t * 0.5) * lit * 0.1;
-        } else if (theme == 4) {    // greenhouse: moonlight dappled by the leaves, swaying
-            vec2 sw = vec2(sin(t * 0.33) * 0.12 + sin(t * 0.71) * 0.05, cos(t * 0.27) * 0.08);
-            float d = noise(cv * 0.011 + sw) * 0.65 + noise(cv * 0.03 + sw * 2.0 + 4.0) * 0.35;
-            float lit = smoothstep(0.42, 0.68, d);
-            c *= 0.86 + 0.3 * lit;
-            c += vec3(0.04, 0.07, 0.06) * lit * lit;
-        } else if (theme == 5) {    // athanor: the furnace's glow, flaring with the bursts
-            float burst = ember_burst(t);
-            c *= 1.0 + (0.08 * sin(t * 0.8) + 0.3 * burst) * exp(-length(q - vec2(0.0, 430.0)) / 300.0);
-        } else {                    // apothecary: the rose window's shaft across the table, candles at the back
-            float sh = shaft(cv, vec2(90.0, -220.0), normalize(vec2(0.3, 1.0)), 80.0, 0.13, 1600.0);
-            float haze = 0.8 + 0.4 * noise(vec2(cv.x * 0.01 - t * 0.03, cv.y * 0.004));
-            c *= 1.0 + 0.2 * sh * haze;
-            c += vec3(1.0, 0.85, 0.6) * dust(cv, t) * sh * 0.1;
-            for (int i = 0; i < 2; i++) {
-                vec2 cp = cv - vec2(i == 0 ? 156.0 : 384.0, 150.0);
-                c += light.rgb * 0.1 * exp(-length(cp * vec2(0.6, 1.3)) / 70.0) * (0.6 + 0.4 * f);
-            }
-        }
-        return c;
-    }
-    // The table in perspective below `edge`, and its near edge's lip; the
-    // room beyond, seen from farther off.
-    vec3 table(int theme, vec2 cv, float edge, float t) {
-        if (cv.y < edge) {
-            vec2 far = vec2(270.0 + (cv.x - 270.0) * 1.35, 40.0 + cv.y * 1.9);
-            vec3 c = room(theme, far, t) * 0.85;
-            // The table's shadow on the wall just above it.
-            c *= 1.0 - 0.45 * smoothstep(edge - 24.0, edge, cv.y);
-            return c;
-        }
-        float k = clamp((cv.y - edge) / (960.0 - edge), 0.0, 1.0);
-        float f = mix(0.58, 1.0, k);
-        vec2 q = vec2((cv.x - 270.0) / f, (cv.y - edge) / sqrt(f));
-        vec3 c = table_top(theme, q, t);
-        // Light falls off toward the far edge and the sides.
-        c *= mix(0.7, 1.0, smoothstep(0.0, 0.35, k)) * (1.0 - 0.3 * pow(abs(cv.x - 270.0) / 300.0, 2.0));
-        c = table_light(theme, c * 0.9, cv, q, t);
-        // The far edge: a bright lip, then the board's thickness in shadow.
-        float lip = cv.y - edge;
-        c = mix(c, c * 1.5 + vec3(0.05), 1.0 - smoothstep(0.0, 2.5, lip));
-        c *= 1.0 - 0.3 * (1.0 - smoothstep(2.0, 14.0, lip)) * step(2.0, lip);
-        return c;
+        if (theme == 2) c += rim * 0.25 * smoothstep(0.6, 1.0, abs(u)) * (0.8 + 0.2 * light.a);      // the fire behind catches its sides
+        c = mix(c, tc, fill_aa(top));
+        // A bright lip round the top's near edge, and a rim of light down the sides.
+        c += rim * 0.35 * fill_aa(abs(top) - 0.8) * smoothstep(-0.2, 0.4, tq.y);
+        c += rim * 0.12 * smoothstep(0.75, 1.0, abs(u)) * step(yt, p.y);
+        return vec4(c, fill_aa(body));
     }
 
     // A bottle with a round body, a neck and a lip (the extra-flask icon),
@@ -2216,12 +2310,21 @@ let FRAGMENT_SHADER = """
             col = vec4(c, a * v_color.a);
         } else if (kind == SHAPE_BACKDROP) {                // the room
             vec2 cv = p * (v_p0.y / h.x) + vec2(270.0, 480.0);      // canvas units
-            vec3 c = v_p0.z > 0.0 ? table(int(v_p0.x + 0.5), cv, v_p0.z, t) : room(int(v_p0.x + 0.5), cv, t);
+            vec3 c = room(int(v_p0.x + 0.5), cv, t);
             // Candlelight from the back shelf and the work below, flickering.
             float f = 0.8 + 0.2 * light.a;
             float glow = exp(-pow(length((cv - vec2(270.0, 880.0)) * vec2(0.9, 1.6)) / 520.0, 2.0) * 2.0);
-            c += light.rgb * 0.3 * glow * f;
+            c += light.rgb * 0.22 * glow * f;
             c += light.rgb * 0.1 * exp(-length((cv - vec2(270.0, 90.0)) * vec2(0.7, 1.4)) / 160.0) * f;
+            // In a level (p0.w), the middle where the board stands is calmer:
+            // darker, and its colors drawn toward the air's, so the flasks
+            // stand out against it and the room's life keeps to the edges.
+            if (v_p0.w > 0.0) {
+                vec2 bd = abs(cv - vec2(270.0, 480.0)) - vec2(190.0, 300.0);
+                float board = 1.0 - smoothstep(-60.0, 90.0, length(max(bd, 0.0)) + min(max(bd.x, bd.y), 0.0));
+                float lum = dot(c, vec3(0.3, 0.5, 0.2));
+                c = mix(c, mix(vec3(lum), c, 0.65) * 0.52, board * v_p0.w);
+            }
             float vig = smoothstep(1.2, 0.3, length((cv / vec2(540.0, 960.0) - 0.5) * vec2(1.3, 1.0)));
             c *= mix(0.5, 1.0, vig);
             col = vec4(c, 1.0);
@@ -2989,6 +3092,9 @@ let FRAGMENT_SHADER = """
             float shadow = exp(-max(length(q - vec2(0.03, 0.12)) - 1.0, 0.0) * r / 3.0) * 0.45;
             float a = max(body, shadow);
             col = vec4(c * body / max(a, 0.001), a * v_color.a);
+        } else if (kind == SHAPE_PLINTH) {              // the ledge a flask stands on
+            col = plinth(p, h, int(v_p0.x + 0.5), v_p0.y, t);
+            col.a *= v_color.a;
         } else if (kind == SHAPE_GILDPATH) {            // a gilt line along a curve, ink dots past its head
             vec2 bz = sd_bezier(p, v_p0.xy, v_p0.zw, v_p1.xy);
             float w = v_p1.z;
