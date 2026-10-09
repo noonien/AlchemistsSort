@@ -970,6 +970,18 @@ let FRAGMENT_SHADER = """
         return float((int(v + 0.5) >> (5 * (k % 4))) & 31);
     }
     bool layer_murky(float fi) { return ((int(v_p1.y + 0.5) >> int(fi)) & 1) != 0; }
+    // A layer's plain color (smoke's middle tone), to blend across the line
+    // where it meets the next.
+    vec3 layer_rgb(float fi) {
+        return layer_murky(fi) ? vec3(0.25, 0.23, 0.30) : palette[int(layer_color(fi) + 0.5)].rgb;
+    }
+    // Whether two layers read as one band: one color, or both smoke.
+    bool layers_alike(float a, float b) {
+        bool ma = layer_murky(a);
+        bool mb = layer_murky(b);
+        if (ma) return mb;
+        return !mb && layer_color(a) == layer_color(b);
+    }
 
     // --- the modifiers' parts ----------------------------------------------------
     float smin(float a, float b, float k) {
@@ -1203,13 +1215,35 @@ let FRAGMENT_SHADER = """
                     }
                     float a = clamp((1.0 - abs(nx)) * w, 0.0, 1.0) * clamp(bottom + 0.5, 0.0, 1.0) *
                               clamp(p.y - flask_top(h) + 0.5, 0.0, 1.0);
+                    // The surface and the column's front are shaded differently;
+                    // across the line where they meet they blend over a pixel, so
+                    // it doesn't step. fe: pixels above that line.
+                    float fe = (ms - surface) * ca;
+                    vec3 c_top = c * 1.12 + vec3(0.05) + light.rgb * 0.06 * (0.5 - (surface - m) * ca / ry);
+                    vec3 c_side = c * (0.66 + 0.34 * s) + vec3(0.2);
+                    float w_top = clamp(0.5 + fe, 0.0, 1.0);
                     if (on_top) {
                         // The surface catches the light: brighter, with a bright edge
                         // and the room's glow across it.
-                        c = c * 1.12 + vec3(0.05) + light.rgb * 0.06 * (0.5 - (surface - m) * ca / ry);
+                        c = mix(c_side, c_top, w_top);
                         c += vec3(0.28) * (1.0 - smoothstep(0.0, 2.2, -top_d));
-                        a *= fill_aa(top_d);
+                        // Only the back edge meets air; the front edge sits on the
+                        // column, so it must not thin there (the glass would show
+                        // through as dark dashes).
+                        if (ms - surface > surface - back) a *= fill_aa(top_d);
                     } else {
+                        // Where one liquid meets another, the two colors blend over
+                        // a pixel instead of stepping (a run of one color stays
+                        // one band).
+                        float f_in = v + drain - fi;
+                        float du = (1.0 - f_in) / per_px * seg;
+                        float dl = f_in / per_px * seg;
+                        if (fi + 1.0 < v_p1.x + drain - 0.01 && !layers_alike(fi, fi + 1.0)) {
+                            c = mix(c, layer_rgb(fi + 1.0), clamp(0.5 - du, 0.0, 0.5));
+                        }
+                        if (fi - 1.0 >= max(floor(drain), 0.0) && !layers_alike(fi, fi - 1.0)) {
+                            c = mix(c, layer_rgb(fi - 1.0), clamp(0.5 - dl, 0.0, 0.5));
+                        }
                         // Round like the glass: darker to the sides, a gleam on the left.
                         c *= 0.66 + 0.34 * s;
                         c += vec3(0.2) * smoothstep(-0.66, -0.52, nx) * (1.0 - smoothstep(-0.44, -0.3, nx));
@@ -1221,7 +1255,8 @@ let FRAGMENT_SHADER = """
                         if (fi + 1.0 < v_p1.x + drain - 0.01 && !next_same) c *= 1.0 - 0.22 * (1.0 - smoothstep(0.0, 1.6, edge));
                         float surf = (surface - ms) * ca;
                         c += vec3(0.2) * (1.0 - smoothstep(0.0, 2.0, surf));
-                        a *= clamp(surf + 0.5, 0.0, 1.0);
+                        // Just under the surface's front line, half way to its shade.
+                        if (surf < 1.0) c = mix(c, c_top + vec3(0.28), clamp(0.5 - surf, 0.0, 0.5));
                         // Now and then a bubble rises from the bottom.
                         float period = 7.0 + fract(seed * 7.13) * 5.0;
                         float cyc = t / period + seed;

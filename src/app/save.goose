@@ -16,6 +16,10 @@ struct Save {
     color_safe: bool = false,   // color-blind palette and symbols
     seed_like: i64 = 20,        // custom seed boards look like this level
     last_seed: i64 = 1234,
+    // The desktop window's size, in the display's own units, as it was
+    // last left: resize it once and it opens that size from then on.
+    window_w: i64 = 540,
+    window_h: i64 = 960,
 }
 
 var save_dir: u8[>..];
@@ -72,6 +76,8 @@ fn load_save() -> Save {
                 else if k == "color_safe" { s.color_safe = v != 0; }
                 else if k == "seed_like" { s.seed_like = clamp(v, 1, 999); }
                 else if k == "last_seed" { s.last_seed = max(0, v); }
+                else if k == "window_w" { s.window_w = clamp(v, 270, 8192); }
+                else if k == "window_h" { s.window_h = clamp(v, 480, 8192); }
             }
         }
     };
@@ -89,7 +95,8 @@ fn write_save(s: Save) -> bool {
     let text = str("version=", SAVE_VERSION, "\nlevel=", s.level, "\nsound=", if s.sound { 1 } else { 0 },
                    "\nmusic=", if s.music { 1 } else { 0 },
                    "\ncolor_safe=", if s.color_safe { 1 } else { 0 },
-                   "\nseed_like=", s.seed_like, "\nlast_seed=", s.last_seed, "\n");
+                   "\nseed_like=", s.seed_like, "\nlast_seed=", s.last_seed,
+                   "\nwindow_w=", s.window_w, "\nwindow_h=", s.window_h, "\n");
     write_file_atomic(save_path(), text)
 }
 

@@ -1736,6 +1736,8 @@ fn env_or(name: const u8[:], fallback: const u8[:], out: u8[>..]&) {
 
 fn main() {
     var frames = -1;
+    var size_w: i64 = -1;
+    var size_h: i64 = -1;
     var shot: u8[>..] = [];
     var start_level = -1;
     var start_seed_value: i64 = -1;
@@ -1769,6 +1771,12 @@ fn main() {
             if okx && oky { clicks_script.push(Scripted { pos: v2(x, y), hold: opt == "--hold" }); }
             a += 2;
         }
+        else if opt == "--size" && a + 2 < argv.len {
+            let w, okw = parse_int(argv[a + 1]);
+            let h, okh = parse_int(argv[a + 2]);
+            if okw && okh { size_w = w; size_h = h; }
+            a += 2;
+        }
         else if opt == "--help" {
             print("""
                 alchemists-sort [--level N] [--seed S [--like L]] [--hand K] [--autoplay]
@@ -1776,6 +1784,7 @@ fn main() {
                   --seed S       play the board brewed from seed S, shaped like level L (default 20)
                   --hand K       play built-in hand-made level K (0 to 24; levels.goose)
                   --autoplay     let the hint solver play
+                  --size W H     open the window W x H (it remembers the size it is left at)
                   --click X Y    (testing) click at canvas point X, Y; one every 20 frames after frame 10
                   --hold X Y     (testing) press there and keep holding, in the same turn as the clicks
                   --shots F K    (testing) with --screenshot P, also save P-<frame>.png every K frames from frame F
@@ -1792,10 +1801,17 @@ fn main() {
     sound_on = save.sound;
     music_on = save.music;
 
-    guard gfx::open("Alchemist's Sort", 540, 960, gfx::WINDOW_RESIZABLE) else {
+    // The window opens as it was last left (or as --size asks); screenshots
+    // and tests keep the canvas's own size so they stay comparable.
+    var open_w: i64 = 540;
+    var open_h: i64 = 960;
+    if size_w > 0 && size_h > 0 { open_w = clamp(size_w, 270, 8192); open_h = clamp(size_h, 480, 8192); }
+    else if frames < 0 { open_w = save.window_w; open_h = save.window_h; }
+    guard gfx::open("Alchemist's Sort", open_w, open_h, gfx::WINDOW_RESIZABLE) else {
         write_stderr(str("could not open a window: ", gfx::error(), "\n"));
         exit(1);
     }
+    let open_px_w: i64 = gfx::screen_size().x;
     if !init_draw() { abort(str("could not make the pipeline: ", gfx::error())); }
     if !init_text(font_dir) { abort(str("could not load fonts: ", ui::error())); }
     if frames < 0 { init_sounds(); init_music(); }
@@ -1848,6 +1864,19 @@ fn main() {
     }
     if shot.len > 0 {
         if !gfx::screenshot(shot) { write_stderr(str("screenshot failed: ", gfx::error(), "\n")); }
+    }
+    // Remember the window's size, in the display's units (on a
+    // high-density display the screen has more pixels than that).
+    if frames < 0 {
+        let px = gfx::screen_size();
+        let density = max(1.0, open_px_w / (open_w as f64));
+        let w = (px.x / density + 0.5) as i64;
+        let h = (px.y / density + 0.5) as i64;
+        if w >= 270 && h >= 480 && (w != save.window_w || h != save.window_h) {
+            save.window_w = w;
+            save.window_h = h;
+            write_save(save);
+        }
     }
     close_sounds();
     ui::destroy(contexts[0]);
