@@ -35,7 +35,8 @@ stdenv.mkDerivation {
   buildPhase = ''
     runHook preBuild
 
-    # The game, as C, and its shaders as GLSL ES.
+    # The game, as C, and its shaders as GLSL ES; shaders.py also cuts the
+    # shaders' compiled code, which the browser doesn't use, out of game.c.
     goose --emit-runtime runtime.c
     goose -O2 --include src/c/stream.h -o game.c src/main.goose
     python3 web/shaders.py game.c shaders_web.c spirv-cross

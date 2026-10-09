@@ -1332,6 +1332,10 @@ fn test_tables() {
         check(find(FRAGMENT_SHADER, str("#define ", shape_define(s), " ", i, "\n")) >= 0,
               str("the shader numbers ", shape_define(s), " ", i));
     }
+    for s in ALL_SHAPES {
+        check(shader_program_of(shape_define(s)) == program_define(shape_program(s)),
+              str("the shader draws ", shape_define(s), " in the program draw.goose gives it"));
+    }
     for c, i in ALL_ICONS {
         check(icon_index(c) == i, "ALL_ICONS is in index order");
         check(find(FRAGMENT_SHADER, str("#define ", icon_define(c), " ", i, "\n")) >= 0,
@@ -1339,6 +1343,19 @@ fn test_tables() {
     }
     check(color_of_letter('Q') == QUICKSILVER && color_of_letter('U') == GOLD && color_of_letter('*') == DROP,
           "the special liquids' letters");
+}
+
+// The program a shape's branch of the fragment shader is in: the
+// #ifdef PROGRAM_... still open where main() tests for it ("" for none).
+fn shader_program_of(define: const u8[:]) -> const u8[:] {
+    let main = find(FRAGMENT_SHADER, "void main()");
+    let at = find(FRAGMENT_SHADER, str("(kind == ", define, ")"));
+    if main < 0 || at < main { return "?"; }
+    let before = FRAGMENT_SHADER[main..at];
+    let open = rfind(before, "#ifdef ");
+    if open < 0 || rfind(before, "#endif") > open { return ""; }
+    let name = before[open + 7..];
+    name[..find(name, "\n")]
 }
 
 // --- shipped levels -------------------------------------------------------------------

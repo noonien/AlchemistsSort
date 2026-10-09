@@ -1,8 +1,9 @@
-// All the game's pictures are drawn by one pipeline: instanced quads whose
-// fragment shader draws a shape chosen per instance -- a flask, its liquid,
-// a pouring stream, rime, a wax seal, a lantern, an icon -- as signed distance
-// fields. There are no image files; every bit of art is in the shader, in
-// shaders.goose.
+// All the game's pictures are drawn as instanced quads whose fragment shader
+// draws a shape chosen per instance -- a flask, its liquid, a pouring stream,
+// rime, a wax seal, a lantern, an icon -- as signed distance fields. There
+// are no image files; every bit of art is in the shader, in shaders.goose.
+// The shader is compiled as a few programs, each with some of the shapes
+// (Program there), so a layer draws as runs of instances, one per program.
 //
 // Coordinates are the screen's pixels, y down. A frame collects instances
 // into `layer`s and draws each with `flush_layer`.
@@ -38,14 +39,20 @@ struct Layer {
     capacity: i64 = 0,
 }
 
-var shape_pipeline = gfx::Pipeline { 0 };
+// The pipelines by program number (program_number), each made when first
+// needed; and which program draws each shape, by shape number (-1: any).
+var pipelines: gfx::Pipeline[PROGRAMS];
+var shape_programs: i64[SHAPES];
 var quad_buffer = gfx::Buffer { 0 };
 
+// Makes the quad and the programs the title screen draws with; the rest
+// are made by make_programs, or when first drawn with (the first screen
+// isn't the title screen when a level is asked for on the command line).
 fn init_draw() -> bool {
-    var desc = gfx::PipelineDesc { blend: gfx::BLEND_PREMULTIPLIED, instance_location: 1 };
-    shape_pipeline = gfx::pipeline(embed_shader("vert", VERTEX_SHADER), embed_shader("frag", FRAGMENT_SHADER),
-                             desc);
-    if shape_pipeline.id == 0 { return false; }
+    for s in ALL_SHAPES { shape_programs[shape_index(s)] = program_number(shape_program(s), 0); }
+    for p in [Program.Title, Program.Board, Program.Ui] {
+        if pipeline_of(program_number(p, 0)).id == 0 { return false; }
+    }
     let corners: Corner[6] = [Corner { float2 { -1.0, -1.0 } }, Corner { float2 { 1.0, -1.0 } },
                               Corner { float2 { 1.0, 1.0 } }, Corner { float2 { -1.0, -1.0 } },
                               Corner { float2 { 1.0, 1.0 } }, Corner { float2 { -1.0, 1.0 } }];
@@ -53,7 +60,31 @@ fn init_draw() -> bool {
     quad_buffer.id != 0
 }
 
-// Uploads and draws `insts` over the screen, keeping what is there.
+// Makes every program not made yet. In a browser they then compile while
+// the game runs, each ready by the time it is first drawn with, mostly.
+fn make_programs() {
+    for n in 0..PROGRAMS { pipeline_of(n); }
+}
+
+fn pipeline_of(program: i64) -> gfx::Pipeline {
+    if pipelines[program].id == 0 {
+        let desc = gfx::PipelineDesc { blend: gfx::BLEND_PREMULTIPLIED, instance_location: 1 };
+        pipelines[program] = gfx::pipeline(embed_shader("vert", VERTEX_SHADER), PROGRAM_SHADERS[program], desc);
+    }
+    pipelines[program]
+}
+
+// The program an instance is drawn with: its shape's, or for a backdrop its
+// room's (-1: any).
+fn program_of(i: Inst) -> i64 {
+    let shape = (i.misc.x + 0.5) as! i64;
+    if shape == shape_index(Shape.Backdrop) { return program_number(Program.Room, (i.p0.x + 0.5) as! i64); }
+    if shape < 0 || shape >= shape_programs.len { return -1; }
+    shape_programs[shape]
+}
+
+// Uploads and draws `insts` over the screen, keeping what is there: in
+// order, as runs of instances that one program draws.
 fn flush_layer(layer: Layer&, insts: const Inst[:], look: Look, clear: bool) {
     let bytes = bytes_of(insts);
     if bytes.len > 0 {
@@ -69,13 +100,32 @@ fn flush_layer(layer: Layer&, insts: const Inst[:], look: Look, clear: bool) {
                                color_value: float4 { 0.05, 0.04, 0.09, 1.0 } };
     pass.color[0] = gfx::screen();
     gfx::begin_pass(pass);
-    if insts.len > 0 {
-        gfx::bind(shape_pipeline);
-        gfx::bind_vertex_buffer(0, quad_buffer, 0);
-        gfx::bind_vertex_buffer(1, layer.buffer, 0);
-        gfx::uniforms(gfx::VERTEX, 0, look.screen);
-        gfx::uniforms(gfx::FRAGMENT, 0, look);
-        gfx::draw(6, insts.len, 0, 0);
+    var bound = false;
+    var first = 0;
+    while first < insts.len {
+        // The run: up to the first instance another program draws.
+        var program = -1;
+        var end = first;
+        while end < insts.len {
+            let p = program_of(insts[end]);
+            if p >= 0 && program >= 0 && p != program { break; }
+            if p >= 0 { program = p; }
+            end++;
+        }
+        let pipeline = pipeline_of(max(program, 0));
+        if pipeline.id != 0 {
+            gfx::bind(pipeline);
+            // What the programs share stays bound from one to the next.
+            if !bound {
+                gfx::bind_vertex_buffer(0, quad_buffer, 0);
+                gfx::bind_vertex_buffer(1, layer.buffer, 0);
+                gfx::uniforms(gfx::VERTEX, 0, look.screen);
+                gfx::uniforms(gfx::FRAGMENT, 0, look);
+                bound = true;
+            }
+            gfx::draw(6, end - first, 0, first);
+        }
+        first = end;
     }
     gfx::end_pass();
 }

@@ -73,26 +73,71 @@
     const detail = document.getElementById('detail');
     const level = document.getElementById('level');
 
-    // The flask fills with the bytes downloaded of the game and its data.
+    // The flask fills over the whole start, a stage at a time, each given a
+    // share of it by about how long it takes: the download, then compiling
+    // the game, unpacking its data and the save, the game setting up, and
+    // compiling its shaders, which on some machines takes longest of all.
+    const STAGES = {
+      download: { from: 0.00, to: 0.50, text: 'Gathering ingredients…' },
+      wasm:     { from: 0.50, to: 0.58, text: 'Grinding herbs…' },
+      unpack:   { from: 0.58, to: 0.64, text: 'Unpacking the satchel…' },
+      setup:    { from: 0.64, to: 0.68, text: 'Laying out the tools…' },
+      shaders:  { from: 0.68, to: 0.98, text: 'Lighting the candles…' },
+      ready:    { from: 1.00, to: 1.00, text: 'Ready' },
+    };
+    const ORDER = Object.keys(STAGES);
+    let stage = 'download', since = performance.now();
+    let count = { done: 0, total: 0 }, countSince = since;
+    let shown = 0, failed = false;
+    const t0 = performance.now();
+
     // The build writes in the files' sizes, since a server that compresses
     // them reports the compressed length, not what the browser reads.
     const expected = { wasm: Number('@WASM_BYTES@') || 0, data: Number('@DATA_BYTES@') || 0 };
     const got = { wasm: 0, data: 0 };
     const total = { wasm: expected.wasm, data: expected.data };
-    let failed = false;
+    let wasmReady = false;
 
     function mb(n) { return (n / 1048576).toFixed(1); }
-    function show() {
-      if (failed) return;
-      const sum = got.wasm + got.data;
-      const all = Math.max(total.wasm + total.data, sum, 1);
-      const t = Math.min(sum / all, 1);
-      // The liquid's surface runs from just above the flask's bottom (132) to
-      // its neck (40).
-      level.style.transform = 'translateY(' + (132 - 92 * t) + 'px)';
-      if (sum > 0) detail.textContent = mb(sum) + ' / ' + mb(all) + ' MB';
-      if (t >= 1) { status.textContent = 'Stirring…'; detail.textContent = ''; }
+
+    // Moves on to stage `s` (never back), logging when, for the curious.
+    function enter(s) {
+      if (failed || ORDER.indexOf(s) <= ORDER.indexOf(stage)) return;
+      stage = s;
+      since = countSince = performance.now();
+      count = { done: 0, total: 0 };
+      console.info('[startup] ' + s + ' at ' + ((since - t0) / 1000).toFixed(2) + ' s');
+      draw();
     }
+
+    // The flask and the words, as far as the stage has got. Inside a stage
+    // whose end can't be measured, the level creeps toward the next mark
+    // and slows as it nears it, so it neither stalls nor runs ahead.
+    function draw() {
+      if (failed) return;
+      const st = STAGES[stage], now = performance.now();
+      const creep = (from, tau) => 0.9 * (1 - Math.exp(-(now - from) / tau));
+      let t, text = st.text, numbers = '';
+      if (stage === 'download') {
+        const sum = got.wasm + got.data;
+        const all = Math.max(total.wasm + total.data, sum, 1);
+        t = Math.min(sum / all, 1);
+        if (sum > 0) numbers = mb(sum) + ' / ' + mb(all) + ' MB';
+      } else if (stage === 'shaders' && count.total > 0) {
+        t = (count.done + creep(countSince, 1500)) / count.total;
+        numbers = count.done + ' / ' + count.total;
+      } else {
+        t = stage === 'ready' ? 1 : creep(since, 800);
+      }
+      shown = Math.max(shown, st.from + (st.to - st.from) * Math.min(t, 1));
+      // The liquid's surface runs from just above the flask's bottom (132)
+      // to its neck (40).
+      level.style.transform = 'translateY(' + (132 - 92 * shown) + 'px)';
+      status.textContent = text;
+      detail.textContent = numbers;
+    }
+    (function tick() { draw(); if (stage !== 'ready' && !failed) requestAnimationFrame(tick); })();
+
     function fail(text) {
       failed = true;
       loading.classList.remove('done');
@@ -101,7 +146,10 @@
       detail.textContent = '';
     }
 
-    // Count the bytes of the game's .wasm and .data as they arrive.
+    // Count the bytes of the game's .wasm and .data as they arrive. A file
+    // fetched twice (a server sending the .wasm as anything but
+    // application/wasm makes the browser fetch it again to compile it
+    // another way) counts once.
     const realFetch = window.fetch.bind(window);
     window.fetch = async (input, init) => {
       const url = typeof input === 'string' ? input : input.url;
@@ -110,18 +158,33 @@
       if (!kind || !response.ok || !response.body) return response;
       if (!expected[kind]) total[kind] = Number(response.headers.get('content-length')) || 0;
       const reader = response.body.getReader();
+      let read = 0;
       const counted = new ReadableStream({
         async pull(controller) {
           const { done, value } = await reader.read();
-          if (done) { controller.close(); return; }
-          got[kind] += value.byteLength;
-          show();
+          if (done) { controller.close(); downloaded(); return; }
+          read += value.byteLength;
+          got[kind] = Math.max(got[kind], read);
           controller.enqueue(value);
         },
         cancel(reason) { reader.cancel(reason); },
       });
       return new Response(counted, { status: response.status, statusText: response.statusText, headers: response.headers });
     };
+    function downloaded() {
+      if (got.wasm >= total.wasm && got.data >= total.data) enter(wasmReady ? 'unpack' : 'wasm');
+    }
+
+    // The game compiled: the browser compiles the .wasm as it downloads, and
+    // finishes after.
+    for (const name of ['instantiateStreaming', 'instantiate']) {
+      const real = WebAssembly[name];
+      WebAssembly[name] = (...args) => real.apply(WebAssembly, args).then((result) => {
+        wasmReady = true;
+        if (stage === 'wasm') enter('unpack');
+        return result;
+      });
+    }
 
     var Module = {
       canvas: document.getElementById('canvas'),
@@ -135,18 +198,30 @@
         if (m && got.data === 0) {
           total.data = expected.data || Number(m[2]);
           got.data = Number(m[1]);
-          show();
         }
       },
       monitorRunDependencies: () => {},
-      // The canvas shows the game after its first frames; then the flask fades.
+      // The data unpacked and the save loaded: the game starts and sets up,
+      // then compiles its shaders, reporting how many are done, and shows
+      // its first frame; then the flask fades.
       onRuntimeInitialized: () => {
         got.wasm = Math.max(got.wasm, total.wasm);
         got.data = Math.max(got.data, total.data);
-        show();
-        requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => {
+        enter('unpack');
+        enter('setup');
+      },
+      onStartup: (what, done, all) => {
+        if (what === 'shaders') {
+          enter('shaders');
+          if (done !== count.done || all !== count.total) {
+            count = { done, total: all };
+            countSince = performance.now();
+            console.info('[startup] shaders ' + done + ' / ' + all + ' at ' + ((countSince - t0) / 1000).toFixed(2) + ' s');
+          }
+        } else if (what === 'ready') {
+          enter('ready');
           if (!failed) loading.classList.add('done');
-        })));
+        }
       },
       onAbort: (what) => fail('The game stopped: ' + what),
     };

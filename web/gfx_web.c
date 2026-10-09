@@ -14,11 +14,20 @@
 
    Like SDL_GPU, the program draws into a screen texture that frame() shows;
    frame() then waits for the browser's next animation frame, which needs
-   the program built with Asyncify. */
+   the program built with Asyncify.
+
+   A pipeline's shaders compile while the program runs on: pipeline() starts
+   them and returns, and the browser compiles them in the background (in
+   parallel, with KHR_parallel_shader_compile). A pipeline is finished, its
+   link checked, once it is ready or when it is first bound, which then
+   waits for it. The first frame() waits, with the page still animating,
+   until every pipeline made before it is ready, and tells the page how far
+   along that is (Module.onStartup, in web/shell.html). */
 
 #include <SDL3/SDL.h>
 #include <GLES3/gl3.h>
 #include <emscripten.h>
+#include <emscripten/html5.h>
 
 #include <stdarg.h>
 #include <stdbool.h>
@@ -29,6 +38,10 @@
 #include "gfx_api.h"
 #include "gfx_blob.h"
 #include "shaders_web.h"
+
+#ifndef GL_COMPLETION_STATUS_KHR
+#define GL_COMPLETION_STATUS_KHR 0x91B1
+#endif
 
 /* --- handles --------------------------------------------------------------- */
 /* As in gfx_device.c: (generation << 20) | index, so a stale handle is caught. */
@@ -85,6 +98,8 @@ typedef struct {
 
 typedef struct {
     GLuint program;
+    GLuint shaders[2];          /* until the link is checked, for its log */
+    bool finished;              /* the link checked; program 0 if it failed */
     gfx_shader_info vs, fs;
     gs_gfx_pipeline_desc desc;
     gfx_attr attrs[16];
@@ -107,6 +122,11 @@ typedef struct {
     gs_gfx_texture screen, screen_depth;
     int width, height;
     bool drawn;                 /* into the screen since the last frame() */
+    bool presented;             /* a frame shown yet */
+
+    /* KHR_parallel_shader_compile: whether a program's link can be asked
+       if it is done without waiting for it. */
+    bool parallel_compile;
 
     /* The pass being recorded. */
     bool pass;
@@ -479,6 +499,9 @@ uint8_t gs_gfx_open(gs_gfx_bytes title, int64_t width, int64_t height, int64_t f
         return false;
     }
     gfx.open = true;
+    gfx.parallel_compile =
+        emscripten_webgl_enable_extension(emscripten_webgl_get_current_context(),
+                                          "KHR_parallel_shader_compile");
     glGenVertexArrays(1, &gfx.vao);
     glBindVertexArray(gfx.vao);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -519,6 +542,8 @@ static void gfx_free_sampler(void *item) {
 static void gfx_free_pipeline(void *item) {
     gfx_pipeline_slot *s = (gfx_pipeline_slot *)item;
     if (s->program) glDeleteProgram(s->program);
+    for (int i = 0; i < 2; i++)
+        if (s->shaders[i]) glDeleteShader(s->shaders[i]);
 }
 
 void gs_gfx_close(void) {
@@ -577,6 +602,14 @@ EM_ASYNC_JS(void, gfx_wait_for_browser, (void), {
     await new Promise(resolve => requestAnimationFrame(resolve));
 });
 
+/* Tells the page how its start is going: `stage`, `done` of `total`. */
+EM_JS(void, gfx_startup, (const char *stage, int done, int total), {
+    if (Module.onStartup) Module.onStartup(UTF8ToString(stage), done, total);
+});
+
+/* In the pipelines' part, below. */
+static void gfx_finish_ready(bool wait_for_one, int *done, int *total);
+
 /* The screen onto the canvas. */
 static void gfx_present(void) {
     gfx_texture_slot *s = gfx_texture_slot_of(gfx.screen);
@@ -589,6 +622,10 @@ static void gfx_present(void) {
     glBlitFramebuffer(0, 0, gfx.width, gfx.height, 0, 0, pw, ph, GL_COLOR_BUFFER_BIT,
                       pw == gfx.width && ph == gfx.height ? GL_NEAREST : GL_LINEAR);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (!gfx.presented) {
+        gfx.presented = true;
+        gfx_startup("ready", 1, 1);
+    }
 }
 
 static gs_gfx_event *gfx_event(int32_t kind) {
@@ -677,6 +714,24 @@ uint8_t gs_gfx_frame(void) {
         if (gfx.drawn) gfx_present();
         gfx.drawn = false;
         gfx_wait_for_browser();
+    }
+    int done = 0, total = 0;
+    if (gfx.frames == 0) {
+        /* The first frame waits for the pipelines made before it, a browser
+           frame at a time, so the page can show how far along they are.
+           Without KHR_parallel_shader_compile it can only wait for each in
+           turn, one a browser frame. */
+        for (;;) {
+            gfx_finish_ready(false, &done, &total);
+            gfx_startup("shaders", done, total);
+            if (done == total) break;
+            gfx_wait_for_browser();
+            if (!gfx.parallel_compile) gfx_finish_ready(true, &done, &total);
+        }
+    } else if (gfx.parallel_compile) {
+        /* Later pipelines are finished as they become ready, so that
+           binding one seldom waits. */
+        gfx_finish_ready(false, &done, &total);
     }
     memset(gfx.pressed_keys, 0, sizeof gfx.pressed_keys);
     memset(gfx.released_keys, 0, sizeof gfx.released_keys);
@@ -1214,21 +1269,89 @@ static bool gfx_read_blob(gs_gfx_bytes blob, int stage, gfx_shader_info *info) {
     return true;
 }
 
+/* Starts compiling a shader. Its status is asked once its program is
+   linked (gfx_finish_pipeline), not here, so the compile doesn't hold up
+   the page. */
 static GLuint gfx_compile(GLenum kind, const char *src) {
     GLuint s = glCreateShader(kind);
     glShaderSource(s, 1, &src, NULL);
     glCompileShader(s);
-    GLint ok = 0;
-    glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
-    if (!ok) {
-        char log[1024] = "";
-        glGetShaderInfoLog(s, sizeof log, NULL, log);
-        gfx_misuse("compiling a %s shader: %s", kind == GL_VERTEX_SHADER ? "vertex" : "fragment",
-                   log);
-        glDeleteShader(s);
-        return 0;
-    }
     return s;
+}
+
+/* Whether pipeline `p`'s program is linked (or has failed to), without
+   waiting for it; never, without KHR_parallel_shader_compile to ask. */
+static bool gfx_pipeline_done(gfx_pipeline_slot *p) {
+    if (p->finished || !gfx.parallel_compile) return p->finished;
+    GLint done = 0;
+    glGetProgramiv(p->program, GL_COMPLETION_STATUS_KHR, &done);
+    return done != 0;
+}
+
+/* Checks pipeline `p`'s link, waiting for it if it is not done, and binds
+   its uniform blocks and samplers. False if it failed, which it says once. */
+static bool gfx_finish_pipeline(gfx_pipeline_slot *p) {
+    if (p->finished) return p->program != 0;
+    p->finished = true;
+    GLuint prog = p->program;
+    GLint ok = 0;
+    glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        /* A shader that failed to compile says more than the link. */
+        char log[1024] = "";
+        const char *what = "linking a pipeline";
+        for (int i = 0; i < 2 && !log[0]; i++) {
+            GLint compiled = 0;
+            glGetShaderiv(p->shaders[i], GL_COMPILE_STATUS, &compiled);
+            if (!compiled) {
+                glGetShaderInfoLog(p->shaders[i], sizeof log, NULL, log);
+                what = i ? "compiling a fragment shader" : "compiling a vertex shader";
+            }
+        }
+        if (!log[0]) glGetProgramInfoLog(prog, sizeof log, NULL, log);
+        gfx_misuse("%s: %s", what, log);
+        glDeleteProgram(prog);
+        p->program = 0;
+    }
+    for (int i = 0; i < 2; i++) {
+        glDeleteShader(p->shaders[i]);
+        p->shaders[i] = 0;
+    }
+    if (!ok) return false;
+    /* GLSL ES 3.00 has no binding qualifiers: blocks and samplers go to the
+       binding gfx gives each stage's slot, stage * 4 + slot. */
+    glUseProgram(prog);
+    const gfx_shader_info *stages[2] = { &p->vs, &p->fs };
+    for (int st = 0; st < 2; st++) {
+        for (int i = 0; i < stages[st]->num_uniform_buffers; i++) {
+            GLuint idx = glGetUniformBlockIndex(prog, stages[st]->web->ubos[i]);
+            if (idx != GL_INVALID_INDEX) glUniformBlockBinding(prog, idx, (GLuint)(st * 4 + i));
+        }
+        for (int i = 0; i < stages[st]->num_samplers; i++) {
+            GLint loc = glGetUniformLocation(prog, stages[st]->web->samplers[i]);
+            if (loc >= 0) glUniform1i(loc, st * GFX_UNITS_PER_STAGE + i);
+        }
+    }
+    glUseProgram(gfx.pipeline ? gfx.pipeline->program : 0);
+    return true;
+}
+
+/* Finishes the pipelines whose programs are ready, waiting for none of
+   them, or with `wait_for_one` for the first that isn't; and counts how
+   many are finished, of how many. */
+static void gfx_finish_ready(bool wait_for_one, int *done, int *total) {
+    *done = *total = 0;
+    gfx_table *t = &gfx.pipelines;
+    for (uint32_t i = 0; i < t->count; i++) {
+        if (!t->live[i]) continue;
+        gfx_pipeline_slot *p = (gfx_pipeline_slot *)(t->items + (size_t)i * t->item_size);
+        (*total)++;
+        if (!p->finished && (wait_for_one || gfx_pipeline_done(p))) {
+            gfx_finish_pipeline(p);
+            wait_for_one = false;
+        }
+        if (p->finished) (*done)++;
+    }
 }
 
 /* Bytes and GL layout of each VERTEX_* format. */
@@ -1324,48 +1447,25 @@ gs_gfx_pipeline gs_gfx_create_pipeline(gs_gfx_bytes vs, gs_gfx_bytes fs,
         return h;
     tmp.desc = *d;
     if (!gfx_vertex_layout(&tmp)) return h;
+    /* Compiled and linked in the background; a shader that fails is
+       reported when the pipeline is finished. */
     GLuint v = gfx_compile(GL_VERTEX_SHADER, tmp.vs.web->glsl);
-    GLuint f = v ? gfx_compile(GL_FRAGMENT_SHADER, tmp.fs.web->glsl) : 0;
-    if (!f) {
-        if (v) glDeleteShader(v);
-        return h;
-    }
+    GLuint f = gfx_compile(GL_FRAGMENT_SHADER, tmp.fs.web->glsl);
     GLuint prog = glCreateProgram();
     glAttachShader(prog, v);
     glAttachShader(prog, f);
     glLinkProgram(prog);
-    glDeleteShader(v);
-    glDeleteShader(f);
-    GLint ok = 0;
-    glGetProgramiv(prog, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        char log[1024] = "";
-        glGetProgramInfoLog(prog, sizeof log, NULL, log);
-        gfx_misuse("linking a pipeline: %s", log);
-        glDeleteProgram(prog);
-        return h;
-    }
-    /* GLSL ES 3.00 has no binding qualifiers: blocks and samplers go to the
-       binding gfx gives each stage's slot, stage * 4 + slot. */
-    glUseProgram(prog);
-    const gfx_shader_info *stages[2] = { &tmp.vs, &tmp.fs };
-    for (int st = 0; st < 2; st++) {
-        for (int i = 0; i < stages[st]->num_uniform_buffers; i++) {
-            GLuint idx = glGetUniformBlockIndex(prog, stages[st]->web->ubos[i]);
-            if (idx != GL_INVALID_INDEX) glUniformBlockBinding(prog, idx, (GLuint)(st * 4 + i));
-        }
-        for (int i = 0; i < stages[st]->num_samplers; i++) {
-            GLint loc = glGetUniformLocation(prog, stages[st]->web->samplers[i]);
-            if (loc >= 0) glUniform1i(loc, st * GFX_UNITS_PER_STAGE + i);
-        }
-    }
     gfx_pipeline_slot *p = (gfx_pipeline_slot *)gfx_table_add(&gfx.pipelines, &h.id);
     if (!p) {
         glDeleteProgram(prog);
+        glDeleteShader(v);
+        glDeleteShader(f);
         return h;
     }
     *p = tmp;
     p->program = prog;
+    p->shaders[0] = v;
+    p->shaders[1] = f;
     return h;
 }
 
@@ -1490,6 +1590,10 @@ void gs_gfx_bind_pipeline(gs_gfx_pipeline p) {
     }
     gfx_pipeline_slot *s = (gfx_pipeline_slot *)gfx_table_get(&gfx.pipelines, p.id);
     if (!s) return;
+    if (!gfx_finish_pipeline(s)) {
+        gfx_misuse("bind_pipeline: a pipeline whose shaders failed (see the first error)");
+        return;
+    }
     const gs_gfx_pipeline_desc *d = &s->desc;
     if (d->wireframe) {
         gfx_unsupported("wireframe drawing");

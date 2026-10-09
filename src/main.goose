@@ -2202,6 +2202,10 @@ fn main() {
         draw_frame(dt);
         update_transition();
         drawn++;
+        // The first screen's programs were made first; the others follow
+        // once it has been shown, so that a browser compiling them doesn't
+        // hold it back.
+        if drawn == 2 { make_programs(); }
         if shots_from >= 0 && shot.len > 0 && drawn >= shots_from && (drawn - shots_from) % shots_every == 0 {
             gfx::screenshot(str(shot, "-", drawn, ".png"));
         }

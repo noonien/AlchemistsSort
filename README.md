@@ -165,8 +165,8 @@ src/core/               the rules, with no drawing or input
   tools.goose           shuffle and hint
   explain.goose         the board in words: the Grimoire, a flask's card, refusals, pour previews
 src/app/                rendering, text, sound, saving
-  draw.goose            one instanced pipeline; all art is signed distance fields in its shader
-  shaders.goose         that shader: every shape, the chapters' rooms and tables, each color's shimmer
+  draw.goose            instanced quads; all art is signed distance fields in their shader
+  shaders.goose         that shader, compiled as a few programs: every shape, the rooms, each color's shimmer
   scene.goose           the workbench: rooms, the table, candlelight, motes, the back shelf
   fx.goose              slosh, droplets, stoppers and labels, ink between screens, the win's finale
   menus.goose           the title screen and the chapter map
