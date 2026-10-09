@@ -68,10 +68,15 @@ stdenv.mkDerivation {
       -sFORCE_FILESYSTEM -lidbfs.js --pre-js web/pre.js --shell-file web/shell.html \
       --preload-file site/data@/data
 
-    # The loading screen's flask fills by the bytes read of these two.
+    # The loading screen's flask fills by the bytes read of these two. The
+    # files are fetched by a tag of their contents: every file in the Nix
+    # store has the same date, so a browser could otherwise keep old ones.
+    build=$(cat out/index.js out/index.wasm out/index.data | sha256sum | cut -c1-12)
     substituteInPlace out/index.html \
       --replace-fail '@WASM_BYTES@' "$(stat -c %s out/index.wasm)" \
-      --replace-fail '@DATA_BYTES@' "$(stat -c %s out/index.data)"
+      --replace-fail '@DATA_BYTES@' "$(stat -c %s out/index.data)" \
+      --replace-fail '@BUILD@' "$build" \
+      --replace-fail 'src="index.js"' "src=\"index.js?v=$build\""
 
     runHook postBuild
   '';

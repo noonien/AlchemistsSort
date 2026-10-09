@@ -42,8 +42,7 @@
         web = {
           type = "app";
           program = "${pkgs.writeShellScript "serve-alchemists-sort" ''
-            echo "Alchemist's Sort: http://localhost:8000"
-            exec ${pkgs.python3}/bin/python3 -m http.server 8000 --directory ${self.packages.${system}.web}
+            exec ${pkgs.python3}/bin/python3 ${./web/serve.py} ${self.packages.${system}.web} 8000
           ''}";
         };
       });

@@ -125,6 +125,9 @@
 
     var Module = {
       canvas: document.getElementById('canvas'),
+      // The build's own tag on the files' addresses, so a browser never
+      // mixes a new page with an old game it kept.
+      locateFile: (path) => path + '?v=@BUILD@',
       // Emscripten reports the data's download as "Downloading data... (n/m)",
       // in case it was fetched some way the counter above did not see.
       setStatus: (text) => {
