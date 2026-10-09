@@ -26,6 +26,7 @@ import app.shaders;
 import app.palette;
 import app.text;
 import app.sfx;
+import app.tracks;
 import app.music;
 import app.save;
 import app.scene;
@@ -103,7 +104,7 @@ var screen_px = int2 { 540, 960 };
 var now: f64 = 0.0;
 var data_dir: u8[>..];
 var font_dir: u8[>..];
-var sample_dir: u8[>..];
+var music_from: u8[>..];
 
 var save: Save;
 var screen_id = Screen.Home;
@@ -1741,6 +1742,60 @@ fn toggle_row(out: Inst[>..]&, layer: i64, y: f32, label: const u8[:], on: bool)
     clicked(v2(VW * 0.5, y), v2(VW * 0.42, 22.0))
 }
 
+// A slider in a row like the toggles', from 0 to 100: its track, the part
+// filled up to the value, the knob, and the value. A press on the row takes
+// the knob there and it follows the pointer (a finger or the mouse) until
+// let go; music_slid is set on the frame it is let go. Returns the value.
+var slider_held = false;
+var music_slid = false;
+let SLIDER_X0: f32 = 210.0;
+let SLIDER_X1: f32 = VW - 93.0;
+
+fn slider_row(out: Inst[>..]&, layer: i64, y: f32, label: const u8[:], value: i64) -> i64 {
+    text(layer, 90.0, y, label, TextStyle.Body, white(0.92), Align.Left);
+    var v = value;
+    music_slid = false;
+    let mid = v2((SLIDER_X0 + SLIDER_X1) * 0.5, y);
+    let half = v2((SLIDER_X1 - SLIDER_X0) * 0.5 + 12.0, 22.0);
+    var at_x = pointer.x;
+    for i in clicks.len {
+        if in_rect(clicks[i], mid, half) {
+            slider_held = true;
+            at_x = clicks[i].x;
+            remove_at(clicks, i);
+            break;
+        }
+    }
+    if slider_held {
+        let t = clamp((at_x - SLIDER_X0) / (SLIDER_X1 - SLIDER_X0), 0.0, 1.0);
+        v = round(t * 100.0) as! i64;
+        if released || !gfx::mouse_down(gfx::MOUSE_LEFT) {
+            slider_held = false;
+            music_slid = true;
+        }
+    }
+    let at = SLIDER_X0 + (SLIDER_X1 - SLIDER_X0) * (v / 100.0);
+    rect(out, mid, v2((SLIDER_X1 - SLIDER_X0) * 0.5, 4.0), 4.0, float4 { 0.3, 0.27, 0.36, 1.0 });
+    if v > 0 {
+        rect(out, v2((SLIDER_X0 + at) * 0.5, y), v2((at - SLIDER_X0) * 0.5, 4.0), 4.0, float4 { 0.2, 0.6, 0.4, 1.0 });
+    }
+    rect(out, v2(at, y), v2(10.0, 10.0), 10.0, white(0.95));
+    let shown: u8[>..] = if v == 0 { "off" } else { str(v, "%") };
+    text(layer, SLIDER_X0 - 14.0, y, shown, TextStyle.Small, white(0.75), Align.Right);
+    v
+}
+
+// The music slider, by keys, on the Settings screen or over the board.
+fn slide_music_by_keys() {
+    var d = 0;
+    if gfx::key_pressed("Left") || gfx::key_pressed("-") { d = -5; }
+    if gfx::key_pressed("Right") || gfx::key_pressed("=") { d = 5; }
+    if d == 0 { return; }
+    save.music_volume = clamp(save.music_volume + d, 0, 100);
+    music_level = save.music_volume;
+    write_save(save);
+}
+
 // Sound, music and the palette, from the top row at y down: on the
 // Settings screen and over the board alike.
 fn settings_toggles(out: Inst[>..]&, layer: i64, y: f32) {
@@ -1750,11 +1805,12 @@ fn settings_toggles(out: Inst[>..]&, layer: i64, y: f32) {
         write_save(save);
         play(Sfx.Tool);
     }
-    if toggle_row(out, layer, y + 50.0, "Music", save.music) {
-        save.music = !save.music;
-        music_on = save.music;
-        write_save(save);
+    let level = slider_row(out, layer, y + 50.0, "Music", save.music_volume);
+    if level != save.music_volume {
+        save.music_volume = level;
+        music_level = level;
     }
+    if music_slid { write_save(save); }
     if toggle_row(out, layer, y + 100.0, "Color-blind palette", save.color_safe) {
         save.color_safe = !save.color_safe;
         write_save(save);
@@ -1856,6 +1912,7 @@ fn handle_keys() {
         else if screen_id != Screen.Home { screen_id = Screen.Home; overlay = Overlay.None; finish_animations(); }
         else { gfx::quit(); }
     }
+    if screen_id == Screen.Settings || overlay == Overlay.Settings { slide_music_by_keys(); }
     if screen_id != Screen.Play || pending_load || varying { return; }
     let ctrl = gfx::key_down("Left Ctrl") || gfx::key_down("Right Ctrl");
     if overlay == Overlay.Win && (gfx::key_pressed("N") || gfx::key_pressed("Return")) { next_after_win(); return; }
@@ -1945,7 +2002,13 @@ fn draw_frame(dt: f32) {
     if ink.len > 0 { flush_layer(ink_layer, ink, look, false); }
 }
 
-// Whether this frame has anything moving or waiting on input soon.
+// The track that plays: on the title screen and its pages (the map,
+// settings, a seed) the title theme; in play, the room's.
+fn music_track_now() -> i64 {
+    if screen_id != Screen.Play { return TITLE_TRACK; }
+    music_room_now()
+}
+
 // The room whose music plays: the level in play's, else the player's next.
 fn music_room_now() -> i64 {
     var n = save.level;
@@ -1955,11 +2018,8 @@ fn music_room_now() -> i64 {
     music_room(n, c.theme, c.first)
 }
 
-// Music being made gets a slice every frame.
-fn lively() -> bool { moving() || music_making }
-
-// Something on screen moves, or is about to.
-fn moving() -> bool {
+// Whether this frame has anything moving or waiting on input soon.
+fn lively() -> bool {
     if pending_load || any_pouring() || forces_lively() || taps.len > 0 || clicks.len > 0 { return true; }
     if screen_id == Screen.Play && (shuffling || !board_search.done || guides_lively()) { return true; }
     let d = gfx::mouse_delta();
@@ -2036,7 +2096,7 @@ fn main() {
                   --click X Y    (testing) click at canvas point X, Y; one every 20 frames after frame 10
                   --hold X Y     (testing) press there and keep holding, in the same turn as the clicks
                   --shots F K    (testing) with --screenshot P, also save P-<frame>.png every K frames from frame F
-                  --export-music DIR   write each room's music loop to DIR as a WAV file
+                  --export-music DIR   write each music track, decoded, to DIR as a WAV file
                 """);
             return;
         }
@@ -2045,11 +2105,11 @@ fn main() {
     }
     env_or("ALCHEMIST_SORT_DATA", "data", data_dir);
     env_or("ALCHEMIST_SORT_FONTS", str(data_dir, "/fonts"), font_dir);
-    env_or("ALCHEMIST_SORT_SAMPLES", str(data_dir, "/samples"), sample_dir);
-    if export_to.len > 0 { exit(if export_music(export_to, sample_dir) { 0 } else { 1 }); }
+    env_or("ALCHEMIST_SORT_MUSIC", str(data_dir, "/music"), music_from);
+    if export_to.len > 0 { exit(if export_music(export_to, music_from) { 0 } else { 1 }); }
     save = load_save();
     sound_on = save.sound;
-    music_on = save.music;
+    music_level = save.music_volume;
 
     // The window opens as it was last left (or as --size asks); screenshots
     // and tests keep the canvas's own size so they stay comparable.
@@ -2064,7 +2124,7 @@ fn main() {
     let open_px_w: i64 = gfx::screen_size().x;
     if !init_draw() { abort(str("could not make the pipeline: ", gfx::error())); }
     if !init_text(font_dir) { abort(str("could not load fonts: ", ui::error())); }
-    if frames < 0 { init_sounds(); init_music(sample_dir); }
+    if frames < 0 { init_sounds(); init_music(music_from); }
     rand = rng { random_seed() };
     fit_canvas();
     if start_hand_level >= 0 { start_hand(start_hand_level); }
@@ -2092,7 +2152,7 @@ fn main() {
         }
         if pending_load && !brewing && drawn > 0 { do_pending_load(); }
         step_jobs();
-        step_music(music_room_now(), dt, !moving());
+        step_music(music_track_now(), dt);
         handle_keys();
         if screen_id == Screen.Play && !pending_load && !varying { update_play(dt); }
         update_particles(dt);

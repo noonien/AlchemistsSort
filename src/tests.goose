@@ -1,6 +1,6 @@
 // Unit tests for the rules, every modifier and how they meet, the solver,
 // the generator and the shipped levels. Run with `nix flake check`, or
-// `goose src/tests.goose`.
+// `goose --include src/c/ogg.h src/tests.goose`.
 
 import std;
 import os;
@@ -14,9 +14,8 @@ import core.explain;
 import core.difficulty;
 import core.variation;
 import app.shaders;
-import app.bank;
-import app.voices;
-import app.tunes;
+import app.tracks;
+import app.save;
 
 var failures = 0;
 var checks = 0;
@@ -1669,54 +1668,76 @@ fn test_explain() {
     }
 }
 
-var test_pcm: f32[LOOP_SAMPLES];
+fn db(x: f64) -> f64 { 20.0 * log10(max(x, 1e-9)) }
 
+// Every track decodes, a chunk at a time as the player reads it, whole and
+// stereo at the mixer's rate; fades in from silence and out to it; and
+// sits at the same level as the others.
 fn test_music() {
     test("music");
-    check(load_bank("samples"), "every instrument's recordings are read");
-    for z in bank_zones {
-        check(z.len > 0 && z.rate >= 8000.0 && z.midi > 24.0 && z.midi < 100.0 && z.loop_at + z.loop_len <= z.len,
-              str("a recorded note is whole: ", z.inst, " ", z.midi));
-        let held = z.inst != HARP && z.inst != DULCIMER;
-        check(held == (z.loop_len > 0), str("held notes loop and plucked ones ring out: ", z.inst, " ", z.midi));
-    }
-    for inst in SAMPLED { check(has_samples(inst), str("instrument ", inst, " has notes")); }
-    var notes: Note[>..] = [];
-    for room in MUSIC_ROOMS {
-        let errors = score_errors(room);
-        check(errors.len == 0, str(tune_name(room), "'s score: ", errors));
-        let job = tune_begin(room, 0, notes);
-        check(job.period > 60 * MUSIC_RATE && 2 * job.period <= LOOP_SAMPLES, str(tune_name(room), " lasts a minute or two"));
-        var stray: u8[>..] = [];
-        for n in notes {
-            let far = n.inst < SAMPLED && abs(bank_zones[zone_for(n.inst, n.midi)].midi - n.midi) > 7.0;
-            if n.start < 0 || n.start >= job.period || n.len <= 0 || n.len > job.warm || far {
-                format(stray, " instrument ", n.inst, " note ", n.midi, " at ", n.start, " for ", n.len, ";");
-            }
-        }
-        check(notes.len > 100 && stray.len == 0, str(tune_name(room), "'s notes are in the loop and in their instruments' ranges:", stray));
-    }
-    for room in [0, 5] {
-        var job = tune_begin(room, 4, notes);
-        while !tune_step(job, notes, test_pcm, 1.0) {}
-        let pcm = test_pcm[..job.filled];
-        check(pcm.len == 2 * job.period && notes.len > 0, "a whole loop is made, left and right");
+    var chunk: f32[8192] = [0.0; 8192];
+    var lo = 0.0;
+    var hi = -200.0;
+    for t in MUSIC_TRACKS {
+        var bytes: u8[>..] = [];
+        let path = str("assets/music/", track_name(t), ".ogg");
+        check(read_file(path, bytes), str(path, " is there"));
+        let d = dec_open(bytes);
+        check(d >= 0 && dec_rate(d) == TRACK_RATE && dec_channels(d) == 2, str(path, " is stereo Ogg Vorbis at ", TRACK_RATE, " Hz"));
+        let frames = dec_frames(d);
+        check(frames > 180 * TRACK_RATE && frames < 240 * TRACK_RATE, str(path, " is the whole track: ", frames / TRACK_RATE, " s"));
+        var got = 0;
+        var sum = 0.0;
         var peak = 0.0;
-        var step: f64[2] = [0.0; 2];
-        for v, i in pcm {
-            peak = max(peak, abs(v as f64));
-            if i > 1 { step[i % 2] = max(step[i % 2], abs(v - pcm[i - 2]) as f64); }
+        var start = 0.0;
+        var end_sum = 0.0;
+        loop {
+            let n = dec_read(d, chunk);
+            if n == 0 { break; }
+            for i in 2 * n {
+                let v = chunk[i] as f64;
+                let frame = got + i / 2;
+                sum += v * v;
+                peak = max(peak, abs(v));
+                if frame < TRACK_RATE / 200 { start = max(start, abs(v)); }
+                if frame >= frames - TRACK_RATE / 10 { end_sum += v * v; }
+            }
+            got += n;
         }
-        check(peak > 0.05 && peak < 0.9, str("the peak is under 0.9: ", peak));
-        for c in 2 {
-            // The last sample runs on into the first as any sample into the next.
-            let last = pcm.len - 2 + c;
-            let wrap = abs(pcm[c] - pcm[last]) as f64;
-            let bend = abs((pcm[c] - pcm[last]) - (pcm[last] - pcm[last - 2])) as f64;
-            check(wrap <= step[c] && bend < 0.01, str("the loop point is smooth: ", wrap, " ", bend));
-        }
+        dec_close(d);
+        let rms = db(sqrt(sum / (2 * got)));
+        lo = min(lo, rms);
+        hi = max(hi, rms);
+        check(got == frames, str(path, " decodes to its length: ", got, " of ", frames));
+        check(peak < 0.95 && rms > -26.0 && rms < -16.0, str(path, ": level ", rms, " dB, peak ", peak));
+        check(start < 0.02, str(path, " fades in: ", start));
+        check(db(sqrt(end_sum / (TRACK_RATE / 5))) < -40.0, str(path, " fades out to silence"));
     }
+    check(hi - lo < 3.0, str("the tracks are equally loud, within ", hi - lo, " dB"));
+    check(music_gain(0) == 0.0 && abs(music_gain(100) - 1.0) < 1e-9 && music_gain(MUSIC_DEFAULT) > 0.1 && music_gain(MUSIC_DEFAULT) < 0.2,
+          "the volume's ends and its first place");
+    var even = true;
+    for p in 1..101 { if music_gain(p) <= music_gain(p - 1) { even = false; } }
+    check(even, "the louder the slider, the louder the music");
     check(music_room(95, 6, 91) == 0 && music_room(106, 6, 91) == 1 && music_room(20, 1, 16) == 1, "rooms for the music");
+    check(track_name(TITLE_TRACK) == "title_screen", "the title theme");
+}
+
+// A save written and read back is the same; one from before the music's
+// volume gets the slider's first place, or none if its music was off.
+fn test_save_text() {
+    test("saves");
+    var s = Save { level: 37, sound: false, music_volume: 64, color_safe: true, seed_like: 55, last_seed: 99, window_w: 800, window_h: 1200 };
+    let back = parse_save(save_text(s));
+    check(back.level == 37 && !back.sound && back.music_volume == 64 && back.color_safe && back.seed_like == 55 &&
+          back.last_seed == 99 && back.window_w == 800 && back.window_h == 1200, "a save reads back as it was written");
+    s.music_volume = 0;
+    check(parse_save(save_text(s)).music_volume == 0, "the music off reads back off");
+    check(parse_save("version=2\nlevel=5\nmusic=1\n").music_volume == MUSIC_DEFAULT, "an old save's music is at the first place");
+    check(parse_save("version=2\nlevel=5\nmusic=0\n").music_volume == 0, "an old save's music off stays off");
+    check(parse_save("version=2\nlevel=5\n").music_volume == MUSIC_DEFAULT && parse_save("").music_volume == MUSIC_DEFAULT,
+          "a save without it gets the first place");
+    check(parse_save("version=2\nmusic_volume=250\n").music_volume == 100, "the volume is kept in range");
 }
 
 fn main() {
@@ -1754,6 +1775,7 @@ fn main() {
     test_tables();
     test_explain();
     test_music();
+    test_save_text();
     print(checks - failures, "/", checks, " checks passed");
     if failures > 0 { exit(1); }
 }

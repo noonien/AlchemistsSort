@@ -17,10 +17,10 @@
       forAll = f: nixpkgs.lib.genAttrs systems (system: f system nixpkgs.legacyPackages.${system});
 
       # What the builds read: a change anywhere else (the README, CI) rebuilds
-      # nothing. samples/ holds the recorded notes the music is played on.
+      # nothing. assets/music holds the music's tracks.
       src = nixpkgs.lib.fileset.toSource {
         root = ./.;
-        fileset = nixpkgs.lib.fileset.unions [ ./src ./web ./samples ];
+        fileset = nixpkgs.lib.fileset.unions [ ./src ./web ./assets/music ];
       };
     in {
       packages = forAll (system: pkgs:
@@ -52,15 +52,15 @@
         tests = pkgs.callPackage ./nix/tests.nix { goose = self.packages.${system}.goose-compiler; inherit src; };
       });
 
-      # `nix develop`, then `goose --include src/c/ogg.h src/main.goose` runs the game from source
-      # (in-process, no build step) and `goose --include src/c/ogg.h src/tests.goose` the tests
-      # (src/c/ogg.h brings in the Ogg Vorbis decoder the music needs).
+      # `nix develop`, then `goose --include src/c/stream.h src/main.goose` runs the game from
+      # source (in-process, no build step) and `goose --include src/c/ogg.h src/tests.goose` the
+      # tests (src/c brings in the Ogg Vorbis decoder and the music's player).
       devShells = forAll (system: pkgs: {
         default = pkgs.mkShell {
           packages = [ self.packages.${system}.goose ];
           shellHook = self.packages.${system}.goose.runtimeEnv + ''
             export ALCHEMIST_SORT_DATA="$PWD/data"
-            export ALCHEMIST_SORT_SAMPLES="$PWD/samples"
+            export ALCHEMIST_SORT_MUSIC="$PWD/assets/music"
             export ALCHEMIST_SORT_FONTS="${self.packages.${system}.game}/share/alchemists-sort/fonts"
           '';
         };

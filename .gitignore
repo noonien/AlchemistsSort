@@ -2,3 +2,5 @@ result
 result-*
 *.png
 .claude/
+# The music as it was generated; assets/music/prepare.py makes the .ogg files from it.
+assets/music/*.m4a

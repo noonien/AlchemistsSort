@@ -14,7 +14,7 @@ nix run . -- --seed 4242 --like 30        # the board brewed from a seed
 nix run . -- --hand 8                     # built-in hand-made level 8 of 0-25 (src/core/levels.goose)
 nix run . -- --autoplay                   # watch the hint solver play
 nix run . -- --size 900 1600              # a bigger window (it remembers the size you leave it)
-nix run . -- --export-music out           # write each room's music loop to out/*.wav
+nix run . -- --export-music out           # write each music track, decoded, to out/*.wav
 nix flake check                           # unit tests
 ```
 
@@ -23,13 +23,16 @@ its TinyCC backend, so there's no build step:
 
 ```sh
 nix develop
-goose --include src/c/ogg.h src/main.goose                  # the game, from source
-goose --include src/c/ogg.h src/main.goose -- --level 12    # with arguments
-goose --include src/c/ogg.h src/tests.goose                 # the tests
+goose --include src/c/stream.h src/main.goose                  # the game, from source
+goose --include src/c/stream.h src/main.goose -- --level 12    # with arguments
+goose --include src/c/ogg.h src/tests.goose                    # the tests
 ```
 
-`--include src/c/ogg.h` brings in the Ogg Vorbis decoder (stb_vorbis) that
-reads the music's instrument samples; every build passes it.
+`--include` brings in the C the music needs: `ogg.h`, the Ogg Vorbis decoder
+(stb_vorbis), and `stream.h`, the player, which includes it. The native and
+web builds also define `ALCH_STREAM_SDL`, so the player streams through its
+own SDL audio stream; run from source, it decodes each track whole instead,
+a slice a frame, and plays it through Goose's audio mixer.
 
 `nix build` produces a native `-O2` build instead (`result/bin/alchemists-sort`).
 
@@ -112,8 +115,12 @@ through heat, light, flow, flip, growth and transmutation, are in
 | The Athanor | 76–90 | Athanor (78), Philosopher's Drop (81), Catalyst (86) |
 | The Great Work | 91+ | three or four modifiers from everything |
 
-Settings has sound, a color-blind palette that adds a symbol to every color,
-and a progress reset. Progress is saved in
+Settings has sound, the music's volume (a slider, 30% at first; at 0 the
+music stops; on the Settings screen the arrow keys move it too), a
+color-blind palette that adds a symbol to every color, and a progress
+reset. The title screen, the map and the other menus play the title theme,
+and each chapter's room its own track; each plays through, rests a few
+seconds and starts again, and a change of room or screen crossfades. Progress is saved in
 `$XDG_DATA_HOME/alchemists-sort/save.txt`, or
 `~/.local/share/alchemists-sort/save.txt` if `XDG_DATA_HOME` isn't set.
 
@@ -144,7 +151,7 @@ the level itself.
 ```
 flake.nix               goose (pinned in flake.lock), the game, the tests, a dev shell
 nix/goose.nix           goose + its vendored SDL3/TinyCC/Nuklear/Box3D, set up for NixOS
-nix/game.nix            native build of the game, with its fonts and instrument samples
+nix/game.nix            native build of the game, with its fonts and music
 nix/tests.nix           the unit tests, for `nix flake check`
 src/core/               the rules, with no drawing or input
   board.goose           bottles, pours, every modifier, win and loss, the grid and neighbors
@@ -164,26 +171,20 @@ src/app/                rendering, text, sound, saving
   menus.goose           the title screen and the chapter map
   guide.goose           the Grimoire panel, a held flask's card, the pour marks
   sfx.goose             sounds synthesized at startup; each color is a pentatonic note
-  tunes.goose           the music: each room's piece as a score, performed into a seamless loop
-  voices.goose          the players (recorded notes, singing bowls, a choir, a drone) and the hall
-  bank.goose            the instruments' recorded notes, read from samples/
-  music.goose           playing the loops, crossfading between rooms
-src/c/                  C the game includes: stb_vorbis and the calls bank.goose makes of it
-samples/                the recorded notes, Ogg Vorbis (CC0; SOURCES.md says where each comes from)
+  tracks.goose          the music's tracks: what plays where, the volume's curve, the decoder
+  music.goose           playing them, crossfading between rooms and screens
+src/c/                  C the game includes: stb_vorbis, a decoder over it, the music's player
+assets/music/           the music, Ogg Vorbis; prepare.py makes it from the original tracks
 src/main.goose          screens, input, animation
 src/tests.goose         unit tests
 ```
 
 The art and sounds are original and procedural: shapes drawn in a shader and
-tones synthesized at startup. The music is composed for the game and played
-in code, a loop for each room, on single-note recordings of a Celtic harp,
-cellos, violins, a bowed psaltery, wine glasses, a strumstick and a flute
-from the Versilian Studios libraries VSCO-2 CE and VCSL, which are CC0
-(`samples/SOURCES.md`); its singing bowls, choir and drone are synthesized.
-`samples/prepare.py` remakes the samples from those libraries. The fonts are
-Cinzel (from nixpkgs) and Raleway (from Nuklear's sources), both under the
-SIL Open Font License. The samples are decoded by Sean Barrett's stb_vorbis
-(public domain or MIT), kept unchanged in `src/c/`.
+tones synthesized at startup. The music was generated by the game's author
+with an AI music service. It is decoded by Sean Barrett's stb_vorbis (public
+domain or MIT), kept unchanged in `src/c/`. The fonts are Cinzel (from
+nixpkgs) and Raleway (from Nuklear's sources), both under the SIL Open Font
+License.
 
 To move to a newer goose, run `nix flake update goose-src`. Goose is young,
 so run `nix flake check` afterwards.
