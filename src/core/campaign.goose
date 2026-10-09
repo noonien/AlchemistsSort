@@ -7,82 +7,17 @@
 import std;
 import .board;
 import .generator;
+import .difficulty;
 
 import .levels;
-
-// The modifiers, in the order the campaign introduces them.
-enum Feature {
-    Murk, Seal, Tall, Vow,              // The Apothecary
-    Rime, Brazier, Quicksilver,         // The Frost Cellar
-    Siphon, Keys, Curtain,              // The Glassworks
-    Lantern, Shroud, Hourglass,         // The Observatory
-    Vine, Salamander, Moonpetal,        // The Greenhouse
-    Athanor, Drop, Catalyst,            // The Athanor
-}
-
-let ALL_FEATURES: const Feature[19] = [
-    Feature.Murk, Feature.Seal, Feature.Tall, Feature.Vow, Feature.Rime, Feature.Brazier, Feature.Quicksilver,
-    Feature.Siphon, Feature.Keys, Feature.Curtain, Feature.Lantern, Feature.Shroud, Feature.Hourglass,
-    Feature.Vine, Feature.Salamander, Feature.Moonpetal, Feature.Athanor, Feature.Drop, Feature.Catalyst,
-];
 
 // The level that teaches each one, in ALL_FEATURES order. None is a
 // multiple of 5, which are the Hard levels and the finales.
 let TUTORIAL_LEVELS: const i64[19] = [3, 6, 8, 11, 18, 21, 26, 33, 36, 41, 48, 51, 56, 63, 66, 71, 78, 81, 86];
 
-fn feature_index(f: Feature) -> i64 {
-    match f {
-        Murk => 0, Seal => 1, Tall => 2, Vow => 3, Rime => 4, Brazier => 5, Quicksilver => 6, Siphon => 7,
-        Keys => 8, Curtain => 9, Lantern => 10, Shroud => 11, Hourglass => 12, Vine => 13, Salamander => 14,
-        Moonpetal => 15, Athanor => 16, Drop => 17, Catalyst => 18,
-    }
-}
-
 fn tutorial_level(f: Feature) -> i64 { TUTORIAL_LEVELS[feature_index(f)] }
 
-fn feature_name(f: Feature) -> const u8[:] {
-    match f {
-        Murk => "Smoke", Seal => "Seal", Tall => "Tall Flask", Vow => "Vow Flask", Rime => "Rime",
-        Brazier => "Brazier", Quicksilver => "Quicksilver", Siphon => "Siphon", Keys => "Keys and Doors",
-        Curtain => "Curtain",
-        Lantern => "Lantern", Shroud => "Shroud", Hourglass => "Hourglass", Vine => "Creeping Vine",
-        Salamander => "Salamander", Moonpetal => "Moonpetal", Athanor => "Athanor",
-        Drop => "Philosopher's Drop", Catalyst => "Catalyst",
-    }
-}
-
 fn introduced(feature: Feature, level: i64) -> bool { level >= tutorial_level(feature) }
-
-// Whether `f` is on the board.
-fn feature_on(board: Board, f: Feature) -> bool {
-    if f == Feature.Salamander { return board.salamander >= 0; }
-    for i in board.count {
-        let b = board.bottles[i];
-        let liquid = has_color(b, if f == Feature.Drop { DROP } else { QUICKSILVER });
-        let on = match f {
-            Murk => b.murk != 0,
-            Seal => b.cover == Cover.Seal,
-            Tall => b.cap > CAP,
-            Vow => b.body == Body.Vow,
-            Rime => b.cover == Cover.Rime,
-            Brazier => b.fixture == Fixture.Brazier,
-            Quicksilver, Drop => liquid,
-            Siphon => b.body == Body.Siphon,
-            Keys => b.key_color != KeyColor.None || b.behind,
-            Curtain => b.cover == Cover.Curtain,
-            Lantern => b.fixture == Fixture.Lantern,
-            Shroud => b.cover == Cover.Shroud,
-            Hourglass => b.body == Body.Hourglass,
-            Vine => b.fixture == Fixture.VineRoot,
-            Salamander => false,
-            Moonpetal => b.body == Body.Moonpetal,
-            Athanor => b.body == Body.Athanor,
-            Catalyst => b.fixture == Fixture.Catalyst,
-        };
-        if on { return true; }
-    }
-    false
-}
 
 // --- chapters ------------------------------------------------------------------
 
@@ -153,7 +88,7 @@ struct LevelSpec {
     is_finale: bool = false,
     hand_made: bool = false,    // the board is levels.goose's for this number
     mods: Feature[..8] = [],    // the modifiers a generated level asks for
-    params: GenParams,
+    recipe: Recipe,
     seed: u64,
 }
 
@@ -198,40 +133,29 @@ fn meets(new: Feature, old: Feature) -> bool {
     }
 }
 
+
 // A Tall Flask stands in every fourth level from 9 on.
 fn tall_level(level: i64) -> bool { level >= 9 && level % 4 == 0 }
 
-// Adds `f` to the generator's settings.
-fn ask_for(p: GenParams&, f: Feature, hard: bool, r: rng&) {
+// Adds `f` to the recipe.
+fn ask_for(p: Recipe&, f: Feature, hard: bool, r: rng&) {
     match f {
-        Murk => { p.murk = max(p.murk, 2); },
-        Seal => { p.seal = if hard { 1 + r.rand_int(2) } else { 1 }; },
+        Murk => { p.smoke = max(p.smoke, 2); },
         Tall => {
             p.tall = 1;
             p.tall_rows = if hard { 3 } else { 2 };
         },
-        Vow => { p.vow = 1; },
-        Rime => { p.rime = if hard { 1 + r.rand_int(2) } else { 1 }; },
-        Brazier => { p.brazier = 1; },
-        Quicksilver => { p.quicksilver = true; },
-        Siphon => { p.siphon = 1; },
-        Keys => { p.doors = if hard { 1 + r.rand_int(2) } else { 1 }; },
-        Curtain => { p.curtains = 1; },
-        Lantern => { p.lantern = 1; },
-        Shroud => { p.shroud = 1; },
+        Seal, Rime, Keys => { want(p, f, if hard { 1 + r.rand_int(2) } else { 1 }); },
         Hourglass => {
-            p.hourglass = 1;
+            want(p, f, 1);
             p.flip_every = 3 + r.rand_int(3);
         },
         Vine => {
-            p.vine = true;
+            want(p, f, 1);
             p.vine_every = 4 + r.rand_int(3);
         },
-        Salamander => { p.salamander = true; },
-        Moonpetal => { p.moonpetal = 1; },
-        Athanor => { p.athanor = true; },
-        Drop => { p.drop = true; },
-        Catalyst => { p.catalyst = 1; },
+        Vow, Brazier, Quicksilver, Siphon, Curtain, Lantern, Shroud, Salamander, Moonpetal, Athanor, Drop,
+        Catalyst => { want(p, f, 1); },
     }
 }
 
@@ -252,11 +176,28 @@ fn draw(pool: Feature[..19]&, weight: i64[..19]&, r: rng&) -> Feature, bool {
     return Feature.Murk, false;
 }
 
-// The modifiers level n uses, and its generator settings, drawn from `seed`
-// so a custom seed gives a board of the same flavor.
-fn plan_level(level: i64, difficulty: Difficulty, seed: u64) -> Feature[..8], GenParams {
+// The difficulty band of level n: the score its board should land in. It
+// rises over the campaign with the colors; Hard levels sit a step above
+// the Normal ones around them, and Super Hard a step above that.
+// Scores are a few points a color, plus what the modifiers and the deal
+// add (see difficulty.goose); the band's middle climbs a third of a point a
+// level through the chapters and holds in the Great Work. Levels 1 and 2
+// take what comes.
+fn band_middle(level: i64) -> f64 { if level >= GREAT_WORK { 50.0 } else { 24.0 + 0.33 * level } }
+
+fn band_of(level: i64, difficulty: Difficulty) -> f64, f64 {
+    if level <= 2 { return -1e9, 1e9; }
+    let m = band_middle(level);
+    if difficulty == Difficulty.SuperHard { return m + 14.0, m + 34.0; }
+    if difficulty == Difficulty.Hard { return m + 8.0, m + 24.0; }
+    return m - 6.0, m + 8.0;
+}
+
+// The modifiers level n uses, and its recipe, drawn from `seed` so a custom
+// seed gives a board of the same flavor.
+fn plan_level(level: i64, difficulty: Difficulty, seed: u64) -> Feature[..8], Recipe {
     var r = rng { seed ^ 0x5EED };
-    var p = GenParams {};
+    var p = Recipe {};
     var mods: Feature[..8] = [];
     let hard = difficulty != Difficulty.Normal;
     let ch = chapter_of(level);
@@ -266,25 +207,22 @@ fn plan_level(level: i64, difficulty: Difficulty, seed: u64) -> Feature[..8], Ge
     let newest, any_newest = newest_feature(level);
     let tall = level > 2 && (tall_level(level) || (any_newest && newest == Feature.Tall));
 
-    // Colors ramp gently over the whole campaign, a step up on Hard levels
-    // (a tall flask is one step already).
+    // Colors ramp gently over the whole campaign, a step up on Hard levels.
     var colors = if level <= 2 { 3 } else { 4 + (level - 1) / 22 };
     if great { colors = 6 + r.rand_int(2); }
     colors += match difficulty { Normal => 0, Hard => 1, SuperHard => 2 };
-    if tall && hard { colors--; }
     p.colors = clamp(colors, 3, if difficulty == Difficulty.SuperHard { 9 } else { 8 });
-    p.empties = 2;
+    // A Hard level has a spare fewer while it has few colors; with more,
+    // one spare is seldom enough to win at all.
+    p.spares = if hard && p.colors <= 5 { 1 } else { 2 };
     p.partial = r.rand_int(p.colors / 2 + 1);
+    let lo, hi = band_of(level, difficulty);
+    p.band_lo = lo;
+    p.band_hi = hi;
     if level <= 2 { return mods, p; }
 
-    // Murk is the background of every level: some is common, more on Hard.
-    p.murk = match difficulty {
-        SuperHard => 3 + r.rand_int(3),
-        Hard => 2 + r.rand_int(2),
-        Normal => 1 + r.rand_int(2),
-    };
-    // Split color, now and then, for variety in the deal.
-    p.split = level >= 4 && r.rand_int(5) == 0;
+    // Smoke is the background of every level: some is common, more on Hard.
+    p.smoke = 1 + p.colors / 3 + r.rand_int(3) + (match difficulty { Normal => 0, Hard => 2, SuperHard => 3 });
 
     if tall { mods.push(Feature.Tall); }
     if any_newest && !contains(mods, newest) { mods.push(newest); }
@@ -298,8 +236,8 @@ fn plan_level(level: i64, difficulty: Difficulty, seed: u64) -> Feature[..8], Ge
             pool.push(f);
             weight.push(1);
         }
-        let wanted = if hard { 4 } else { 3 };
-        while mods.len < wanted + (if tall { 1 } else { 0 }) {
+        let wanted_mods = if hard { 4 } else { 3 };
+        while mods.len < wanted_mods + (if tall { 1 } else { 0 }) {
             let f, ok = draw(pool, weight, r);
             if !ok { break; }
             mods.push(f);
@@ -342,24 +280,44 @@ fn plan_level(level: i64, difficulty: Difficulty, seed: u64) -> Feature[..8], Ge
         }
     }
 
-    // What some modifiers need: a brazier something to heat, a catalyst
-    // something to set off. (The generator brings a shroud's lantern, a
-    // moonpetal's lantern and an athanor's quicksilver itself.)
-    let heats = contains(mods, Feature.Rime) || contains(mods, Feature.Seal) || contains(mods, Feature.Vine) ||
-                contains(mods, Feature.Salamander);
-    if contains(mods, Feature.Brazier) && !heats { mods.push(Feature.Rime); }
-    let fires = contains(mods, Feature.Brazier) || contains(mods, Feature.Hourglass) ||
-                contains(mods, Feature.Lantern) || contains(mods, Feature.Shroud) || contains(mods, Feature.Moonpetal);
-    if contains(mods, Feature.Catalyst) && !fires { mods.push(Feature.Lantern); }
+    // What some modifiers need: heat something to act on, a catalyst two
+    // things to set off. (The generator brings a shroud's lantern, a
+    // moonpetal's lantern and an athanor's quicksilver itself, and smoke is
+    // always there for a lantern to clear.)
+    let heated = contains(mods, Feature.Rime) || contains(mods, Feature.Seal) || contains(mods, Feature.Vine);
+    if (contains(mods, Feature.Brazier) || contains(mods, Feature.Salamander)) && !heated && mods.len < 8 {
+        mods.push(Feature.Rime);
+    }
+    if contains(mods, Feature.Catalyst) {
+        var fires = 0;
+        for f in [Feature.Brazier, Feature.Hourglass, Feature.Lantern, Feature.Shroud, Feature.Moonpetal] {
+            if contains(mods, f) { fires++; }
+        }
+        if fires < 2 && !contains(mods, Feature.Lantern) && !contains(mods, Feature.Shroud) &&
+           !contains(mods, Feature.Moonpetal) && mods.len < 8 {
+            mods.push(Feature.Lantern);
+            fires++;
+        }
+        if fires < 2 && !contains(mods, Feature.Hourglass) && mods.len < 8 { mods.push(Feature.Hourglass); }
+    }
 
     for f in mods { ask_for(p, f, hard, r); }
-    p.budget = 40000;
+    // A vow flask is the only spare while there are few colors, so the
+    // level needs it; ice melts slower where heat can help.
+    if wanted(p, Feature.Vow) > 0 { p.spares = if p.colors <= 5 { 1 } else { 2 }; }
+    let hot = wanted(p, Feature.Brazier) > 0 || wanted(p, Feature.Salamander) > 0;
+    p.thaw = (if hot { 5 } else { 3 }) + (if hard { 1 } else { 0 });
+    // The level is about the newest modifier, while it is new.
+    if any_newest && !great {
+        p.focus = newest;
+        p.focused = true;
+    }
     return mods, p;
 }
 
 fn level_spec(level: i64) -> LevelSpec {
     let n = max(1, level);
-    var spec = LevelSpec { number: n, difficulty: difficulty_of(n), chapter: chapter_of(n), params: GenParams {},
+    var spec = LevelSpec { number: n, difficulty: difficulty_of(n), chapter: chapter_of(n), recipe: Recipe {},
                            seed: level_seed(n) };
     spec.is_finale = is_finale(n);
     for f in ALL_FEATURES {
@@ -376,7 +334,7 @@ fn level_spec(level: i64) -> LevelSpec {
     }
     let mods, p = plan_level(n, spec.difficulty, spec.seed);
     spec.mods = mods;
-    spec.params = p;
+    spec.recipe = p;
     spec
 }
 
@@ -386,5 +344,5 @@ fn seed_spec(seed: u64, like: i64) -> LevelSpec {
     let n = max(1, like);
     let d = difficulty_of(n);
     let mods, p = plan_level(n, d, seed);
-    LevelSpec { number: n, difficulty: d, chapter: chapter_of(n), mods: mods, params: p, seed: seed }
+    LevelSpec { number: n, difficulty: d, chapter: chapter_of(n), mods: mods, recipe: p, seed: seed }
 }

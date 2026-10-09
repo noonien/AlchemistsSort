@@ -1,54 +1,55 @@
-// Levels from a seed. A deal is random -- every segment of every color
-// shuffled into bottles of chosen fill heights -- then dressed with the
-// modifiers asked for, placed where they matter, and kept only when the
-// solver wins it. The same parameters and seed always give the same board.
+// Levels from a recipe and a seed. A deal is random -- every segment of
+// every color shuffled into bottles of chosen fill heights -- then dressed
+// with the modifiers asked for, each placed where it can act. The solver
+// plays every deal: it is kept when it is in the recipe's difficulty band,
+// every modifier on it does something on the way to the win, and the
+// recipe's focus is required (difficulty.goose). The same recipe and seed
+// always give the same board. docs/generation.md is the design.
 
 import std;
 import .board;
 import .solver;
+import .difficulty;
 
-struct GenParams {
+// What a level is made of, and how hard it should be.
+struct Recipe {
     colors: i64 = 3,
-    empties: i64 = 2,       // spare bottles beyond the colors
-    partial: i64 = 0,       // segments moved off full bottles into the spares
-    murk: i64 = 0,          // bottles whose lower layers start under smoke
-    split: bool = false,    // one color dealt as two pairs in two bottles
-    vow: i64 = 0,           // empty vow flasks, in place of as many spares
-    seal: i64 = 0,
-    rime: i64 = 0,
+    spares: i64 = 2,        // empty flasks beyond the colors; a vow flask is one of them
+    partial: i64 = 0,       // segments moved off full flasks into the spares at the deal
+    smoke: i64 = 0,         // layers that start under smoke
     tall: i64 = 0,          // tall flasks, each with one color dealt to fill it
     tall_rows: i64 = 2,     // the rows each spans: its height is tall_cap(tall_rows)
-    brazier: i64 = 0,       // next to something heat changes, where there is one
-    quicksilver: bool = false,  // one color is quicksilver
-    siphon: i64 = 0,
-    doors: i64 = 0,         // 0..3, each before 2 or 3 flasks (one an extra empty), its key buried elsewhere
-    curtains: i64 = 0,      // on flasks with liquid, each opened by a color it doesn't hold
-    lantern: i64 = 0,       // besides those shrouds and moonpetals bring
-    shroud: i64 = 0,        // each next to a lantern
-    hourglass: i64 = 0,
-    flip_every: i64 = 3,
-    vine: bool = false,     // a creeping vine (and emerald among the colors, to wither it)
-    vine_every: i64 = 4,
-    salamander: bool = false,
-    moonpetal: i64 = 0,     // on flasks with liquid; brings a lantern
-    athanor: bool = false,  // an empty athanor, and one color is gold partly dealt as quicksilver
-    athanor_quicksilver: i64 = 2,   // how much of the gold starts as quicksilver
-    drop: bool = false,     // one segment is the Philosopher's Drop
-    catalyst: i64 = 0,      // only where there is a brazier, hourglass or lantern to set off
-    budget: i64 = 40000,    // solver positions per attempt
+    mods: i64[19] = [0; 19],    // how many of each modifier, by feature_index (smoke and tall above)
+    focus: Feature = Feature.Murk,  // the modifier the level is about, when `focused`
+    focused: bool = false,
+    band_lo: f64 = -1e9,    // the difficulty band: the score it should land in
+    band_hi: f64 = 1e9,
+    thaw: i64 = 3,          // the fewest pours ice takes to melt (up to three more)
+    flip_every: i64 = 3,    // an hourglass's pours between flips
+    vine_every: i64 = 4,    // a vine's pours between spreads
+    athanor_quicksilver: i64 = 2,   // how much of the athanor's gold starts as quicksilver
+    budget: i64 = 6000,     // solver positions per deal
 }
+
+fn wanted(p: Recipe, f: Feature) -> i64 { p.mods[feature_index(f)] }
+
+fn want(p: Recipe&, f: Feature, n: i64) { p.mods[feature_index(f)] = n; }
+
+fn modifier_count(p: Recipe) -> i64 {
+    var n = 0;
+    for m in p.mods { n += m; }
+    n
+}
+
+var DBG: i64[80] = [0; 80];
+var DBG_V = false;
 
 struct GenResult {
     board: Board,
-    stats: SolveStats,
-    attempts: i64 = 0,
-}
-
-fn modifier_count(p: GenParams) -> i64 {
-    var n = p.vow + p.seal + p.rime + p.brazier + p.siphon + p.doors + p.curtains + p.lantern + p.shroud +
-            p.hourglass + p.moonpetal + p.catalyst;
-    for on in [p.quicksilver, p.vine, p.salamander, p.athanor, p.drop] { if on { n++; } }
-    n
+    m: Measure = Measure {},
+    attempts: i64 = 0,      // deals tried
+    valid_at: i64 = 0,      // the deal (counting from 1) that first passed every check but the band
+    in_band: bool = false,
 }
 
 // A random index among those with `ok` set, or -1.
@@ -66,44 +67,17 @@ fn pick(r: rng&, ok: const bool[:]) -> i64 {
     -1
 }
 
-fn has_color(b: Bottle, c: i64) -> bool {
-    for k in b.n as i64 { if b.seg[k] == c { return true; } }
-    false
-}
+fn has_color(b: Bottle, c: i64) -> bool { has_liquid_of(b, c) }
 
-// Arranges for color `x` to sit as the top pair of bottle `a` and the bottom
-// pair of bottle `b`, by swapping segments.
-fn split_color(board: Board&, x: i64, a: i64, b: i64) {
-    let targets: i64[2][4] = [[a, 2], [a, 3], [b, 0], [b, 1]];
-    for t in targets {
-        if board.bottles[t[0]].seg[t[1]] == x { continue; }
-        // Find an `x` that is not already on a target, and swap it in.
-        var found = false;
-        for i in board.count {
-            if found { break; }
-            for k in board.bottles[i].n as i64 {
-                if board.bottles[i].seg[k] != x { continue; }
-                var on_target = false;
-                for u in targets { if u[0] == i && u[1] == k { on_target = true; } }
-                if on_target { continue; }
-                let other = board.bottles[t[0]].seg[t[1]];
-                board.bottles[t[0]].seg[t[1]] = x as u8;
-                board.bottles[i].seg[k] = other;
-                found = true;
-                break;
-            }
-        }
-    }
-}
-
-// The segments a key can be buried in: under at least one layer of another
-// color, so it doesn't start free.
+// The segments a key can be buried in: under one to three layers of other
+// colors, so it doesn't start free and isn't out of reach.
 fn key_depths(b: Bottle) -> i64[..MAX_CAP] {
     var out: i64[..MAX_CAP] = [];
     for k in b.n as i64 {
         var x = b;
         x.keyed = (1 << k) as u16;
-        if layers_over_key(x) > 0 { out.push(k); }
+        let over = layers_over_key(x);
+        if over >= 1 && over <= 3 { out.push(k); }
     }
     out
 }
@@ -122,26 +96,117 @@ fn place_fixture(board: Board&, r: rng&, ok: bool[:], f: Fixture) -> i64 {
     i
 }
 
-// One random deal with modifiers, before any check that it can be won.
-fn deal(p: GenParams, r: rng&) -> Board {
+// The distinct liquids in a flask.
+fn kinds(b: Bottle) -> i64 {
+    var seen: bool[MAX_LIQUID + 1] = [false; MAX_LIQUID + 1];
+    var n = 0;
+    for k in b.n as i64 {
+        if !seen[b.seg[k]] { seen[b.seg[k]] = true; n++; }
+    }
+    n
+}
+
+// An ordinary flask in plain play: not tall, not behind a door. Bodies,
+// covers, fixtures and smoke only go on these (the generator keeps the
+// flasks behind a door plain, and nothing comes out of a tall one).
+fn in_play(b: Bottle) -> bool { b.cap == CAP && b.door < 0 }
+
+// Where a lantern (or a catalyst) can stand and be dealt one color under
+// its top: an ordinary flask in play with two layers or more and nothing
+// on it yet.
+fn lantern_spot(board: Board, i: i64) -> bool {
+    let b = board.bottles[i];
+    in_play(b) && b.n > 1 && !covered(b) && b.fixture == Fixture.None && b.body == Body.Plain &&
+        b.key_color == KeyColor.None
+}
+
+// A flask that can give segments to another's arrangement: ordinary, plain,
+// with nothing on it, and not `locked`.
+fn donor(board: Board, j: i64, locked: const i64[:]) -> bool {
+    let b = board.bottles[j];
+    b.cap == CAP && b.body == Body.Plain && !covered(b) && b.key_color == KeyColor.None && !contains(locked, j)
+}
+
+// Deals flask i one color under its top layer, which is another color, and
+// one more of that color on top of another flask, by swapping segments
+// with donor flasks: it can be completed early, so what it sets off (a
+// lantern's light, a catalyst) comes while it still matters.
+fn one_color_under_top(board: Board&, i: i64, locked: const i64[:]) {
+    let n: i64 = board.bottles[i].n;
+    if n < 2 || board.bottles[i].key_color != KeyColor.None || covered(board.bottles[i]) { return; }
+    var tally: i64[MAX_LIQUID + 1] = [0; MAX_LIQUID + 1];
+    var here: i64[MAX_LIQUID + 1] = [0; MAX_LIQUID + 1];
+    for j in board.count { for k in board.bottles[j].n as i64 { tally[board.bottles[j].seg[k]]++; } }
+    for k in n - 1 { here[board.bottles[i].seg[k]]++; }
+    var tall: bool[MAX_LIQUID + 1] = [false; MAX_LIQUID + 1];
+    for j in board.count { tall[tall_color(board.bottles[j])] = true; }
+    // The color: the one most of the flask is already, that has enough.
+    var x = 0;
+    for c in 1..MAX_LIQUID + 1 {
+        if c == QUICKSILVER || c == DROP || tall[c] || tally[c] < n - 1 { continue; }
+        if x == 0 || here[c] > here[x] { x = c; }
+    }
+    if x == 0 { return; }
+    fn swap_in(k: i64, want_x: bool) -> bool {
+        for j in board.count {
+            if j != i && !donor(board, j, locked) { continue; }
+            for kk in board.bottles[j].n as i64 {
+                if j == i && kk != n - 1 { continue; }
+                let c: i64 = board.bottles[j].seg[kk];
+                if (c == x) != want_x || c == QUICKSILVER { continue; }
+                board.bottles[j].seg[kk] = board.bottles[i].seg[k];
+                board.bottles[i].seg[k] = c as u8;
+                return true;
+            }
+        }
+        false
+    }
+    for k in n - 1 { if board.bottles[i].seg[k] != x { swap_in(k, true); } }
+    if board.bottles[i].seg[n - 1] == x { swap_in(n - 1, false); }
+    // And one more of it on top of another flask, in reach.
+    for j in board.count {
+        let b = board.bottles[j];
+        if j == i || !donor(board, j, locked) || b.n == 0 || top(b) == x || b.murk != 0 { continue; }
+        for jj in board.count {
+            if jj == i || jj == j || !donor(board, jj, locked) { continue; }
+            for kk in board.bottles[jj].n as i64 {
+                if board.bottles[jj].seg[kk] != x || (jj == j) { continue; }
+                board.bottles[jj].seg[kk] = board.bottles[j].seg[b.n - 1];
+                board.bottles[j].seg[b.n - 1] = x as u8;
+                return;
+            }
+        }
+    }
+}
+
+// One random deal with the modifiers, each placed where it can act, before
+// any check that it can be won.
+fn deal(p: Recipe, r: rng&) -> Board {
     var board = Board { .. };
     let colors = clamp(p.colors, 1, MAX_COLORS);
     board.colors = colors;
     let talls = clamp(p.tall, 0, colors);
     // A vow flask is one of the spares, not one more: an empty vow need not
     // be used, so it is there only when the board needs it.
-    let vows = clamp(p.vow, 0, p.empties);
-    let doors = clamp(p.doors, 0, MAX_DOORS);
-    let extra = vows + doors + (if p.athanor { 1 } else { 0 });
-    let bottles = min(colors + p.empties - vows, MAX_BOTTLES - extra - talls);
+    let vows = clamp(wanted(p, Feature.Vow), 0, max(0, p.spares));
+    let doors = clamp(wanted(p, Feature.Keys), 0, MAX_DOORS);
+    let athanor = wanted(p, Feature.Athanor) > 0;
+    let extra = vows + doors + (if athanor { 1 } else { 0 });
+    let bottles = min(colors + max(0, p.spares) - vows, MAX_BOTTLES - extra - talls);
     // What each dealt color is poured as: a dye, or quicksilver, or the
     // athanor's gold. A vine wants emerald on the board to wither it.
     var liquid: i64[MAX_COLORS + 1] = [0; MAX_COLORS + 1];
     for c in 1..colors + 1 { liquid[c] = c; }
     var gold_color = -1;
-    if p.vine && colors < EMERALD { liquid[colors] = EMERALD; }
-    if p.athanor { gold_color = 1 + r.rand_int(colors); liquid[gold_color] = GOLD; }
-    else if p.quicksilver { liquid[1 + r.rand_int(colors)] = QUICKSILVER; }
+    if wanted(p, Feature.Vine) > 0 && colors < EMERALD { liquid[colors] = EMERALD; }
+    var non_emerald: bool[MAX_COLORS + 1] = [false; MAX_COLORS + 1];
+    for c in 1..colors + 1 { non_emerald[c] = liquid[c] != EMERALD || wanted(p, Feature.Vine) == 0; }
+    if athanor {
+        gold_color = pick(r, non_emerald[..colors + 1]);
+        liquid[gold_color] = GOLD;
+    } else if wanted(p, Feature.Quicksilver) > 0 {
+        liquid[pick(r, non_emerald[..colors + 1])] = QUICKSILVER;
+    }
     var special: bool[MAX_COLORS + 1] = [false; MAX_COLORS + 1];
     for c in 1..colors + 1 { special[c] = liquid[c] == GOLD || liquid[c] == QUICKSILVER; }
 
@@ -150,7 +215,7 @@ fn deal(p: GenParams, r: rng&) -> Board {
     // a bottle with room under them.
     var heights: i64[MAX_BOTTLES] = [0; MAX_BOTTLES];
     for i in colors { heights[i] = CAP; }
-    let partial = max(p.partial, p.seal);
+    let partial = max(p.partial, wanted(p, Feature.Seal));
     for k in partial {
         var from_ok: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
         var to_ok: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
@@ -170,7 +235,7 @@ fn deal(p: GenParams, r: rng&) -> Board {
     var tall_color: bool[MAX_COLORS + 1] = [false; MAX_COLORS + 1];
     for k in talls {
         var free: bool[MAX_COLORS + 1] = [false; MAX_COLORS + 1];
-        for c in 1..colors + 1 { free[c] = !tall_color[c] && !special[c]; }
+        for c in 1..colors + 1 { free[c] = !tall_color[c] && !special[c] && non_emerald[c]; }
         let c = pick(r, free[..colors + 1]);
         if c < 0 { break; }
         tall_color[c] = true;
@@ -178,7 +243,7 @@ fn deal(p: GenParams, r: rng&) -> Board {
     // The Drop stands in for one segment of an ordinary color, never a tall
     // flask's: it can't go in there.
     var drop_color = -1;
-    if p.drop {
+    if wanted(p, Feature.Drop) > 0 {
         var ok: bool[MAX_COLORS + 1] = [false; MAX_COLORS + 1];
         for c in 1..colors + 1 { ok[c] = !special[c] && !tall_color[c]; }
         drop_color = pick(r, ok[..colors + 1]);
@@ -204,14 +269,17 @@ fn deal(p: GenParams, r: rng&) -> Board {
         b.n = heights[i] as u8;
         dealt.push(b);
     }
-    // Doors: each stands before one or two dealt flasks side by side and an
-    // extra empty one after them; place_grid keeps them together in a row.
+    // Doors: each stands before one or two dealt flasks with liquid, side
+    // by side, and an extra empty one after them; place_grid keeps them
+    // together in a row.
     for d in doors {
         let g = 1 + r.rand_int(2);
         var ok: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
         for i in dealt.len {
             ok[i] = i + g <= dealt.len;
-            for k in g { if i + k < dealt.len && dealt[i + k].door >= 0 { ok[i] = false; } }
+            for k in g {
+                if i + k < dealt.len && (dealt[i + k].door >= 0 || dealt[i + k].n == 0) { ok[i] = false; }
+            }
         }
         let s = pick(r, ok[..dealt.len]);
         if s < 0 { break; }
@@ -235,7 +303,7 @@ fn deal(p: GenParams, r: rng&) -> Board {
         b.body = Body.Vow;
         push_bottle(board, b);
     }
-    if p.athanor {
+    if athanor {
         var b = Bottle { .. };
         b.body = Body.Athanor;
         push_bottle(board, b);
@@ -244,64 +312,107 @@ fn deal(p: GenParams, r: rng&) -> Board {
     place_grid(board);
     let count = board.count;
 
+    // The modifiers that act on others go down first, then what they act
+    // on beside them: a lantern, then smoke and a shroud by it; a brazier,
+    // then ice or a seal by it.
     var ok: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
     var near: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
-    if p.split && colors >= 2 {
-        for i in count { ok[i] = board.bottles[i].n == CAP && board.bottles[i].cap == CAP; }
-        let a = pick(r, ok[..count]);
-        if a >= 0 {
-            ok[a] = false;
-            let b = pick(r, ok[..count]);
-            var plain: bool[MAX_COLORS + 1] = [false; MAX_COLORS + 1];
-            for c in 1..colors + 1 { plain[c] = !special[c]; }
-            let c = pick(r, plain[..colors + 1]);
-            if b >= 0 && c > 0 { split_color(board, liquid[c], a, b); }
-        }
+    fn plain_with(i: i64) -> bool {
+        let b = board.bottles[i];
+        in_play(b) && b.body == Body.Plain && b.n > 0
     }
-    // Bodies, on ordinary flasks with liquid: nothing comes out of a tall
-    // one, so a tap or a flip would do nothing there.
-    fn plain_with_liquid() {
-        for i in count {
-            let b = board.bottles[i];
-            ok[i] = b.n > 0 && b.body == Body.Plain && b.cap == CAP;
-        }
+    // What a cover may go on: an ordinary flask in play with liquid, no
+    // cover yet and no key (a cover would hide the key's layer).
+    fn coverable(i: i64) -> bool {
+        let b = board.bottles[i];
+        in_play(b) && b.n > 0 && !covered(b) && b.key_color == KeyColor.None
     }
-    for k in p.siphon {
-        plain_with_liquid();
+    fn smokable(i: i64) -> bool {
+        let b = board.bottles[i];
+        in_play(b) && b.n > 1 && b.body != Body.Siphon && b.murk == 0 && !covered(b) && b.fixture != Fixture.Lantern
+    }
+    // Lanterns: one beside each shroud, the others beside flasks smoke can
+    // hide (or anywhere, where a moonpetal waits). A lantern's flask is
+    // dealt one color under its top layer, so it lights while there is
+    // still something for the light to find.
+    let moonpetal = wanted(p, Feature.Moonpetal) > 0;
+    let shrouds = wanted(p, Feature.Shroud);
+    let lanterns = max(wanted(p, Feature.Lantern), if moonpetal { 1 } else { 0 });
+    var lantern_at: i64[..MAX_BOTTLES] = [];
+    for k in shrouds {
+        for i in count { near[i] = board.bottles[i].fixture == Fixture.Lantern || lantern_spot(board, i); }
+        for i in count { ok[i] = coverable(i) && next_to(board, i, near); }
+        let i = pick(r, ok[..count]);
+        if i < 0 { break; }
+        board.bottles[i].cover = Cover.Shroud;
+        var lit = false;
+        for j in neighbors(board, i) { if board.bottles[j].fixture == Fixture.Lantern { lit = true; } }
+        if lit { continue; }
+        for j in count { ok[j] = are_neighbors(board, i, j) && lantern_spot(board, j); }
+        let at = place_fixture(board, r, ok, Fixture.Lantern);
+        if at >= 0 { lantern_at.push(at); }
+    }
+    for k in max(0, lanterns - lantern_at.len) {
+        for i in count { near[i] = smokable(i); }
+        for i in count { ok[i] = lantern_spot(board, i) && (next_to(board, i, near) || moonpetal); }
+        let at = place_fixture(board, r, ok, Fixture.Lantern);
+        if at < 0 { break; }
+        lantern_at.push(at);
+    }
+    // (Where a moonpetal waits on the light, it comes in its own time.)
+    if !moonpetal { for i in lantern_at { one_color_under_top(board, i, lantern_at[..]); } }
+    // Bodies. A siphon whose tap lets out something other than its top; an
+    // hourglass holding two colors at least, so a flip changes its top; a
+    // moonpetal with room or more than one color, so it has to take liquid.
+    for k in wanted(p, Feature.Siphon) {
+        for i in count { ok[i] = plain_with(i) && board.bottles[i].seg[0] != top(board.bottles[i]); }
         let i = pick(r, ok[..count]);
         if i < 0 { break; }
         board.bottles[i].body = Body.Siphon;
     }
-    for k in p.hourglass {
-        plain_with_liquid();
+    for k in wanted(p, Feature.Hourglass) {
+        for i in count { ok[i] = plain_with(i) && kinds(board.bottles[i]) >= 2; }
         let i = pick(r, ok[..count]);
         if i < 0 { break; }
         board.bottles[i].body = Body.Hourglass;
         board.bottles[i].flip_every = clamp(p.flip_every, 1, 9) as u8;
     }
-    for k in p.moonpetal {
-        plain_with_liquid();
+    // A moonpetal is dealt one color under its top, so it has more of that
+    // to take in once the light comes.
+    for k in wanted(p, Feature.Moonpetal) {
+        for i in count { ok[i] = lantern_spot(board, i); }
         let i = pick(r, ok[..count]);
         if i < 0 { break; }
+        one_color_under_top(board, i, lantern_at[..]);
         board.bottles[i].body = Body.Moonpetal;
     }
-    // Murk, the background of most levels; never on a siphon.
-    for k in p.murk {
-        for i in count {
-            let b = board.bottles[i];
-            ok[i] = b.n > 1 && b.body != Body.Siphon && b.murk == 0 && b.cap == CAP;
+    // Smoke, over the lower layers of flasks with two or more, until the
+    // layers asked for are under it; never on a siphon. A lantern's
+    // neighbors get theirs first, deep, so its light has something to find.
+    var smoke_left = p.smoke;
+    for i in lantern_at {
+        for j in neighbors(board, i) {
+            if smoke_left <= 0 || !smokable(j) { continue; }
+            let n: i64 = board.bottles[j].n;
+            let k = min(smoke_left, n - 1);
+            board.bottles[j].murk = ((1 << k) - 1) as u16;
+            smoke_left -= k;
         }
+    }
+    while smoke_left > 0 {
+        for i in count { ok[i] = smokable(i); }
         let i = pick(r, ok[..count]);
         if i < 0 { break; }
         let n: i64 = board.bottles[i].n;
-        board.bottles[i].murk = ((1 << (n - 1)) - 1) as u16;
+        let k = min(smoke_left, 1 + r.rand_int(n - 1));
+        board.bottles[i].murk = ((1 << k) - 1) as u16;
+        smoke_left -= k;
     }
-    // Each door's key, in a flask in plain play, under at least one layer of
-    // another color.
+    // Each door's key, in a flask in plain play, under one to three layers.
     for d in board.door_count {
         for i in count {
             let b = board.bottles[i];
-            ok[i] = b.door < 0 && b.cap == CAP && b.key_color == KeyColor.None && key_depths(b).len > 0;
+            ok[i] = in_play(b) && !covered(b) && b.key_color == KeyColor.None && key_depths(b).len > 0;
         }
         let i = pick(r, ok[..count]);
         if i < 0 { break; }
@@ -311,74 +422,115 @@ fn deal(p: GenParams, r: rng&) -> Board {
         b.keyed = (1 << k) as u16;
         b.key_color = board.doors[d].color;
     }
-    // Shrouds, each next to a lantern on a flask with liquid to complete.
-    for k in p.shroud {
-        // Not on a tall flask: the shroud might hide some of its color.
-        for i in count { near[i] = board.bottles[i].fixture == Fixture.Lantern ||
-                                   (board.bottles[i].fixture == Fixture.None && board.bottles[i].n > 0 &&
-                                    !covered(board.bottles[i]) && board.bottles[i].cap == CAP); }
-        for i in count { ok[i] = board.bottles[i].n > 0 && !covered(board.bottles[i]) && next_to(board, i, near); }
-        let i = pick(r, ok[..count]);
-        if i < 0 { break; }
-        board.bottles[i].cover = Cover.Shroud;
-        let around = neighbors(board, i);
-        var lit = false;
-        for j in around { if board.bottles[j].fixture == Fixture.Lantern { lit = true; } }
-        if lit { continue; }
-        for j in count { ok[j] = contains(around, j) && near[j] && !covered(board.bottles[j]); }
-        place_fixture(board, r, ok, Fixture.Lantern);
-    }
-    // Other lanterns, preferably where their light clears murk.
-    let lanterns = max(p.lantern, if p.moonpetal > 0 { 1 } else { 0 });
-    var have = 0;
-    for i in count { if board.bottles[i].fixture == Fixture.Lantern { have++; } }
-    for k in max(0, lanterns - have) {
-        for i in count { near[i] = board.bottles[i].murk != 0; }
-        var any = false;
-        for i in count {
-            ok[i] = board.bottles[i].n > 0 && board.bottles[i].fixture == Fixture.None && next_to(board, i, near);
-            if ok[i] { any = true; }
-        }
-        if !any { for i in count { ok[i] = board.bottles[i].n > 0; } }
-        if place_fixture(board, r, ok, Fixture.Lantern) < 0 { break; }
-    }
-    for k in p.rime {
-        for i in count { ok[i] = board.bottles[i].n > 0 && !covered(board.bottles[i]); }
-        let i = pick(r, ok[..count]);
-        if i < 0 { break; }
-        board.bottles[i].cover = Cover.Rime;
-        board.bottles[i].thaw = (3 + r.rand_int(5)) as u8;
-    }
-    for k in p.seal {
-        // Prefer a bottle with room, so the key color lands inside.
-        var any_roomy = false;
+    // Braziers, where pours go (an empty flask if one will do), beside
+    // something ice or a seal can go on, or a vine can grow over.
+    let vine = wanted(p, Feature.Vine) > 0;
+    var brazier_at: i64[..MAX_BOTTLES] = [];
+    for k in wanted(p, Feature.Brazier) {
+        for i in count { near[i] = coverable(i) && board.bottles[i].body != Body.Vow; }
+        var empty = false;
         for i in count {
             let b = board.bottles[i];
-            ok[i] = b.n > 0 && !covered(b) && b.n < b.cap && top(b) != DROP;
-            if ok[i] { any_roomy = true; }
+            ok[i] = b.door < 0 && !covered(b) && b.fixture == Fixture.None && b.n < b.cap && next_to(board, i, near);
+            if ok[i] && b.n == 0 && b.body == Body.Plain { empty = true; }
         }
-        if !any_roomy { for i in count { ok[i] = board.bottles[i].n > 0 && !covered(board.bottles[i]); } }
-        let i = pick(r, ok[..count]);
+        if empty { for i in count { ok[i] = ok[i] && board.bottles[i].n == 0 && board.bottles[i].body == Body.Plain; } }
+        let at = place_fixture(board, r, ok, Fixture.Brazier);
+        if at < 0 { break; }
+        brazier_at.push(at);
+    }
+    // Is flask i beside a brazier that has nothing to heat yet?
+    fn by_cold_brazier(i: i64) -> bool {
+        for j in brazier_at {
+            if !are_neighbors(board, i, j) { continue; }
+            var warms = false;
+            for x in neighbors(board, j) { if heat_target(board.bottles[x].cover) { warms = true; } }
+            if !warms { return true; }
+        }
+        false
+    }
+    // Ice over something still to sort, for three pours or more: beside a
+    // brazier that has nothing to heat, if there is one.
+    for k in wanted(p, Feature.Rime) {
+        var hot = false;
+        for i in count {
+            ok[i] = coverable(i) && board.bottles[i].body != Body.Vow;
+            near[i] = ok[i] && by_cold_brazier(i);
+            if near[i] { hot = true; }
+        }
+        let i = pick(r, if hot { near[..count] } else { ok[..count] });
         if i < 0 { break; }
+        board.bottles[i].cover = Cover.Rime;
+        board.bottles[i].thaw = clamp(p.thaw + r.rand_int(4), 3, 12) as u8;
+    }
+    // Seals, over room the board needs -- a spare, or a flask with space --
+    // broken by a color buried everywhere else, so the seal waits on some
+    // digging: its own top color when that is buried (it lands inside).
+    // Beside a cold brazier first.
+    fn sealable(i: i64) -> bool {
+        let b = board.bottles[i];
+        in_play(b) && !covered(b) && b.key_color == KeyColor.None && b.body == Body.Plain && top(b) != DROP
+    }
+    for k in wanted(p, Feature.Seal) {
+        var hot = false;
+        var roomy = false;
+        for i in count {
+            let b = board.bottles[i];
+            ok[i] = sealable(i) && b.n < b.cap;
+            near[i] = ok[i] && by_cold_brazier(i);
+            if near[i] { hot = true; }
+            if ok[i] && b.n <= CAP - 2 { roomy = true; }
+        }
+        if hot { ok = near; }
+        else if roomy { for i in count { ok[i] = ok[i] && board.bottles[i].n <= CAP - 2; } }
+        var i = pick(r, ok[..count]);
+        if i < 0 {
+            // No room anywhere: a full flask (nothing lands when it breaks).
+            for j in count {
+                ok[j] = sealable(j);
+                near[j] = ok[j] && by_cold_brazier(j);
+            }
+            i = pick(r, near[..count]);
+            if i < 0 { i = pick(r, ok[..count]); }
+            if i < 0 { break; }
+        }
+        var keys: bool[MAX_COLORS + 1] = [false; MAX_COLORS + 1];
+        var outside: bool[MAX_COLORS + 1] = [false; MAX_COLORS + 1];
+        var buried = false;
+        for c in 1..colors + 1 {
+            if tall_color[c] { continue; }
+            var on_top = false;
+            for j in count {
+                let o = board.bottles[j];
+                if j == i || o.cover == Cover.Seal || !has_color(o, liquid[c]) { continue; }
+                outside[c] = true;
+                if top(o) == liquid[c] { on_top = true; }
+            }
+            keys[c] = outside[c] && !on_top;
+            if keys[c] { buried = true; }
+        }
+        if !buried { keys = outside; }
+        var key = 0;
+        let t = top(board.bottles[i]);
+        for c in 1..colors + 1 { if keys[c] && liquid[c] == t { key = t; } }
+        if key == 0 {
+            let c = pick(r, keys[..colors + 1]);
+            if c < 0 { break; }
+            key = liquid[c];
+        }
         var b .= board.bottles[i];
-        var key = top(b);
-        if b.n >= b.cap || key == DROP { key = liquid[1 + r.rand_int(colors)]; }
         b.cover = Cover.Seal;
         b.key = key as u8;
     }
-    // Curtains, on flasks with liquid in plain play, each opened by a color
-    // neither it nor another curtain holds.
-    for k in p.curtains {
-        for i in count {
-            let b = board.bottles[i];
-            ok[i] = b.n > 0 && !covered(b) && b.cap == CAP && b.door < 0;
-        }
+    // Curtains, each opened by a color neither it nor another curtain holds.
+    for k in wanted(p, Feature.Curtain) {
+        for i in count { ok[i] = coverable(i) && board.bottles[i].body == Body.Plain; }
         let i = pick(r, ok[..count]);
         if i < 0 { break; }
         var free: bool[MAX_COLORS + 1] = [false; MAX_COLORS + 1];
         for c in 1..colors + 1 {
             let x = liquid[c];
-            free[c] = x != QUICKSILVER || !p.athanor;
+            free[c] = x != QUICKSILVER || !athanor;
             for j in count {
                 let b = board.bottles[j];
                 if (j == i || b.cover == Cover.Curtain) && has_color(b, x) { free[c] = false; }
@@ -389,43 +541,69 @@ fn deal(p: GenParams, r: rng&) -> Board {
         board.bottles[i].cover = Cover.Curtain;
         board.bottles[i].badge = liquid[c] as u8;
     }
-    // A creeping vine, with neighbors to grow over, on an ordinary flask (a
-    // tall one takes only its color, maybe not emerald).
-    if p.vine {
-        for i in count { ok[i] = neighbors(board, i).len > 0 && board.bottles[i].cap == CAP; }
+    // A creeping vine, next to flasks it can grow over: beside a brazier's
+    // neighbors, where there is one, so the heat can burn what it grows.
+    if vine {
+        for i in count { near[i] = board.bottles[i].door < 0 && !covered(board.bottles[i]); }
+        var hot = false;
+        for i in count {
+            ok[i] = in_play(board.bottles[i]) && !covered(board.bottles[i]) && next_to(board, i, near);
+            var by: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
+            for j in brazier_at { for x in neighbors(board, j) { by[x] = true; } }
+            if ok[i] && next_to(board, i, by) && board.bottles[i].fixture == Fixture.None { hot = true; }
+        }
+        if hot {
+            var by: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
+            for j in brazier_at { for x in neighbors(board, j) { by[x] = true; } }
+            for i in count { ok[i] = ok[i] && next_to(board, i, by); }
+        }
         let i = place_fixture(board, r, ok, Fixture.VineRoot);
         if i >= 0 { board.bottles[i].spread_every = clamp(p.vine_every, 1, 9) as u8; }
     }
-    // Braziers stand next to what heat changes: ice, seals, the vine.
-    for k in p.brazier {
-        var any = false;
-        for i in count {
-            let b = board.bottles[i];
-            near[i] = b.cover == Cover.Rime || b.cover == Cover.Seal || b.fixture == Fixture.VineRoot;
-        }
-        for i in count {
-            ok[i] = next_to(board, i, near) && board.bottles[i].fixture == Fixture.None;
-            if ok[i] { any = true; }
-        }
-        if !any { for i in count { ok[i] = true; } }
-        if place_fixture(board, r, ok, Fixture.Brazier) < 0 { break; }
+    // A brazier left with nothing to heat (and no vine to grow by it) goes.
+    for j in brazier_at {
+        var warms = vine;
+        for x in neighbors(board, j) { if heat_target(board.bottles[x].cover) { warms = true; } }
+        if !warms { board.bottles[j].fixture = Fixture.None; }
     }
-    var targets = false;
+    // A catalyst, where it has two things at least to set off.
+    var targets = 0;
     for i in count {
         let b = board.bottles[i];
-        if b.fixture == Fixture.Brazier || b.fixture == Fixture.Lantern || b.body == Body.Hourglass { targets = true; }
+        if b.fixture == Fixture.Lantern || b.body == Body.Hourglass || b.fixture == Fixture.Brazier { targets++; }
     }
-    for k in p.catalyst {
-        if !targets { break; }
-        for i in count { ok[i] = board.bottles[i].n > 0; }
-        if place_fixture(board, r, ok, Fixture.Catalyst) < 0 { break; }
+    for k in wanted(p, Feature.Catalyst) {
+        if targets < 2 { break; }
+        for i in count { ok[i] = lantern_spot(board, i); }
+        let at = place_fixture(board, r, ok, Fixture.Catalyst);
+        if at < 0 { break; }
+        one_color_under_top(board, at, lantern_at[..]);
     }
-    if p.salamander {
-        for i in count { ok[i] = board.bottles[i].n > 0 && !covered(board.bottles[i]) && board.bottles[i].door < 0; }
+    // The salamander, on a flask it can be poured off, where there is
+    // something its heat changes.
+    if wanted(p, Feature.Salamander) > 0 {
+        var heats = false;
+        for i in count { if heat_target(board.bottles[i].cover) || board.bottles[i].fixture == Fixture.VineRoot { heats = true; } }
+        for i in count { ok[i] = heats && in_play(board.bottles[i]) && board.bottles[i].n > 0 && !covered(board.bottles[i]); }
         board.salamander = pick(r, ok[..count]);
     }
     settle(board);
     board
+}
+
+// Every modifier the recipe asks for is on the board.
+fn has_all(board: Board, p: Recipe) -> bool {
+    for f in ALL_FEATURES {
+        if f == Feature.Murk || f == Feature.Tall { continue; }
+        let n = wanted(p, f);
+        if n > 0 && feature_count(board, f) < min(n, if f == Feature.Quicksilver || f == Feature.Drop { 1 } else { n }) {
+            DBG[60 + feature_index(f)]++; if DBG_V { print("    missing ", feature_name(f)); }
+            return false;
+        }
+    }
+    if p.smoke > 0 && !feature_on(board, Feature.Murk) { return false; }
+    if p.tall > 0 && feature_count(board, Feature.Tall) < p.tall { return false; }
+    true
 }
 
 // No bottle may start complete, and the level should not be half done.
@@ -437,43 +615,104 @@ fn deal_ok(board: Board) -> bool {
     validate(board).len == 0 && !is_won(board)
 }
 
-// What attempt `attempt` deals with: after many failures, ease off, with
-// fewer modifiers, then fewer colors.
-fn attempt_params(p: GenParams, attempt: i64) -> GenParams {
-    var plain = p;
-    if attempt >= 200 {
-        plain.murk = 0;
-        plain.shroud = 0;
-        plain.rime = 0;
-        plain.vine = false;
+// How far a score is from the band: 0 inside it.
+fn band_distance(p: Recipe, score: f64) -> f64 {
+    if score < p.band_lo { return p.band_lo - score; }
+    if score > p.band_hi { return score - p.band_hi; }
+    0.0
+}
+
+// Deals tried for a board in the band, and solver positions spent on them;
+// after either, the closest valid one is kept.
+let BAND_ATTEMPTS = 12;
+let BAND_SPEND = 30000;
+// Deals tried at all before the plainest fallback.
+let MAX_ATTEMPTS = 100;
+
+// What attempt `attempt` deals with, after `spent` solver positions: when
+// deals keep failing, ease off: the focus need not be required, then only
+// the focus and what it needs stay, then a color goes.
+fn attempt_recipe(p: Recipe, attempt: i64, spent: i64) -> Recipe {
+    var q = p;
+    if attempt >= 24 || spent >= 40000 { q.focused = false; }
+    if attempt >= 48 || spent >= 70000 {
+        q.smoke = q.smoke / 2;
+        for f in ALL_FEATURES {
+            if !p.focused || (f != p.focus && !needed_by(p.focus, f, p)) { want(q, f, 0); }
+        }
     }
-    if attempt >= 300 {
-        plain = GenParams { colors: max(3, p.colors - 1), empties: 2, tall: p.tall, tall_rows: p.tall_rows };
+    if attempt >= 72 || spent >= 100000 {
+        q = Recipe { colors: max(3, p.colors - 1), spares: 2, tall: p.tall, tall_rows: p.tall_rows };
     }
-    plain
+    q
+}
+
+// Whether modifier `f` in recipe `p` is there for `focus`: heat's
+// targets, what a catalyst sets off.
+fn needed_by(focus: Feature, f: Feature, p: Recipe) -> bool {
+    match focus {
+        Brazier, Salamander => f == Feature.Rime || f == Feature.Seal || f == Feature.Vine,
+        Catalyst => f == Feature.Lantern || f == Feature.Hourglass || f == Feature.Brazier || f == Feature.Rime,
+        _ => false,
+    }
 }
 
 // The search attempt `attempt` may make: the first few give up early, since
 // a deal that is hard to search is more often one that cannot be won, and
 // dealing again is cheaper; later ones search fully.
-fn attempt_budget(budget: i64, attempt: i64) -> i64 { if attempt < 4 { budget / 6 } else { budget } }
+fn attempt_budget(budget: i64, attempt: i64) -> i64 { if attempt < 6 { budget / 3 } else { budget } }
 
 // Generation as a job that runs a slice at a time, so the game can keep
-// drawing while it brews. Each attempt deals a board and searches it.
+// drawing while it brews. Each attempt deals a board, solves it, checks
+// that its modifiers matter, plays the traps, and checks the focus.
+enum GenStage { Deal, Solve, Traps, Focus }
+
 struct GenJob {
-    params: GenParams,
+    recipe: Recipe,
+    current: Recipe = Recipe {},    // the recipe this attempt deals with
     seed: u64,
     attempt: i64 = 0,
-    dealt: Board,           // the deal being searched, while `search` runs
-    searching: bool = false,
+    stage: GenStage = GenStage.Deal,
+    dealt: Board,           // the deal being measured
+    m: Measure = Measure {},// its measure, while the focus is checked
+    best: GenResult,        // the closest valid deal so far, when has_best
+    has_best: bool = false,
+    best_distance: f64 = 1e18,
+    valid_at: i64 = 0,
+    spent: i64 = 0,         // solver positions expanded so far
     done: bool = false,
     result: GenResult,      // once done
-    search: Search,
+    job: MeasureJob,
 }
 
-fn gen_begin(p: GenParams, seed: u64) -> GenJob {
-    GenJob { params: p, seed: seed, dealt: Board { .. }, result: GenResult { board: Board { .. }, stats: SolveStats {} },
-             search: Search {}, .. }
+fn gen_begin(p: Recipe, seed: u64) -> GenJob {
+    GenJob { recipe: p, seed: seed, dealt: Board { .. }, best: GenResult { board: Board { .. } },
+             result: GenResult { board: Board { .. } }, job: MeasureJob { start: Board { .. }, search: Search {} }, .. }
+}
+
+// The deal passed every check; it is kept if it is in the band, else
+// remembered if it is the closest yet.
+fn gen_valid(job: GenJob&) {
+    if job.valid_at == 0 { job.valid_at = job.attempt + 1; }
+    let dist = band_distance(job.recipe, job.m.score);
+    let g = GenResult { board: job.dealt, m: job.m, attempts: job.attempt + 1, valid_at: job.valid_at, in_band: dist == 0.0 };
+    if dist == 0.0 {
+        job.result = g;
+        job.done = true;
+        return;
+    }
+    if dist < job.best_distance {
+        job.best = g;
+        job.has_best = true;
+        job.best_distance = dist;
+    }
+    gen_next(job);
+}
+
+fn gen_next(job: GenJob&) {
+    job.attempt++;
+    job.stage = GenStage.Deal;
+    job.job.search = Search {};
 }
 
 // Works on the job for about `nodes` search positions (each deal counts as
@@ -481,42 +720,94 @@ fn gen_begin(p: GenParams, seed: u64) -> GenJob {
 fn gen_step(job: GenJob&, nodes: i64) -> bool {
     var left = max(1, nodes);
     while !job.done && left > 0 {
-        if job.searching {
-            let before = job.search.stats.expanded;
-            let over = search_step(job.search, left);
-            left -= max(1, job.search.stats.expanded - before);
-            if !over { continue; }
-            job.searching = false;
-            if job.search.stats.solved {
-                job.result = GenResult { board: job.dealt, stats: job.search.stats, attempts: job.attempt + 1 };
-                job.done = true;
-            }
-            job.search = Search {};
-            job.attempt++;
-            continue;
+        match job.stage {
+            Deal => {
+                left--;
+                if job.has_best && (job.attempt >= BAND_ATTEMPTS || job.spent >= BAND_SPEND) {
+                    job.result = job.best;
+                    job.result.attempts = job.attempt;
+                    job.done = true;
+                    break;
+                }
+                if job.attempt >= MAX_ATTEMPTS {
+                    // Practically unreachable: three colors with two spares always solve.
+                    var r = rng { job.seed };
+                    let board = deal(Recipe { colors: 3, spares: 2 }, r);
+                    job.result = GenResult { board: board, attempts: MAX_ATTEMPTS + 1 };
+                    job.done = true;
+                    break;
+                }
+                let p = attempt_recipe(job.recipe, job.attempt, job.spent);
+                job.current = p;
+                var r = rng { job.seed * 0x9E3779B97F4A7C15 + (job.attempt as u64) * 0xD1B54A32D192ED03 + 17 };
+                job.dealt = deal(p, r);
+                if !deal_ok(job.dealt) || !has_all(job.dealt, p) {
+                    if !deal_ok(job.dealt) { DBG[0]++; if DBG_V { print("  ", job.attempt, " deal_ok ", validate(job.dealt)); } } else { DBG[1]++; if DBG_V { print("  ", job.attempt, " not placed"); } }
+                    gen_next(job);
+                    continue;
+                }
+                job.job = measure_begin(job.dealt, attempt_budget(p.budget, job.attempt));
+                job.stage = GenStage.Solve;
+            },
+            Solve => {
+                let before = job.job.spent;
+                let over = measure_step(job.job, left);
+                let spent = max(1, job.job.spent - before);
+                left -= spent;
+                job.spent += spent;
+                if !over { continue; }
+                if !job.job.m.solved {
+                    DBG[2]++; if DBG_V { print("  ", job.attempt, " unsolved exhausted=", job.job.m.exhausted, " eff=", job.job.m.effort); }
+                    gen_next(job);
+                    continue;
+                }
+                let f, unused = unused_feature(uses_of(job.dealt, job.job.path[..]));
+                if unused {
+                    DBG[10 + feature_index(f)]++; if DBG_V { print("  ", job.attempt, " unused ", feature_name(f)); }
+                    gen_next(job);
+                    continue;
+                }
+                // The traps can't bring a deal into the band from above it,
+                // nor closer than the best from below by more than they add.
+                measure_traps(job.job, TRAP_PLAYOUTS, job.seed ^ (job.attempt as u64 * 0x2545F4914F6CDD1D));
+                job.stage = GenStage.Traps;
+            },
+            Traps => {
+                let before = job.job.spent;
+                let over = measure_step(job.job, left);
+                let spent = max(1, job.job.spent - before);
+                left -= spent;
+                job.spent += spent;
+                if !over { continue; }
+                job.m = job.job.m;
+                let dist = band_distance(job.recipe, job.m.score);
+                if dist > 0.0 && dist >= job.best_distance {
+                    gen_next(job);
+                    continue;
+                }
+                let p = job.current;
+                if !p.focused || !neutral_exists(p.focus) {
+                    gen_valid(job);
+                    continue;
+                }
+                job.job = measure_begin(without_feature(job.dealt, p.focus), attempt_budget(p.budget, job.attempt));
+                job.stage = GenStage.Focus;
+            },
+            Focus => {
+                let before = job.job.spent;
+                let over = measure_step(job.job, left);
+                let spent = max(1, job.job.spent - before);
+                left -= spent;
+                job.spent += spent;
+                if !over { continue; }
+                if focus_required(base_score(job.m), job.job.m) { gen_valid(job); } else { DBG[3]++; DBG[40 + feature_index(job.recipe.focus)]++; if DBG_V { print("   focus ", feature_name(job.recipe.focus), " with ", base_score(job.m), " without ", base_score(job.job.m), " solved ", job.job.m.solved, " ", job.job.m.length, "/", job.m.length); } gen_next(job); }
+            },
         }
-        left--;
-        if job.attempt >= 400 {
-            // Practically unreachable: three colors with two spares always solve.
-            var r = rng { job.seed };
-            let board = deal(GenParams { colors: 3, empties: 2 }, r);
-            job.result = GenResult { board: board, stats: SolveStats {}, attempts: 401 };
-            job.done = true;
-            break;
-        }
-        var r = rng { job.seed * 0x9E3779B97F4A7C15 + (job.attempt as u64) * 0xD1B54A32D192ED03 + 17 };
-        job.dealt = deal(attempt_params(job.params, job.attempt), r);
-        if !deal_ok(job.dealt) {
-            job.attempt++;
-            continue;
-        }
-        job.search = search_begin(job.dealt, attempt_budget(job.params.budget, job.attempt));
-        job.searching = true;
     }
     job.done
 }
 
-fn generate(p: GenParams, seed: u64) -> GenResult {
+fn generate(p: Recipe, seed: u64) -> GenResult {
     var job = gen_begin(p, seed);
     while !gen_step(job, 1 << 30) {}
     job.result

@@ -412,7 +412,7 @@ fn load_seed(seed: u64, like: i64) {
 // Generates `spec`'s level a slice a frame (see step_jobs), under the Brewing
 // overlay, and starts it when it is done.
 fn brew_level() {
-    brew = gen_begin(spec.params, spec.seed);
+    brew = gen_begin(spec.recipe, spec.seed);
     brewing = true;
     pending_load = true;
     overlay = Overlay.Brewing;
@@ -444,7 +444,7 @@ fn start_hand(k: i64) { load_kind = PlayMode.Hand; hand_index = k; request_load(
 fn do_pending_load() {
     pending_load = false;
     overlay = Overlay.None;
-    spec = LevelSpec { number: 0, difficulty: Difficulty.Normal, params: GenParams {}, seed: 0 };
+    spec = LevelSpec { number: 0, difficulty: Difficulty.Normal, recipe: Recipe {}, seed: 0 };
     if load_kind == PlayMode.Campaign { load_campaign(level_number); }
     else if load_kind == PlayMode.Seed { load_seed(play_seed, play_like); }
     else { load_hand(hand_index); }
