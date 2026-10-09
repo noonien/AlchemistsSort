@@ -735,7 +735,7 @@ fn next_after_win() {
 // Advances the background jobs by about JOB_SLICE: the level being brewed,
 // else a shuffle being dealt, else the board's search.
 fn step_jobs() {
-    if (brewing || varying) && screen_id != Screen.Play {
+    if (brewing || varying) && screen_bound() != Screen.Play {
         // Left before it was done.
         brewing = false;
         varying = false;

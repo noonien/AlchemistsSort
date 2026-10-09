@@ -208,6 +208,10 @@ fn update_transition() {
 
 fn transition_busy() -> bool { trans_phase != 0 }
 
+// The screen the player is headed to: while the ink covers the old one,
+// screen_id still names it.
+fn screen_bound() -> Screen { if trans_phase == 1 { trans_to } else { screen_id } }
+
 // When the ink will have left the screen to see.
 fn transition_reveal_at() -> f64 {
     if trans_phase == 1 { return trans_t0 + T_COVER + T_REVEAL * 0.4; }
