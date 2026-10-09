@@ -103,6 +103,7 @@ var screen_px = int2 { 540, 960 };
 var now: f64 = 0.0;
 var data_dir: u8[>..];
 var font_dir: u8[>..];
+var sample_dir: u8[>..];
 
 var save: Save;
 var screen_id = Screen.Home;
@@ -1954,7 +1955,11 @@ fn music_room_now() -> i64 {
     music_room(n, c.theme, c.first)
 }
 
-fn lively() -> bool {
+// Music being made gets a slice every frame.
+fn lively() -> bool { moving() || music_making }
+
+// Something on screen moves, or is about to.
+fn moving() -> bool {
     if pending_load || any_pouring() || forces_lively() || taps.len > 0 || clicks.len > 0 { return true; }
     if screen_id == Screen.Play && (shuffling || !board_search.done || guides_lively()) { return true; }
     let d = gfx::mouse_delta();
@@ -1965,8 +1970,7 @@ fn lively() -> bool {
     for i in MAX_BOTTLES {
         if now < shake_until[i] || now - complete_at[i] < 1.3 { return true; }
     }
-    // Music being made gets a slice every frame.
-    fx_lively() || music_making
+    fx_lively()
 }
 
 fn env_or(name: const u8[:], fallback: const u8[:], out: u8[>..]&) {
@@ -1989,6 +1993,7 @@ fn main() {
     var shots_from = -1;
     var shots_every = 1;
     var clicks_script: Scripted[>..] = [];
+    var export_to: u8[>..] = [];
     let argv = args();
     var a = 1;
     while a < argv.len {
@@ -2007,7 +2012,7 @@ fn main() {
             a += 2;
         }
         else if opt == "--autoplay" { autoplay = true; }
-        else if opt == "--export-music" && has_value { exit(if export_music(argv[a + 1]) { 0 } else { 1 }); }
+        else if opt == "--export-music" && has_value { export_to.append(argv[a + 1]); a++; }
         else if (opt == "--click" || opt == "--hold") && a + 2 < argv.len {
             let x, okx = parse_int(argv[a + 1]);
             let y, oky = parse_int(argv[a + 2]);
@@ -2040,6 +2045,8 @@ fn main() {
     }
     env_or("ALCHEMIST_SORT_DATA", "data", data_dir);
     env_or("ALCHEMIST_SORT_FONTS", str(data_dir, "/fonts"), font_dir);
+    env_or("ALCHEMIST_SORT_SAMPLES", str(data_dir, "/samples"), sample_dir);
+    if export_to.len > 0 { exit(if export_music(export_to, sample_dir) { 0 } else { 1 }); }
     save = load_save();
     sound_on = save.sound;
     music_on = save.music;
@@ -2057,7 +2064,7 @@ fn main() {
     let open_px_w: i64 = gfx::screen_size().x;
     if !init_draw() { abort(str("could not make the pipeline: ", gfx::error())); }
     if !init_text(font_dir) { abort(str("could not load fonts: ", ui::error())); }
-    if frames < 0 { init_sounds(); init_music(); }
+    if frames < 0 { init_sounds(); init_music(sample_dir); }
     rand = rng { random_seed() };
     fit_canvas();
     if start_hand_level >= 0 { start_hand(start_hand_level); }
@@ -2085,7 +2092,7 @@ fn main() {
         }
         if pending_load && !brewing && drawn > 0 { do_pending_load(); }
         step_jobs();
-        step_music(music_room_now(), dt);
+        step_music(music_room_now(), dt, !moving());
         handle_keys();
         if screen_id == Screen.Play && !pending_load && !varying { update_play(dt); }
         update_particles(dt);

@@ -37,7 +37,7 @@ stdenv.mkDerivation {
 
     # The game, as C, and its shaders as GLSL ES.
     goose --emit-runtime runtime.c
-    goose -O2 -o game.c src/main.goose
+    goose -O2 --include src/c/ogg.h -o game.c src/main.goose
     python3 web/shaders.py game.c shaders_web.c spirv-cross
 
     defs='-DGS_STACK_RESERVE=${stackReserve}'
@@ -52,7 +52,8 @@ stdenv.mkDerivation {
       emcc -O2 -I${gs}/src/ui -I${gs}/third_party/nuklear -c $f -o ui_$(basename $f .c).o
     done
 
-    mkdir -p site/data/fonts
+    mkdir -p site/data/fonts site/data/samples
+    cp samples/*.ogg samples/bank.txt site/data/samples/
     cp ${cinzel}/share/fonts/truetype/Cinzel-Bold.ttf site/data/fonts/
     cp ${gs}/third_party/nuklear/extra_font/Raleway-Bold.ttf site/data/fonts/
     chmod -R u+w site
