@@ -158,11 +158,12 @@ fn deal(p: GenParams, r: rng&) -> Board {
         if c < 0 { break; }
         tall_color[c] = true;
     }
-    // The Drop stands in for one segment of an ordinary color.
+    // The Drop stands in for one segment of an ordinary color, never a tall
+    // flask's: it can't go in there.
     var drop_color = -1;
     if p.drop {
         var ok: bool[MAX_COLORS + 1] = [false; MAX_COLORS + 1];
-        for c in 1..colors + 1 { ok[c] = !special[c]; }
+        for c in 1..colors + 1 { ok[c] = !special[c] && !tall_color[c]; }
         drop_color = pick(r, ok[..colors + 1]);
     }
     var segs: u8[>..] = [];
@@ -220,11 +221,12 @@ fn deal(p: GenParams, r: rng&) -> Board {
             if b >= 0 && c > 0 { split_color(board, liquid[c], a, b); }
         }
     }
-    // Bodies, on flasks with liquid.
+    // Bodies, on ordinary flasks with liquid: nothing comes out of a tall
+    // one, so a tap or a flip would do nothing there.
     fn plain_with_liquid() {
         for i in count {
             let b = board.bottles[i];
-            ok[i] = b.n > 0 && b.body == Body.Plain;
+            ok[i] = b.n > 0 && b.body == Body.Plain && b.cap == CAP;
         }
     }
     for k in p.siphon {
@@ -326,9 +328,10 @@ fn deal(p: GenParams, r: rng&) -> Board {
         b.cover = Cover.Seal;
         b.key = key as u8;
     }
-    // A creeping vine, with neighbors to grow over.
+    // A creeping vine, with neighbors to grow over, on an ordinary flask (a
+    // tall one takes only its color, maybe not emerald).
     if p.vine {
-        for i in count { ok[i] = neighbors(board, i).len > 0; }
+        for i in count { ok[i] = neighbors(board, i).len > 0 && board.bottles[i].cap == CAP; }
         let i = place_fixture(board, r, ok, Fixture.VineRoot);
         if i >= 0 { board.bottles[i].spread_every = clamp(p.vine_every, 1, 9) as u8; }
     }

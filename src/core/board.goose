@@ -208,7 +208,13 @@ fn covered(b: Bottle) -> bool { b.cover != Cover.None }
 // Hidden from view entirely: under a seal or a shroud.
 fn contents_hidden(b: Bottle) -> bool { b.cover == Cover.Seal || b.cover == Cover.Shroud }
 
-fn can_pour_from(b: Bottle) -> bool { b.n > 0 && !b.done && !covered(b) }
+// Nothing ever comes out of a tall flask.
+fn can_pour_from(b: Bottle) -> bool { b.n > 0 && !b.done && !covered(b) && b.cap <= CAP }
+
+// The one color a tall flask takes: what it holds, since it starts with
+// some of its color and nothing else ever goes in (see validate). 0 for an
+// ordinary flask.
+fn tall_color(b: Bottle) -> i64 { if b.cap > CAP && b.n > 0 { b.seg[0] } else { 0 } }
 
 fn has_body(board: Board, body: Body) -> bool {
     for i in board.count { if board.bottles[i].body == body { return true; } }
@@ -448,6 +454,12 @@ fn fits(board: Board, j: i64, color: i64) -> bool {
     let b = board.bottles[j];
     if b.done || color == 0 || j == board.salamander { return false; }
     if b.body == Body.Moonpetal && !any_lantern_lit(board) { return false; }
+    if b.cap > CAP {
+        // Only its own color, since nothing comes out again; an athanor's
+        // quicksilver lands as gold.
+        let lands = if color == QUICKSILVER && b.body == Body.Athanor { GOLD } else { color };
+        return lands == tall_color(b);
+    }
     if color == DROP { return true; }
     if b.body == Body.Vow && b.vow != 0 && b.vow != color { return false; }
     if color == QUICKSILVER {
@@ -758,21 +770,15 @@ fn tick(board: Board&, r: PourResult&) {
 
 // Complete for the rules: in a level with an athanor, quicksilver is gold
 // still to be made and never completes a flask; and an ordinary flask full of
-// a tall flask's color is not done while more of it is elsewhere, since the
-// tall flask needs it all.
+// a tall flask's color is never done, since the tall flask needs it all.
 fn complete_on(board: Board, i: i64) -> bool {
     let b = board.bottles[i];
     if !is_complete(b) { return false; }
     let c = flask_color(b);
     if c == QUICKSILVER && has_body(board, Body.Athanor) { return false; }
     if b.cap > CAP { return true; }
-    var elsewhere = 0;
-    for j in board.count {
-        if j == i { continue; }
-        let x = board.bottles[j];
-        for k in x.n as i64 { if x.seg[k] == c { elsewhere++; } }
-    }
-    elsewhere == 0
+    for j in board.count { if tall_color(board.bottles[j]) == c { return false; } }
+    true
 }
 
 fn seal_if_complete(board: Board&, i: i64, r: PourResult&) -> bool {
@@ -946,6 +952,18 @@ fn validate(board: Board) -> u8[>..] {
         }
         if b.body == Body.Hourglass && b.flip_every == 0 { return str("bottle ", i + 1, " needs a flip count"); }
         if b.body == Body.Siphon && b.murk != 0 { return str("bottle ", i + 1, ": a siphon cannot hold murk"); }
+        if b.cap > CAP {
+            // Nothing comes out of a tall flask, so it holds only its own
+            // color, in plain view, from the start; a tap or a flip would do
+            // nothing there.
+            if b.n == 0 { return str("bottle ", i + 1, ": a tall flask starts with some of its color"); }
+            if !is_uniform(b) || b.seg[0] == DROP || b.murk != 0 {
+                return str("bottle ", i + 1, ": a tall flask holds only its own color, and no smoke");
+            }
+            if b.body == Body.Siphon || b.body == Body.Hourglass {
+                return str("bottle ", i + 1, ": a tall flask cannot be a siphon or an hourglass");
+            }
+        }
         if b.fixture == Fixture.VineRoot {
             roots++;
             if b.spread_every == 0 { return str("bottle ", i + 1, " needs a spread count"); }
@@ -972,45 +990,31 @@ fn validate(board: Board) -> u8[>..] {
         tally[GOLD] += tally[QUICKSILVER];
         tally[QUICKSILVER] = 0;
     }
-    // Every color fills ordinary flasks or a tall one of its own; with the
-    // Drop, one color is a segment short.
-    var tall_used: bool[MAX_BOTTLES] = [false; MAX_BOTTLES];
-    var short: i64[>..] = [];
+    // A tall flask's color fills it exactly (the Drop never goes in), and
+    // every other color fills an ordinary flask; with the Drop, one of them
+    // is a segment short.
+    var tall: bool[MAX_LIQUID + 1] = [false; MAX_LIQUID + 1];
+    for i in board.count {
+        let c = tall_color(board.bottles[i]);
+        if c == 0 { continue; }
+        if tall[c] { return str("two tall flasks of one color"); }
+        if tally[c] != board.bottles[i].cap {
+            return str("bottle ", i + 1, ": a tall flask needs exactly ", board.bottles[i].cap, " of its color");
+        }
+        tall[c] = true;
+    }
     var colors = 0;
+    var drop_used = tally[DROP] == 0;
     for c in 1..DROP {
         if tally[c] == 0 { continue; }
         colors++;
-        if tally[c] == CAP { continue; }
-        var fits = false;
-        for i in board.count {
-            if !tall_used[i] && board.bottles[i].cap == tally[c] {
-                tall_used[i] = true;
-                fits = true;
-                break;
-            }
+        if tall[c] || tally[c] == CAP { continue; }
+        if drop_used || tally[c] + 1 != CAP {
+            return str("color ", c, " has ", tally[c], " segments, not ", CAP, " or a tall flask's height");
         }
-        if !fits { short.push(c); }
-    }
-    if colors == 0 { return str("a level needs some liquid"); }
-    var drop_used = tally[DROP] == 0;
-    for c in short {
-        var fits = false;
-        if !drop_used {
-            if tally[c] + 1 == CAP { fits = true; }
-            for i in board.count {
-                if !fits && !tall_used[i] && board.bottles[i].cap == tally[c] + 1 {
-                    tall_used[i] = true;
-                    fits = true;
-                }
-            }
-        }
-        if !fits { return str("color ", c, " has ", tally[c], " segments, not ", CAP, " or a tall flask's height"); }
         drop_used = true;
     }
-    // A color of CAP with the Drop fills a flask one taller.
-    for i in board.count {
-        if !drop_used && !tall_used[i] && board.bottles[i].cap == CAP + 1 { drop_used = true; }
-    }
+    if colors == 0 { return str("a level needs some liquid"); }
     if !drop_used { return str("the Philosopher's Drop stands in for a missing segment, and none is missing"); }
     str("")
 }

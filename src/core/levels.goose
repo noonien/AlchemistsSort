@@ -11,7 +11,7 @@
 //         flask("GGBR").under_murk(3),            // the lowest three under smoke
 //         flask("BRGG").rime(4),                  // ice, melting in four pours
 //         flask("YY").seal('Y'),                  // a seal that Y breaks
-//         tall_flask('V', 2).hourglass(3),        // two rows tall, holding its extra violet
+//         tall_flask('V', 2).lantern(),           // two rows tall, holding its extra violet
 //         flask("").brazier(),
 //         flask(""),
 //     ])
@@ -22,7 +22,8 @@
 // .moonpetal(); covers .seal(key) .rime(pours) .shroud() .vine(); fixtures
 // .brazier() .lantern() .catalyst() .root(every); .twin_of(index) on both
 // twins. A tall flask is made with tall_flask(color, rows), which holds the
-// share of its color beyond an ordinary flask's. A salamander goes in with
+// share of its color beyond an ordinary flask's; only that color goes in,
+// and nothing comes out. A salamander goes in with
 // `.salamander(index)` on the level, and `.columns(n)` holds the grid to n
 // columns where the level needs rows that long. Every one of them is
 // checked and solved by the tests.
@@ -159,7 +160,7 @@ fn hand_made(k: i64) -> HandMade {
                    "A wax seal breaks when you pour exactly its color onto it, and the liquid lands inside. What it holds stays a mystery until then.",
                    [flask("RGBY"), flask("YBRG"), flask("GBY").seal('Y'), flask("RRGB"), flask("Y"), flask("")]),
         3 => level(8, "A Taller Flask", Difficulty.Normal,
-                   "The tall flask holds more than four layers. It comes with violet in it, and the four other violets fill it to the top.",
+                   "The tall flask holds nine layers, all violet. It comes with some in it; only violet goes in, and nothing comes out. The four other violets fill it.",
                    [flask("RGBV"), flask("VBRG"), flask("GVRB"), flask("BRGV"), tall_flask('V', 2), flask("")]),
         4 => level(11, "The Vow", Difficulty.Normal,
                    "The vow flask takes whatever color you pour into it first, and from then on only that color. It must end up full.",
@@ -190,9 +191,9 @@ fn hand_made(k: i64) -> HandMade {
                     "Twin flasks are joined by a tube. When a pour does not fit in one, the rest flows on into its twin.",
                     [flask("BRRR"), flask("GGR").twin_of(2), flask("").twin_of(1), flask("GBBB"), flask("G")]),
         12 => level(45, "The Glassblower's Bench", Difficulty.SuperHard,
-                    "Siphons, twins, quicksilver and a tall flask: let the liquid find its way.",
-                    [flask("OBRG").siphon(), flask("GBYQ"), flask("YBR").twin_of(3), flask("QQR").twin_of(2),
-                     tall_flask('Q', 2), flask("OOBR"), flask("QG").siphon(), flask("YOGY"), flask("")]),
+                    "Siphons, twins and a tall flask that takes only quicksilver: let the sinking liquid find its way.",
+                    [flask("YBRG").siphon(), flask("GBYQ"), flask("OBR").twin_of(3), flask("QBR").twin_of(2),
+                     tall_flask('Q', 2), flask("QOOR"), flask("QG").siphon(), flask("YOGY"), flask("")]),
         // The Observatory.
         13 => level(48, "Lamplight", Difficulty.Normal,
                     "Complete the lantern's flask and it lights for good. Its light clears the smoke from its own flask and the flasks beside it.",

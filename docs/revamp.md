@@ -79,9 +79,18 @@ with no liquid landing.
 color. It must end full. The Drop is accepted and doesn't set the vow.
 
 **Tall Flask**. Spans 2 or 3 grid rows; `cap` 9 or 14. The level has one color with `cap` segments to
-fill it. Recurring from level 8 onward (see the campaign). Since that color
-can only end in the tall flask, an ordinary flask full of it is not
-complete (nor sealed) while more of it is elsewhere.
+fill it. Recurring from level 8 onward (see the campaign). **Nothing ever
+comes out of a tall flask**: it is never the source of a pour. So it is
+for its color alone, and that color is known from the start: the flask
+starts with some of it and nothing else (no other liquid, no Drop, no
+smoke; validated), its glass is tinted with it, and it **takes only that
+color** (the Drop and quicksilver of another color are refused too; a tall
+athanor takes quicksilver only when its color is gold). A siphon's tap or
+an hourglass's flip would do nothing there, so a tall flask is never a
+siphon or an hourglass (validated), and the generator puts no body or
+vine root on one. Since the color can only end in the tall flask, an
+ordinary flask full of it is never complete (nor sealed): its liquid still
+has to be poured on.
 
 **Rime** (ice, was Frozen). Covered. Thaws after N pours made anywhere
 (timer -1 per pour). **Heat** takes one more off per pulse. When it reaches 0
@@ -152,17 +161,19 @@ It never joins a run (pouring it moves just itself). Any flask that accepts
 liquid accepts it whatever its top, and anything may be poured onto it. It
 breaks any Seal. It counts as any color for completion: a flask is complete
 when it's full and every non-Drop segment is one color. That color then has
-`cap - 1` real segments in the level.
+`CAP - 1` real segments in the level. It never goes into a tall flask
+(which takes only its own color), so the short color is never a tall
+flask's.
 
 **Catalyst** (fixture). When its flask is completed (once): every Brazier
 sends a heat pulse, every Hourglass flips, every Lantern lights.
 
 ### Order of effects in one pour
 
-1. Legality: the source can pour (has liquid, not done, no cover). The
-   destination accepts the color (no cover except Seal/key rules, no
-   salamander, body rules, room, top match). Siphon sources pour their
-   bottom run.
+1. Legality: the source can pour (has liquid, not done, no cover, not a
+   tall flask). The destination accepts the color (no cover except
+   Seal/key rules, no salamander, body rules, a tall flask's color, room,
+   top match). Siphon sources pour their bottom run.
 2. Move the liquid: seal break, quicksilver sinking, athanor transmutation,
    twin overflow.
 3. Clear murk on the new tops.
@@ -330,7 +341,7 @@ functions.
   and every part stays within its own column: what stands at a flask's foot
   (a brazier's bowl, roots, the hearth) fits in that gap and is drawn over
   the flasks, so every flask's rim and liquid stay in view. A tall flask
-  stands on the table with its last row. A lantern hangs on the side of its
+  stands on the table with its last row, its glass tinted with its color. A lantern hangs on the side of its
   rim that is free. A siphon isn't tipped to pour: it is held with its tap
   over the target and its bottom run drains. The rules don't change, and
   taps hit the drawn flask (the front one where two overlap).

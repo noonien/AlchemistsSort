@@ -776,8 +776,10 @@ fn draw_flask_squashed(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: fl
         l.misc.w = squash;
         out.push(l);
     }
-    // An athanor's glass is warmed by its hearth.
-    let tint = if b.body == Body.Athanor { float4 { 1.0, 0.8, 0.6, 1.0 } } else { float4 { 0.86, 0.92, 1.0, 1.0 } };
+    // An athanor's glass is warmed by its hearth; a tall flask's is tinted
+    // with the one color it takes.
+    var tint = if b.body == Body.Athanor { float4 { 1.0, 0.8, 0.6, 1.0 } } else { float4 { 0.86, 0.92, 1.0, 1.0 } };
+    if tall_color(b) > 0 { tint = mix4(tint, palette_color(tall_color(b), save.color_safe), 0.85); }
     var glass = inst(Shape.Glass, pos, half, tint);
     glass.misc.y = angle;
     glass.misc.z = 18.0;

@@ -270,7 +270,7 @@ fn test_tall() {
     check(is_complete(board_of(["RRRR"]).bottles[0]), "an ordinary flask is complete at four");
     var r = pour(b, 1, 2);
     check(r.ok && r.amount == 2 && b.bottles[2].n == 4 && !b.bottles[2].done, "four is not full in a tall flask");
-    check(can_pour(b, 2, 3), "it pours like any flask");
+    check(!can_pour_from(b.bottles[2]) && !can_pour(b, 2, 3), "nothing comes out of it");
     r = pour(b, 0, 1);
     r = pour(b, 0, 2);
     check(r.amount == 2 && b.bottles[2].done && is_won(b), "complete at its height");
@@ -283,6 +283,43 @@ fn test_tall() {
     c.bottles[2].key = 1;
     check(validate(c).len == 0, "and it can carry a cover");
 
+    test("a tall flask holds only its color");
+    fn tall_board(tall: const u8[:]) -> Board {
+        var x = board_of(["RRGG", "GGRR", tall, "", "BBBB"]);
+        x.bottles[2].cap = 6;
+        x
+    }
+    check(validate(tall_board("RR")).len == 0, "its own color");
+    check(validate(tall_board("RG")).len > 0, "no other color, which could never leave");
+    check(validate(tall_board("")).len > 0, "it starts with some of its color");
+    var m = tall_board("RR");
+    m.bottles[2].murk = 1;
+    check(validate(m).len > 0, "no smoke");
+    m = tall_board("RR");
+    m.bottles[2] = siphon(m.bottles[2]);
+    check(validate(m).len > 0, "not a siphon");
+    m = tall_board("RR");
+    m.bottles[2] = hourglass(m.bottles[2], 3);
+    check(validate(m).len > 0, "nor an hourglass");
+    m = tall_board("RR");
+    m.bottles[2] = seal(m.bottles[2], 'G');
+    check(validate(m).len == 0, "a seal over it is fine");
+    var o = board_of(["RRGQ", "GGRQ", "RRR", "QQ", "G", ""]);
+    o.bottles[2].cap = 6;
+    settle(o);
+    check(validate(o).len == 0 && !can_pour(o, 3, 2) && can_pour(o, 3, 5), "quicksilver doesn't sink into another color's");
+    var q = board_of(["QQ", "GGGG", "QQ", "", "QQQQQ"]);
+    q.bottles[4].cap = 9;
+    settle(q);
+    check(validate(q).len == 0 && can_pour(q, 0, 4), "but quicksilver can be its color");
+    var dr = board_of(["RRR*", "GGGG", "RR", ""]);
+    dr.bottles[2].cap = 6;
+    check(validate(dr).len > 0, "the Drop never goes in, so its color isn't the short one");
+    var dd = board_of(["RRRR", "GG*", "G", "RR", ""]);
+    dd.bottles[3].cap = 6;
+    settle(dd);
+    check(validate(dd).len == 0 && !can_pour(dd, 1, 3) && !dd.bottles[0].done, "and the Drop isn't taken");
+
     test("a tall flask's color in an ordinary flask");
     var d = board_of(["RRR", "GGGR", "G", ""]);
     push_bottle(d, tall_flask('R', 2));
@@ -291,7 +328,7 @@ fn test_tall() {
     check(validate(d).len == 0 && d.bottles[4].cap == 9, "nine reds for a two-row flask");
     r = pour(d, 1, 0);
     check(r.ok && d.bottles[0].n == 4 && !d.bottles[0].done && !r.completed, "four reds are not done while the tall flask needs more");
-    check(can_pour(d, 0, 4), "and pour on into it");
+    check(can_pour(d, 0, 4) && !can_pour(d, 1, 4), "and pour on into it, and nothing else does");
     check(solve(d, 20000, path).solved, "the solver fills it");
 }
 
@@ -541,8 +578,8 @@ fn test_drop() {
     check(validate(board_of(["RRRR", "GGGG", "*"])).len > 0, "but only then");
     check(validate(board_of(["RRR*", "GGG*", ""])).len > 0, "and one Drop at most");
     var t = board_of(["RRRR", "GG*", "GG"]);
-    t.bottles[1].cap = 5;
-    check(validate(t).len == 0, "a tall color can be the short one");
+    t.bottles[2].cap = 5;
+    check(validate(t).len > 0, "but never a tall flask's color: the Drop can't go in there");
 }
 
 fn test_catalyst() {
@@ -1143,7 +1180,11 @@ fn test_explain() {
     let tall = hand_made(3).board;
     var t = -1;
     for i in tall.count { if tall.bottles[i].cap > CAP { t = i; } }
-    check(card_says(explain_flask(tall, t), "Tall Flask: holds 9. All the Violet ends up here"), "the tall flask's color");
+    check(card_says(explain_flask(tall, t), "Tall Flask: holds 9. Only Violet goes in, and nothing comes out"), "the tall flask's color");
+    check(refusal(tall, -1, t) == "Nothing comes out of a tall flask. It only takes Violet.", "tapping it first");
+    var f0 = -1;
+    for i in tall.count { if can_pour(tall, i, 5) && pour_color(tall.bottles[i]) != color_of_letter('V') { f0 = i; } }
+    check(f0 >= 0 && refusal(tall, f0, t) == "This tall flask only takes Violet.", "pouring another color in");
 
     test("a flask's card: vine");
     b = row_of(["R", "GG", "B", "RRBB", ""]);

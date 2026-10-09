@@ -137,21 +137,6 @@ fn beside_with(board: Board, i: i64, f: Fixture) -> i64[..6] {
     out
 }
 
-// The color a tall flask is there to hold: the one with as much liquid as
-// it holds (or one less, with the Drop), else 0.
-fn tall_color(board: Board, i: i64) -> i64 {
-    let cap: i64 = board.bottles[i].cap;
-    var tally: i64[MAX_LIQUID + 1] = [0; MAX_LIQUID + 1];
-    for j in board.count {
-        let b = board.bottles[j];
-        for k in b.n as i64 { tally[b.seg[k]]++; }
-    }
-    if has_body(board, Body.Athanor) { tally[GOLD] += tally[QUICKSILVER]; }
-    for c in 1..DROP { if tally[c] == cap { return c; } }
-    for c in 1..DROP { if tally[c] == cap - 1 && tally[DROP] > 0 { return c; } }
-    0
-}
-
 // The flask a creeping vine at `root` grows over next, or -1: its spread
 // tried on a copy.
 fn next_tendril(board: Board, root: i64) -> i64 {
@@ -231,6 +216,7 @@ fn refusal(board: Board, from: i64, to: i64) -> u8[>..] {
     if from < 0 || from == to {
         if b.done { return str("That flask is complete and sealed."); }
         if covered(b) { return cover_reason(board, to); }
+        if b.cap > CAP { return str("Nothing comes out of a tall flask. It only takes ", color_name(tall_color(b)), "."); }
         return str("");
     }
     let color = pour_color(board.bottles[from]);
@@ -240,6 +226,7 @@ fn refusal(board: Board, from: i64, to: i64) -> u8[>..] {
     if to == board.salamander { return str("The Salamander is on that flask: nothing goes in until it hops off."); }
     if b.body == Body.Moonpetal && !any_lantern_lit(board) { return str("A Moonpetal takes liquid only once a lantern is lit."); }
     if b.n >= b.cap { return str("That flask is full."); }
+    if b.cap > CAP { return str("This tall flask only takes ", color_name(tall_color(b)), "."); }
     if b.body == Body.Vow && b.vow != 0 && color != b.vow && color != DROP {
         return str("This Vow Flask only takes ", color_name(b.vow), ".");
     }
@@ -355,9 +342,7 @@ fn explain_flask(board_in: Board, i: i64) -> Card {
         Plain => {},
     }
     if b.cap > CAP && !b.done {
-        let c = tall_color(board, i);
-        if c > 0 { line(LineKind.State, str("Tall Flask: holds ", b.cap, ". All the ", color_name(c), " ends up here.")); }
-        else { line(LineKind.State, str("Tall Flask: holds ", b.cap, ", all of one color.")); }
+        line(LineKind.State, str("Tall Flask: holds ", b.cap, ". Only ", color_name(tall_color(b)), " goes in, and nothing comes out."));
     }
 
     // What stands by it.
@@ -503,7 +488,7 @@ fn rule_of(f: Feature) -> const u8[:] {
     match f {
         Murk => "Smoke hides layers. Each clears when it reaches the top, or when a lit lantern's light reaches its flask.",
         Seal => "Wax hides what's inside. Pour its color onto it to break it; two warmings break it too.",
-        Tall => "Holds more than four. All of one color has to end up in it.",
+        Tall => "Holds more than four, all of its own color: only that color goes in, and nothing comes out.",
         Vow => "Takes the first color poured in, then only that, and must end full.",
         Rime => "Ice keeps a flask shut. Its number counts down with every pour, made anywhere; at 0 it thaws.",
         Brazier => "Each pour into its flask warms the flasks beside it.",

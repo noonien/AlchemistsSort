@@ -86,7 +86,9 @@ modifier is taught in its own hand-made tutorial, then shows up in every
 level until the next tutorial, alongside one or two from earlier chapters.
 Smoke is the background of every level from 3 on, and from level 12 every
 fourth level has a Tall Flask, spanning two rows of the grid the flasks
-stand in (three on Hard levels). The rules of every modifier, and how they meet
+stand in (three on Hard levels). A tall flask is for one color, tinted on its
+glass: it comes with some of that color, takes only that color, and nothing
+ever comes out of it. The rules of every modifier, and how they meet
 through heat, light, flow, flip, growth and transmutation, are in
 [docs/revamp.md](docs/revamp.md).
 
