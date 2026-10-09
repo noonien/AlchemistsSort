@@ -70,9 +70,12 @@ enum Shape {
                 // 1 a banner, 2 a slot sunk in, 3 a panel), hover 0..1 (-1: disabled), rim width, pressed
     Bezel,      // a round widget: p0: style (0 enamel in a gilt ring, 1 a gilt bead), hover 0..1
                 // (-1: disabled), rim width, pressed; color: the enamel
+    Goose,      // the title screen's goose; p0: facing (-1..1), walk phase, neck (-1 forward..1 up),
+                // look 0..1; p1: beak open, wings spread, blink, hidden below this y (in its units);
+                // color.x: fluffed up 0..1
 }
 
-const SHAPES = 52;
+const SHAPES = 53;
 let ALL_SHAPES: const Shape[SHAPES] = [
     Shape.Rect, Shape.Glow, Shape.FlaskBack, Shape.Liquid, Shape.Glass, Shape.Stream, Shape.Symbol,
     Shape.Spark, Shape.Ice, Shape.Cloth, Shape.Wax, Shape.Vines, Shape.Tap, Shape.Lantern, Shape.Wood,
@@ -81,7 +84,7 @@ let ALL_SHAPES: const Shape[SHAPES] = [
     Shape.Frame, Shape.Dial, Shape.Furnace, Shape.Bloom, Shape.Brazier, Shape.Roots, Shape.Door,
     Shape.Salamander, Shape.Heat, Shape.Shard, Shape.Key,
     Shape.Sanctum, Shape.Astrolabe, Shape.Wisp, Shape.Flourish, Shape.Parchment, Shape.Medallion, Shape.GildPath,
-    Shape.Plinth, Shape.Plate, Shape.Bezel,
+    Shape.Plinth, Shape.Plate, Shape.Bezel, Shape.Goose,
 ];
 
 fn shape_index(s: Shape) -> i64 {
@@ -93,7 +96,7 @@ fn shape_index(s: Shape) -> i64 {
         Vial => 28, Smoke => 29, Ribbon => 30, Frame => 31, Dial => 32, Furnace => 33, Bloom => 34,
         Brazier => 35, Roots => 36, Door => 37, Salamander => 38, Heat => 39, Shard => 40, Key => 41,
         Sanctum => 42, Astrolabe => 43, Wisp => 44, Flourish => 45, Parchment => 46, Medallion => 47,
-        GildPath => 48, Plinth => 49, Plate => 50, Bezel => 51,
+        GildPath => 48, Plinth => 49, Plate => 50, Bezel => 51, Goose => 52,
     }
 }
 
@@ -115,6 +118,7 @@ fn shape_define(s: Shape) -> const u8[:] {
         Sanctum => "SHAPE_SANCTUM", Astrolabe => "SHAPE_ASTROLABE", Wisp => "SHAPE_WISP",
         Flourish => "SHAPE_FLOURISH", Parchment => "SHAPE_PARCHMENT", Medallion => "SHAPE_MEDALLION",
         GildPath => "SHAPE_GILDPATH", Plinth => "SHAPE_PLINTH", Plate => "SHAPE_PLATE", Bezel => "SHAPE_BEZEL",
+        Goose => "SHAPE_GOOSE",
     }
 }
 
@@ -176,7 +180,8 @@ fn shape_program(s: Shape) -> Program {
     match s {
         Rect, Glow, Spark, Ring => Program.Any,
         Plate, Bezel, Icon, Ink => Program.Ui,
-        Sanctum, Astrolabe, Wisp, Flourish, Alembic, Steam, Parchment, Medallion, GildPath, Pebble => Program.Title,
+        Sanctum, Astrolabe, Wisp, Flourish, Alembic, Steam, Parchment, Medallion, GildPath, Pebble,
+        Goose => Program.Title,
         FlaskBack, Liquid, Glass, Stream, Symbol, Seal, Label, Wood, Candle, Vial, Plinth, Smoke, Shard,
         Beam => Program.Board,
         Wax, Ribbon, Ice, Brazier, Tap, Key, Door, Cloth => Program.Cellar,
@@ -308,6 +313,7 @@ let FRAGMENT_SHADER = """
     #define SHAPE_PLINTH 49
     #define SHAPE_PLATE 50
     #define SHAPE_BEZEL 51
+    #define SHAPE_GOOSE 52
     #define ICON_UNDO 0
     #define ICON_RESTART 1
     #define ICON_SHUFFLE 2
@@ -2082,6 +2088,149 @@ let FRAGMENT_SHADER = """
     }
     #endif
 
+    #ifdef PROGRAM_TITLE
+    // --- the goose ----------------------------------------------------------------
+    // The title screen's goose (SHAPE_GOOSE), in profile facing +x, in units
+    // of its size with its feet at y 0.92 (y down). Its neck is a thick,
+    // nearly straight sweep from the breast to the head, bowed a little:
+    // upright with a slight lean forward, stretched up to honk (n 1), or
+    // out low and level to charge (n -1), its beak at what it charges.
+    void goose_neck(float n, out vec2 base, out vec2 bend, out vec2 head) {
+        float up = max(n, 0.0);
+        float fwd = max(-n, 0.0);
+        base = vec2(0.16, 0.3) + fwd * vec2(0.1, -0.02);
+        head = vec2(0.36, -0.46) + up * vec2(-0.04, -0.24) + fwd * vec2(0.56, 0.52);
+        vec2 dir = normalize(head - base);
+        bend = mix(base, head, 0.55) + vec2(dir.y, -dir.x) * 0.05;
+    }
+    // A capsule from a to b whose radius goes from ra to rb.
+    float goose_taper(vec2 p, vec2 a, vec2 b, float ra, float rb) {
+        vec2 pa = p - a;
+        vec2 ba = b - a;
+        float k = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+        return length(pa - ba * k) - mix(ra, rb, k);
+    }
+    // Body, tail, breast, neck and head, as one soft silhouette; fluffed up
+    // 0..1, it is rounder and its outline ruffled.
+    float goose_shape(vec2 b, vec2 base, vec2 bend, vec2 head, float fluff) {
+        float d = sd_ellipse(b - vec2(-0.06, 0.38), vec2(0.5, 0.28) + 0.05 * fluff);
+        d = smin(d, goose_taper(b, vec2(-0.3, 0.32), vec2(-0.72, 0.14 - 0.06 * fluff), 0.13, 0.025), 0.12);
+        d = smin(d, length(b - vec2(0.2, 0.43)) - 0.23 - 0.03 * fluff, 0.12);
+        d += fluff * 0.007 * sin(atan(b.y - 0.38, b.x + 0.06) * 22.0);
+        // The neck rises out of the breast, nearly as thick as the head at the top.
+        // (sd_bezier works in pixels: at this scale it would take it as straight.)
+        vec2 nz = sd_bezier(b * 100.0, base * 100.0, bend * 100.0, (head + vec2(-0.04, 0.03)) * 100.0);
+        d = smin(d, nz.x * 0.01 - mix(0.15, 0.09, nz.y), 0.13);
+        return smin(d, sd_ellipse(b - head - vec2(0.01, 0.0), vec2(0.15, 0.12)), 0.045);
+    }
+    // A wing from its shoulder at sh, folded along the side or, as fl goes
+    // to 1, raised up and out and spread wide like a cape: its distance,
+    // and w, the point in the wing's own frame (along it toward its tip at -x).
+    float goose_wing(vec2 b, vec2 sh, float fl, float turn, out vec2 w) {
+        w = rot(-turn * fl) * (b - sh);
+        w /= vec2(1.0 + 0.7 * fl, 1.0 + 1.3 * fl);
+        float d = smin(sd_ellipse(w - vec2(-0.3, 0.04), vec2(0.36, 0.14)),
+                       goose_taper(w, vec2(-0.36, 0.06), vec2(-0.76, -0.03), 0.09, 0.015), 0.1);
+        // Spread, its long feathers fan out at the tip and the trailing edge.
+        float fan = smoothstep(-0.2, -0.55, w.x) * smoothstep(-0.06, 0.1, w.y);
+        return d + fl * 0.035 * fan * max(sin(atan(w.y + 0.3, w.x + 0.1) * 26.0), 0.0);
+    }
+    // White feathers in rows, each edged with the faintest grey.
+    vec3 goose_feathers(vec2 w) {
+        float row = fract(-w.x * 5.5 + 0.3 * w.y * 5.0);
+        float k = smoothstep(0.75, 1.0, row) * smoothstep(-0.05, -0.2, w.x);
+        return vec3(0.99, 0.98, 0.96) * (1.0 - 0.1 * k) * (0.95 + 0.05 * clamp(-w.y / 0.14 + 0.5, 0.0, 1.0));
+    }
+    // Color c over what is there, d (in pixels) inside its edge, with a fine
+    // line of ink round it as in a storybook.
+    vec4 goose_ink(vec4 under, vec3 c, float d) {
+        return over(over(under, vec3(0.17, 0.1, 0.07), fill_aa(d)), c, fill_aa(d + 1.2));
+    }
+    // The goose, u pixels to its unit. pose: facing (its sign the way it
+    // faces, smaller while it turns), the walk's phase (radians; PI/2 standing),
+    // neck, look 0..1 (its head turned to us); more: beak open 0..1, wings
+    // spread 0..1, blink 0..1, and the line below which it is hidden behind
+    // the bench (in units); fluff 0..1.
+    vec4 goose(vec2 p, float u, vec4 pose, vec4 more, float fluff) {
+        float f = pose.x < 0.0 ? min(pose.x, -0.03) : max(pose.x, 0.03);
+        vec2 q = vec2(p.x / f, p.y) / u;
+        if (q.y > more.w + 0.05 || length(q - vec2(0.1, -0.1)) > 1.5) return vec4(0.0);
+        float phase = pose.y;
+        float lk = pose.w;
+        // The body bobs up at each step and rocks over its feet.
+        float bob = 0.035 * (1.0 - abs(sin(phase)));
+        vec2 b = rot(0.06 * cos(phase)) * (q - vec2(0.0, 0.92)) + vec2(0.0, 0.92 + bob);
+        vec3 warm = mix(vec3(1.0), light.rgb, 0.12);
+        vec4 res = vec4(0.0);
+        // The legs, the far one darker: each foot swings forward lifted
+        // and pushes back flat.
+        for (int k = 0; k < 2; k++) {
+            float ph = phase + 3.14159265 * float(k);
+            vec2 hip = vec2(0.04 - 0.05 * float(k), 0.58 - bob);
+            vec2 ankle = vec2(0.02 + 0.15 * sin(ph), 0.84 - 0.08 * max(cos(ph), 0.0));
+            float leg = goose_taper(q, hip, ankle, 0.04, 0.03);
+            float foot = sd_triangle(q - ankle, vec2(-0.05, 0.06), vec2(0.19, 0.065), vec2(0.0, -0.02)) - 0.02;
+            res = goose_ink(res, vec3(0.98, 0.5, 0.12) * warm * (k == 0 ? 0.68 : 1.0), min(leg, foot) * u);
+        }
+        // The far wing shows behind its back only as it spreads or fluffs.
+        float fl = max(more.y, 0.18 * fluff);
+        vec2 w;
+        if (fl > 0.02) {
+            float far = goose_wing(b, vec2(0.08, 0.2), fl, 1.4, w);
+            res = goose_ink(res, goose_feathers(w) * warm * 0.8, far * u);
+        }
+        // White, rounded by the light from the bench's middle, warm at its
+        // edge, a soft shade under the belly and a light grey under the wing.
+        vec2 base;
+        vec2 bend;
+        vec2 head;
+        goose_neck(pose.z, base, bend, head);
+        float d = goose_shape(b, base, bend, head, fluff);
+        if (d * u < 1.5) {
+            vec2 g = vec2(goose_shape(b + vec2(0.01, 0.0), base, bend, head, fluff),
+                          goose_shape(b + vec2(0.0, 0.01), base, bend, head, fluff)) - d;
+            vec2 n = g / max(length(g), 1e-5);
+            float edge = 1.0 - smoothstep(0.0, 0.18, -d);
+            float lit = dot(n, normalize(vec2(-0.8 * sign(f), -0.6))) * edge;
+            vec3 c = vec3(1.0, 0.99, 0.97) * (0.93 + 0.08 * lit) * (1.0 - 0.12 * smoothstep(0.45, 0.68, b.y));
+            vec2 ws;
+            float under = goose_wing(b - vec2(0.0, 0.045), vec2(0.16, 0.24), fl, 0.75, ws);
+            c = mix(c, vec3(0.84, 0.84, 0.86), 0.6 * (1.0 - smoothstep(-0.02, 0.05, under)) * (1.0 - fl));
+            c = c * warm + light.rgb * vec3(1.0, 0.8, 0.55) * max(lit, 0.0) * 0.12;
+            res = goose_ink(res, c, d * u);
+        }
+        // The near wing, folded along its side, or raised and spread wide.
+        float wing = goose_wing(b, vec2(0.16, 0.24), fl, 0.75, w);
+        res = goose_ink(res, goose_feathers(w) * warm, wing * u);
+        // The beak, its mouth showing as it opens: in profile, or shorter
+        // and turned down when the head turns to us.
+        vec2 bb = head + mix(vec2(0.11, 0.03), vec2(0.0, 0.06), lk);
+        vec2 dir = normalize(mix(vec2(1.0, 0.12), vec2(0.15, 1.0), lk));
+        vec2 nrm = vec2(-dir.y, dir.x);
+        float len = mix(0.21, 0.1, lk);
+        float o = more.x;
+        vec2 up = bb + len * (dir * cos(o * 0.32) - nrm * sin(o * 0.32));
+        vec2 lo = bb + nrm * 0.02 + len * 0.86 * (dir * cos(o * 0.5) + nrm * sin(o * 0.5));
+        float mouth = sd_triangle(b, bb, up, lo) - 0.01;
+        res = over(res, vec3(0.35, 0.07, 0.06), fill_aa(mouth * u) * smoothstep(0.05, 0.3, o));
+        vec3 bc = vec3(1.0, 0.55, 0.12) * warm;
+        res = goose_ink(res, bc * 0.85, goose_taper(b, bb + nrm * 0.02, lo, 0.042, 0.014) * u);
+        float nail = smoothstep(0.75, 0.95, dot(b - bb, dir) / len);
+        res = goose_ink(res, mix(bc, vec3(1.0, 0.86, 0.66), nail * 0.7), goose_taper(b, bb, up, 0.056, 0.016) * u);
+        // Its eyes: one in profile, both when it looks at us; a blink shuts them.
+        for (int k = 0; k < 2; k++) {
+            vec2 ec = head + (k == 0 ? vec2(mix(0.045, 0.06, lk), -0.035) : vec2(-0.06, -0.035));
+            float show = k == 0 ? 1.0 : smoothstep(0.4, 0.9, lk);
+            vec2 eq = (b - ec) / vec2(1.0, max(1.0 - more.z, 0.12));
+            res = over(res, vec3(0.08, 0.05, 0.04), fill_aa((length(eq) - 0.032) * u) * show);
+            res = over(res, vec3(1.0), fill_aa((length(b - ec - vec2(0.01, -0.012)) - 0.011) * u) * show * (1.0 - more.z));
+        }
+        // Behind the bench, below its edge.
+        res.a *= fill_aa((q.y - more.w) * u);
+        return res;
+    }
+    #endif
+
     void main() {
         int kind = int(v_misc.x + 0.5);
         vec2 p = v_local;
@@ -3400,6 +3549,11 @@ let FRAGMENT_SHADER = """
             float vig = smoothstep(1.2, 0.3, length((cv / vec2(540.0, 960.0) - 0.5) * vec2(1.3, 1.0)));
             c *= mix(0.5, 1.0, vig);
             col = vec4(c, 1.0);
+    #endif
+    #ifdef PROGRAM_TITLE
+        } else if (kind == SHAPE_GOOSE) {               // the title screen's goose
+            col = goose(p, h.x / 1.6, v_p0, v_p1, v_color.x);
+            col.a *= v_color.a;
     #endif
         }
         if (col.a <= 0.001) discard;
