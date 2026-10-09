@@ -2,8 +2,9 @@
 // title screen and the map (tracks.goose). A track plays through, rests a
 // few seconds and plays again from the top. A change of room or screen
 // crossfades to the new track; Settings has a switch for the music and a
-// slider for its level, and either one off or at 0 stops it. The player (src/c/stream.h) decodes and mixes a
-// little ahead each frame, so no track is ever held whole.
+// slider for its level, and either one off or at 0 stops it at once. The
+// player (src/c/stream.h) decodes and mixes a little ahead each frame, so
+// no track is ever held whole.
 
 import std;
 import math;
@@ -12,6 +13,7 @@ import .sfx;
 import .tracks;
 
 let CROSSFADE: f64 = 3.0;       // seconds
+let SWITCH_FADE: f64 = 0.03;    // seconds: the switch is heard at once, but without a click
 let REST: f64 = 3.0;            // seconds of silence before a track plays again
 
 extern "alch_music_open" fn music_open() -> bool;
@@ -23,6 +25,7 @@ extern "alch_music_pump" fn music_pump(dt: f64);
 var music_ready = false;        // set when audio is on and the player is open
 var music_level = MUSIC_DEFAULT;    // the slider, percent
 var music_on = true;            // the switch
+var music_heard = -1;           // whether it was on last frame: 1, 0, or -1 before the first
 var music_dir: u8[>..];
 var music_now = -1;             // the track playing, or -1
 var music_player = -1;          // its player
@@ -35,12 +38,17 @@ fn init_music(dir: const u8[:]) {
     music_ready = sound_ready && music_open();
 }
 
-// Once a frame: plays `track`, crossfading from what played before.
+// Once a frame: plays `track`, crossfading from what played before. The
+// switch (or the slider to 0 and back) cuts the music or brings it in at once.
 fn step_music(track: i64, dt: f64) {
     if !music_ready { return; }
-    let want = if music_on && music_level > 0 { track } else { -1 };
+    let heard = music_on && music_level > 0;
+    let switched = music_heard >= 0 && heard != (music_heard == 1);
+    music_heard = if heard { 1 } else { 0 };
+    let fade = if switched { SWITCH_FADE } else { CROSSFADE };
+    let want = if heard { track } else { -1 };
     if want != music_now {
-        if music_player >= 0 { music_fade(music_player, 0.0, CROSSFADE, true); }
+        if music_player >= 0 { music_fade(music_player, 0.0, fade, true); }
         music_player = -1;
         music_now = want;
         if want >= 0 {
@@ -49,7 +57,7 @@ fn step_music(track: i64, dt: f64) {
                 music_player = music_start(music_bytes, REST);
                 // Every player busy fading: try again next frame.
                 if music_player < 0 { music_now = -2; }
-                else { music_fade(music_player, 1.0, CROSSFADE, false); }
+                else { music_fade(music_player, 1.0, fade, false); }
             }
         }
     }

@@ -4,3 +4,6 @@ result-*
 .claude/
 # The music as it was generated; assets/music/prepare.py makes the .ogg files from it.
 assets/music/*.m4a
+
+# Studying other sort games on a phone (adb, scrcpy): captures, APKs, notes. Never committed.
+/study/
