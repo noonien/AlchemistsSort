@@ -13,7 +13,7 @@ nix run . -- --level 26                   # jump to a campaign level
 nix run . -- --seed 4242 --like 30        # the board brewed from a seed
 nix run . -- --hand 8                     # built-in hand-made level 8 of 0-24 (src/core/levels.goose)
 nix run . -- --autoplay                   # watch the hint solver play
-nix run . -- --size 900 1600               # a bigger window (it remembers the size you leave it)
+nix run . -- --size 900 1600              # a bigger window (it remembers the size you leave it)
 nix run . -- --export-music out           # write each room's music loop to out/*.wav
 nix flake check                           # unit tests
 ```
