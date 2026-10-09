@@ -199,18 +199,42 @@ fn entry_flask(e: Entry) -> i64 {
     e.flasks[0]
 }
 
+// A flask from the board as an entry's picture shows it: without a cover
+// another entry is about (a curtain over the smoke it hides), and a key in
+// view.
+fn picture_flask(b: Bottle, f: Feature) -> Bottle {
+    var x = b;
+    let own = match x.cover {
+        Seal => f == Feature.Seal, Rime => f == Feature.Rime, Shroud => f == Feature.Shroud,
+        Vine => f == Feature.Vine, Curtain => f == Feature.Curtain, None => true,
+    };
+    if !own { x.cover = Cover.None; }
+    x.behind = false;
+    if f == Feature.Keys {
+        let k = key_segment(x);
+        if k >= 0 { x.murk = ((x.murk as i64) & ~(1 << k)) as u16; }
+    }
+    x
+}
+
 // The modifier on a small flask from the board, standing on `foot`.
 fn draw_entry_picture(out: Inst[>..]&, e: Entry, foot: float2) {
     let i = entry_flask(e);
     if i < 0 || i >= shown.count { return; }
-    let b = shown.bottles[i];
+    let b = picture_flask(shown.bottles[i], e.feature);
     // A lantern stands over its flask, under the rule above: the flask is
     // smaller to leave it room.
     var hx: f32 = min(14.0, 84.0 / (b.cap * SEGMENT + FLASK_EXTRA));
     if b.fixture == Fixture.Lantern { hx = min(hx, 76.0 / (b.cap * SEGMENT + FLASK_EXTRA + 1.5)); }
     parts_layer = 1;
     let half = bottle_half(hx, b.cap);
-    var a = flask_anchors(v2(foot.x, foot.y - half.y), half, 0.0, 1.0);
+    var at_x = foot.x;
+    if e.feature == Feature.Keys && b.key_color != KeyColor.None {
+        // The key's flask before the door of its metal.
+        draw_door(out, v2(foot.x + 2.0, foot.y - 60.0), v2(foot.x + 41.0, foot.y), b.key_color, 0.0, 0.0);
+        at_x = foot.x - 14.0;
+    }
+    var a = flask_anchors(v2(at_x, foot.y - half.y), half, 0.0, 1.0);
     a.room = (at(a, a.rim).y - (foot.y - 76.0)) / hx;
     draw_stand_back(out, i, b, a, StandLook {});
     draw_flask(out, i, b, a.center, a.half, 0.0, b.n, 0.0, 0.0, gold(1.0), true);

@@ -816,7 +816,7 @@ fn draw_flask_drained(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: flo
         let murk: f32 = if sealed { (1 << b.cap) - 1 } else { b.murk };
         out.push(liquid_inst(i, b, pos, half, angle, fill, murk, wave, drain, false));
         // A key shows through the liquid, but not through smoke.
-        if overlays && angle == 0.0 && drain == 0.0 { draw_flask_key(out, b, a); }
+        draw_flask_key(out, b, a, drain, false, save.color_safe);
     }
     flask_glass(out, i, b, pos, half, angle, 1.0, glow_amount, glow_color);
     draw_body(out, i, b, a, open, save.color_safe);
@@ -824,12 +824,23 @@ fn draw_flask_drained(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: flo
 
     // Color-blind symbols on what is in view, and "?" on murk in that mode.
     if !shrouded && !sealed && save.color_safe {
+        let key = if b.key_color != KeyColor.None { key_segment(b) } else { -1 };
         for k in b.n as i64 {
-            let c = at(a, segment_center(half, k));
+            var c = at(a, segment_center(half, k));
+            var r = half.x * 0.42;
             if murky(b, k) {
                 text(parts_layer, c.x, c.y, "?", TextStyle.Small, white(0.55), Align.Center);
             } else {
-                var s = inst(Shape.Symbol, c, v2(half.x * 0.42, half.x * 0.42), white(0.95));
+                // The key's layer leaves the key in view: its symbol shows on the
+                // rest of its run, or small at the side.
+                if k == key {
+                    let alone = (k == 0 || b.seg[k - 1] != b.seg[k] || murky(b, k - 1)) &&
+                                (k + 1 >= b.n || b.seg[k + 1] != b.seg[k] || murky(b, k + 1));
+                    if !alone { continue; }
+                    r = half.x * 0.24;
+                    c = c + v2(half.x * 0.5, -half.x * 0.24);
+                }
+                var s = inst(Shape.Symbol, c, v2(r, r), white(0.95));
                 s.p0 = float4 { b.seg[k], 0.0, 0.0, 0.0 };
                 out.push(s);
             }
@@ -897,7 +908,7 @@ fn draw_board(out: Inst[>..]&) {
     for d in shown.door_count {
         if shown.doors[d].open { continue; }
         let lo, hi = door_box(d);
-        if lo.x < hi.x { draw_door(out, lo, hi, shown.doors[d].color, 0.0); }
+        if lo.x < hi.x { draw_door(out, lo, hi, shown.doors[d].color, 0.0, 0.0); }
     }
     // Back to front: what stands behind each flask, and the flask. What
     // stands in front of them goes over them all, since a row's foot is
@@ -910,12 +921,12 @@ fn draw_board(out: Inst[>..]&) {
     for i in drawing {
         if i < shown.count && !shown.bottles[i].behind { draw_stand_front(out, i, shown.bottles[i], stand_anchors(i), stand_look(i)); }
     }
-    // Doors lifting away as they open, over the flasks they let out.
+    // Doors swinging open, over the flasks they let out.
     for d in shown.door_count {
-        let up = door_opening(d);
-        if up < 0.0 { continue; }
+        let k = door_opening(d);
+        if k < 0.0 { continue; }
         let lo, hi = door_box(d);
-        if lo.x < hi.x { draw_door(out, lo, hi, shown.doors[d].color, up); }
+        if lo.x < hi.x { draw_door(out, lo, hi, shown.doors[d].color, door_swing(k), door_fade(k)); }
     }
     for i in drawing {
         if i < shown.count && turning[i] { draw_turning(motion, i, flip_pose(i)); }
@@ -1125,7 +1136,10 @@ fn draw_turning(out: Inst[>..]&, i: i64, f: FlipPose) {
     if over < 1.0 { flask_back(out, pos, half, f.turn, 1.0 - over); }
     if over > 0.0 { flask_back(out, pos, half, back_turn, over); }
     if f.turn < PI * 0.5 {
-        if b.n > 0 { out.push(liquid_inst(i, b, pos, half, f.turn, b.n, b.murk, 0.0, 0.0, true)); }
+        if b.n > 0 {
+            out.push(liquid_inst(i, b, pos, half, f.turn, b.n, b.murk, 0.0, 0.0, true));
+            draw_flask_key(out, b, flask_anchors(pos, half, f.turn, 1.0), 0.0, true, save.color_safe);
+        }
     } else if b.n > 0 {
         let fill = f.stack.n + f.lift;
         out.push(liquid_inst(i, f.stack, pos, half, back_turn, fill, f.stack.murk, 0.0, -f.lift, true));
@@ -1133,6 +1147,15 @@ fn draw_turning(out: Inst[>..]&, i: i64, f: FlipPose) {
             var l = liquid_inst(i, f.next, pos, half, back_turn, fill, f.next.murk, 0.0, -f.lift, true);
             l.color.w = f.fade;
             out.push(l);
+        }
+        // The key goes over with its layer, and down a step with it.
+        let ka = flask_anchors(pos, half, back_turn, 1.0);
+        let k0 = key_segment(f.stack);
+        let k1 = key_segment(f.next);
+        if f.fade > 0.0 && k0 >= 0 && k1 >= 0 && k0 != k1 {
+            draw_flask_key(out, f.stack, ka, -f.lift + (k0 - k1) * f.fade, true, save.color_safe);
+        } else {
+            draw_flask_key(out, if f.fade > 0.5 { f.next } else { f.stack }, ka, -f.lift, true, save.color_safe);
         }
     }
     if over < 1.0 { flask_glass(out, i, b, pos, half, f.turn, 1.0 - over, 0.0, gold(1.0)); }
@@ -1196,7 +1219,23 @@ fn draw_intro_picture(out: Inst[>..]&, foot: float2) {
     glow(out, foot - v2(0.0, 50.0), v2(110.0, 90.0), 1.0, float4 { 1.0, 0.8, 0.45, 0.18 });
     parts_layer = 1;
     let half = bottle_half(hx, b.cap);
-    let a = flask_anchors(v2(foot.x, foot.y - half.y), half, 0.0, 1.0);
+    var x = foot.x;
+    if rank == 9 {
+        // The key's flask, and the door of its metal it opens.
+        x -= hx * 1.6;
+        draw_door(out, v2(foot.x - hx * 0.2, foot.y - hx * 4.6), v2(foot.x + hx * 3.4, foot.y), b.key_color, 0.0, 0.0);
+    }
+    let a = flask_anchors(v2(x, foot.y - half.y), half, 0.0, 1.0);
+    if rank == 10 {
+        // A flask of the badge's color, completed, and its ribbon to the badge.
+        var done = Bottle { n: CAP as u8, cap: CAP as u8, done: true };
+        for k in CAP { done.seg[k] = b.badge as u8; }
+        let dc = v2(foot.x - hx * 3.4, foot.y - half.y);
+        draw_flask(out, -1, done, dc, half, 0.0, CAP, 0.0, 0.6, palette_color(b.badge, save.color_safe), false);
+        let bp = badge_at(a);
+        curve(out, Shape.Beam, dc, v2((dc.x + bp.x) * 0.5, min(dc.y, bp.y) - hx * 2.0), bp, hx * 0.2, 1.0,
+              with_alpha(palette_color(b.badge, save.color_safe), 0.7));
+    }
     draw_stand_back(out, best, b, a, StandLook {});
     draw_flask(out, best, b, a.center, a.half, 0.0, b.n, 0.0, 0.0, gold(1.0), true);
     draw_stand_front(out, best, b, a, StandLook {});

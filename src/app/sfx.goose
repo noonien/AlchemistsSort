@@ -9,23 +9,26 @@ import audio;
 enum Sfx {
     Select, Deselect, Pour, Denied, Complete, Win, Pop, Ice, Reveal, Tool, Lose, Bell, Swish,
     Sizzle, Crack, Chime, Whoosh, Rustle, Chirp, Gong,      // the forces
+    Jingle, Clunk, Creak, Drape,                            // keys, locks, doors and curtains
 }
 
-let ALL_SFX: const Sfx[20] = [Sfx.Select, Sfx.Deselect, Sfx.Pour, Sfx.Denied, Sfx.Complete, Sfx.Win,
+let ALL_SFX: const Sfx[24] = [Sfx.Select, Sfx.Deselect, Sfx.Pour, Sfx.Denied, Sfx.Complete, Sfx.Win,
                               Sfx.Pop, Sfx.Ice, Sfx.Reveal, Sfx.Tool, Sfx.Lose, Sfx.Bell, Sfx.Swish,
-                              Sfx.Sizzle, Sfx.Crack, Sfx.Chime, Sfx.Whoosh, Sfx.Rustle, Sfx.Chirp, Sfx.Gong];
+                              Sfx.Sizzle, Sfx.Crack, Sfx.Chime, Sfx.Whoosh, Sfx.Rustle, Sfx.Chirp, Sfx.Gong,
+                              Sfx.Jingle, Sfx.Clunk, Sfx.Creak, Sfx.Drape];
 
 fn sfx_index(s: Sfx) -> i64 {
     match s {
         Select => 0, Deselect => 1, Pour => 2, Denied => 3, Complete => 4, Win => 5, Pop => 6,
         Ice => 7, Reveal => 8, Tool => 9, Lose => 10, Bell => 11, Swish => 12, Sizzle => 13, Crack => 14,
-        Chime => 15, Whoosh => 16, Rustle => 17, Chirp => 18, Gong => 19,
+        Chime => 15, Whoosh => 16, Rustle => 17, Chirp => 18, Gong => 19, Jingle => 20, Clunk => 21,
+        Creak => 22, Drape => 23,
     }
 }
 
 let RATE = 44100;
 
-var sounds: audio::Sound[20];
+var sounds: audio::Sound[24];
 var sound_ready = false;
 var sound_on = true;
 
@@ -204,6 +207,58 @@ fn init_sounds() {
                     for k in 5 { v += sin(TAU * 110.0 * partials[k] * t) * amps[k] * exp(-t * (1.6 + k * 0.9)); }
                     pcm.push((v * min(1.0, t * 200.0) * 0.6) as f32);
                 }
+            },
+            Jingle => {
+                // A key coming free: small bright pings of metal, inharmonic,
+                // tumbling over one another.
+                let pings: f64[4] = [2637.0, 3520.0, 2960.0, 3951.0];
+                for f, k in pings {
+                    let at = k * 0.055;
+                    let start = (at * RATE) as! i64;
+                    let n = (0.35 * RATE) as! i64;
+                    while pcm.len < start + n { pcm.push(0.0); }
+                    for i in n {
+                        let t = i as f64 / RATE;
+                        let v = sin(TAU * f * t) * 0.6 + sin(TAU * f * 2.76 * t) * 0.25 * exp(-t * 30.0);
+                        pcm[start + i] = pcm[start + i] + (v * min(1.0, t * 800.0) * exp(-t * 14.0) * 0.16) as f32;
+                    }
+                }
+            },
+            Clunk => {
+                // A lock giving: a click, then a low wooden knock.
+                noise_burst(pcm, 0.0, 0.03, 0.6, 120.0, 0.9, 111);
+                tone(pcm, 0.0, 2200.0, 0.04, 0.12, 90.0);
+                noise_burst(pcm, 0.045, 0.18, 0.55, 28.0, 0.12, 112);
+                tone(pcm, 0.045, 110.0, 0.22, 0.45, 22.0);
+                tone(pcm, 0.05, 185.0, 0.15, 0.2, 30.0);
+            },
+            Creak => {
+                // Old hinges: a rasp of quick pulses whose pitch wanders down.
+                let n = (0.6 * RATE) as! i64;
+                var r = rng { 121 };
+                var phase = 0.0;
+                var low = 0.0;
+                for i in n {
+                    let t = i as f64 / RATE;
+                    let f = 95.0 + 40.0 * sin(t * 7.0) - 30.0 * t;
+                    phase += f / RATE;
+                    let pulse = exp(-(phase - floor(phase)) * 9.0);
+                    low = low + (r.rand_flt() * 2.0 - 1.0 - low) * 0.3;
+                    let tone_v = sin(TAU * phase * 6.0) * 0.5 + low * 0.5;
+                    pcm.push((pulse * tone_v * sin(PI * t / 0.6) * 0.5) as f32);
+                }
+            },
+            Drape => {
+                // Velvet drawn aside: a soft rising swish of cloth and the rings on the rod.
+                let n = (0.5 * RATE) as! i64;
+                var r = rng { 131 };
+                var low = 0.0;
+                for i in n {
+                    let t = i as f64 / RATE;
+                    low = low + (r.rand_flt() * 2.0 - 1.0 - low) * (0.05 + 0.15 * t / 0.5);
+                    pcm.push((low * sin(PI * t / 0.5) * 0.7) as f32);
+                }
+                for k in 4 { tone(pcm, 0.05 + k * 0.07, 1900.0 + k * 140.0, 0.12, 0.035, 35.0); }
             },
         }
         make(id, pcm);

@@ -3,8 +3,9 @@
 // rippling across, ice shattering, wax softening and cracking off, lanterns
 // flaring, shrouds sliding away, smoke clearing, an hourglass turning over,
 // vines growing, withering and burning, the salamander's hop, the athanor's
-// gold, the catalyst's runes, a vow's band taking its color, a key flying
-// free to its door, the door lifting away, a curtain drawn up.
+// gold, the catalyst's runes, a vow's band taking its color, a key rising
+// out of its layer and flying to its door's lock, the door swinging open, a
+// curtain drawn aside when a ribbon from the flask of its color reaches it.
 //
 // The board drawn, `shown`, trails the board in play while they play: it
 // starts as the pour left it before anything it set off, and each event's
@@ -131,9 +132,9 @@ fn beat_span(kind: EventKind) -> f64, f64 {
         TendrilBurned => { return 0.9, 0.55; },
         SalamanderHop => { return 0.55, 0.0; },
         Transmuted => { return 0.9, 0.0; },
-        KeyFreed => { return 0.9, 0.0; },
-        DoorOpened => { return 0.9, 0.0; },
-        CurtainOpened => { return 0.8, 0.0; },
+        KeyFreed => { return 1.2, 0.0; },
+        DoorOpened => { return 1.4, 0.0; },
+        CurtainOpened => { return 1.3, 0.0; },
         CatalystFired => { return 1.1, 0.0; },
         Completed => { return 0.0, 0.0; },
         Vowed => { return 0.8, 0.0; },
@@ -350,9 +351,12 @@ fn schedule_pour(before: Board, from: i64, to: i64, r: PourResult, t0: f64) {
                 b.color = key_index(before.bottles[e.bottle].key_color);
             }
             b.at = cursor;
+            // A key rises out of the flask poured from once it is back in its place.
+            if e.kind == EventKind.KeyFreed && e.bottle == from { b.at = max(cursor, land + T_BACK); }
+            cursor = b.at;
             cursor += match e.kind {
                 Lit => 0.45, Flipped => b.span, VineSpread => 0.75, VineWithered => 0.65, SalamanderHop => 0.55,
-                CatalystFired => 0.6, Completed => 0.12, KeyFreed => 0.6, DoorOpened => 0.5, CurtainOpened => 0.4,
+                CatalystFired => 0.6, Completed => 0.12, KeyFreed => 1.15, DoorOpened => 0.8, CurtainOpened => 0.7,
                 _ => 0.3,
             };
             if e.kind == EventKind.Lit {
@@ -402,6 +406,7 @@ fn update_beats() {
             start_beat(b);
         }
         if b.kind == EventKind.Flipped && b.started && !b.applied { flip_cues(b); }
+        if b.started && now < b.at + b.span + 0.1 { key_cues(b); }
         if !b.applied && now >= b.apply_at { apply_beat(b, true); }
         if !b.applied || now < b.at + b.span { done = false; }
     }
@@ -505,12 +510,9 @@ fn start_beat(b: Beat&) {
             play_pitched(Sfx.Chime, 1.5, 0.6);
             burst(at(a, a.body), 26, float4 { 1.0, 0.82, 0.3, 1.0 }, 170.0);
         },
-        KeyFreed => play_pitched(Sfx.Chime, 1.6, 0.6),
-        DoorOpened => {
-            play_pitched(Sfx.Crack, 0.6, 0.5);
-            play_pitched(Sfx.Reveal, 0.8, 0.8);
-        },
-        CurtainOpened => play_pitched(Sfx.Reveal, 1.1, 0.8),
+        KeyFreed => play_pitched(Sfx.Jingle, 1.0, 0.7),
+        DoorOpened => play_pitched(Sfx.Clunk, 1.7, 0.35),
+        CurtainOpened => if b.from >= 0 { play_pitched(Sfx.Chime, 1.25, 0.45); },
         CatalystFired => {
             play(Sfx.Gong);
             burst(at(a, a.base), 30, float4 { 0.8, 0.5, 1.0, 1.0 }, 220.0);
@@ -723,9 +725,49 @@ fn door_opening(d: i64) -> f32 {
     for e in beats {
         if e.kind != EventKind.DoorOpened || e.door != d || !e.started || e.span <= 0.0 { continue; }
         let k = (now - e.at) / e.span;
-        if k < 1.0 { return ease(k); }
+        if k < 1.0 { return clamp(k, 0.0, 1.0) as f32; }
     }
     -1.0
+}
+
+// How a door opening looks k (0..1) into its beat: its key turns in the
+// lock, the lock gives, the leaves swing open toward us and the door fades.
+let LOCK_TURNED: f32 = 0.26;
+let DOOR_SWING: f32 = 0.3;
+let DOOR_SWUNG: f32 = 0.85;
+
+fn door_swing(k: f32) -> f32 { ease((k - DOOR_SWING) / (DOOR_SWUNG - DOOR_SWING)) }
+fn door_fade(k: f32) -> f32 { ease((k - 0.72) / 0.28) }
+
+// A key's flight, k into its beat: it glints in its layer, rises out of the
+// liquid, and from KEY_FLY flies to its door's keyhole.
+let KEY_RISE: f32 = 0.2;
+let KEY_FLY: f32 = 0.45;
+
+// A curtain opening: the ribbon from the completed flask reaches its badge,
+// then the drapes are drawn aside.
+let CURTAIN_REACHED: f32 = 0.33;
+
+// The sounds of a key's flight, a door opening and a curtain, each once.
+fn key_cues(b: Beat&) {
+    let k = ((now - b.at) / b.span) as f32;
+    fn cue(bit: i64, at: f32) -> bool {
+        if k < at || (b.cues >> bit) & 1 != 0 { return false; }
+        b.cues |= 1 << bit;
+        true
+    }
+    match b.kind {
+        KeyFreed => {
+            if cue(0, KEY_FLY) { play_pitched(Sfx.Whoosh, 1.8, 0.25); }
+            if b.door >= 0 && cue(1, 0.97) { play_pitched(Sfx.Clunk, 2.4, 0.35); }
+        },
+        DoorOpened => {
+            if cue(0, LOCK_TURNED) { play(Sfx.Clunk); }
+            if cue(1, DOOR_SWING) { play(Sfx.Creak); }
+        },
+        CurtainOpened => if cue(0, CURTAIN_REACHED) { play(Sfx.Drape); },
+        _ => {},
+    }
 }
 
 // The door before door d's flasks, from its top left to its bottom right:
@@ -852,33 +894,9 @@ fn draw_beats(out: Inst[>..]&) {
                 glow(out, c, v2(hx * 2.2, hx * 2.2), 1.0, float4 { 1.0, 0.85, 0.35, 0.65 * f });
                 spark(out, c, hx * (0.6 + 1.6 * k), float4 { 1.0, 0.95, 0.7, f });
             },
-            KeyFreed => {
-                // The key rises out of its layer, glinting, and flies to its door.
-                let from = a.center + segment_center(a.half, e.n0);
-                var to = at(a, a.rim) - v2(0.0, hx * 1.2);
-                if e.door >= 0 {
-                    let lo, hi = door_box(e.door);
-                    if lo.x < hi.x { to = (lo + hi) * v2(0.5, 0.5); }
-                }
-                let u = ease(k);
-                let ctrl = v2((from.x + to.x) * 0.5, min(from.y, to.y) - hx * 2.5);
-                let pos = lerp2(lerp2(from, ctrl, u), lerp2(ctrl, to, u), u);
-                let glint = sin(k * PI);
-                glow(out, pos, v2(hx * 1.1, hx * 1.1), 1.0, float4 { 1.0, 0.9, 0.6, 0.45 * glint });
-                spark(out, pos + v2(-hx * 0.3, -hx * 0.15), hx * (0.3 + 0.5 * glint), white(glint));
-                draw_key(out, pos, hx * (0.62 + 0.2 * glint), KEY_COLORS[clamp(e.color - 1, 0, 2)], glint, 1.0 - clamp((k - 0.85) / 0.15, 0.0, 1.0));
-            },
-            DoorOpened => {
-                // Dust as it lifts away.
-                if k < 0.4 {
-                    let lo, hi = door_box(e.door);
-                    if lo.x < hi.x && rand.rand_int(3) == 0 {
-                        emit(v2(lo.x + (hi.x - lo.x) * rand.rand_flt() as f32, hi.y), v2(0.0, -30.0), 0.8, 3.0,
-                             float4 { 0.6, 0.5, 0.4, 0.6 }, -20.0);
-                    }
-                }
-            },
-            CurtainOpened => draw_curtain(out, a, shown.bottles[i].badge, ease(k), save.color_safe),
+            KeyFreed => draw_key_flight(out, e, k),
+            DoorOpened => draw_door_opening(out, e, k),
+            CurtainOpened => draw_curtain_opening(out, e, k),
             CatalystFired => {
                 let base = at(a, a.base);
                 let r = hx * (1.3 + 2.4 * ease(k));
@@ -1010,6 +1028,107 @@ fn draw_hop(out: Inst[>..]&, e: Beat, k: f32) {
     let tilt = clamp(atan2(vel.y, abs(vel.x) + 0.001) * 0.5, -0.6, 0.6);
     draw_salamander(out, pos, to_a.hx, tilt * salamander_facing, salamander_facing, sin(k * PI), 0.6);
     if k > 0.9 { burst(q, 2, EMBER, 80.0); }
+}
+
+// A freed key: it glints in its layer, rises out of the liquid and flies to
+// its door's keyhole, turning to go in bit first and growing to the lock's
+// size; with no door to go to, it rises away and fades.
+fn draw_key_flight(out: Inst[>..]&, e: Beat, k: f32) {
+    let i = e.bottle;
+    let a = slot_anchors(i);
+    let hx = a.hx;
+    let b = shown.bottles[i];
+    let metal = KEY_COLORS[clamp(e.color - 1, 0, 2)];
+    let from = layer_spot(a, b.cap, e.n0, 0.0, false);
+    let liquid = palette_color(b.seg[clamp(e.n0, 0, MAX_CAP - 1)], save.color_safe);
+    let above = at(a, a.rim) - v2(0.0, hx * 1.3);
+    let size0 = key_size(hx);
+    if k < KEY_FLY {
+        let r = ease((k - KEY_RISE) / (KEY_FLY - KEY_RISE));
+        let pos = lerp2(from, above, r);
+        let glint = clamp(k / KEY_RISE, 0.0, 1.0);
+        let shine = sin(glint * PI);
+        glow(out, pos, v2(hx * 1.2, hx * 1.0), 1.0, float4 { 1.0, 0.9, 0.6, 0.35 * shine + 0.3 * r });
+        draw_key(out, pos, size0, metal, KEY_TILT + r * 0.3, glint, with_alpha(liquid, 1.0 - r), 1.0);
+        if k < KEY_RISE { spark(out, pos + v2(-size0 * 0.7, -size0 * 0.3), size0 * 0.7 * shine, white(shine)); }
+        // Bubbles as it comes out.
+        if r > 0.0 && r < 0.7 && rand.rand_int(2) == 0 {
+            emit(pos + v2((rand.rand_flt() as f32 - 0.5) * size0, 0.0), v2(0.0, -50.0), 0.4, 2.0, with_alpha(liquid, 0.8), -40.0);
+        }
+        return;
+    }
+    let f = ease((k - KEY_FLY) / (1.0 - KEY_FLY));
+    var to = above - v2(0.0, hx * 2.0);
+    var size1 = size0;
+    var turn1 = KEY_TILT + 0.3;
+    var alpha = 1.0 - f;
+    if e.door >= 0 {
+        let lo, hi = door_box(e.door);
+        if lo.x < hi.x {
+            let hole, r = keyhole_at(lo, hi);
+            to = key_in_lock_at(hole, r);
+            size1 = r * KEY_IN_LOCK;
+            turn1 = PI * 0.5;
+            alpha = 1.0;
+        }
+    }
+    let ctrl = v2((above.x + to.x) * 0.5, min(above.y, to.y) - hx * 2.0);
+    let pos = lerp2(lerp2(above, ctrl, f), lerp2(ctrl, to, f), f);
+    let glint = sin(f * PI);
+    let size = size0 + (size1 - size0) * f;
+    glow(out, pos, v2(size * 1.7, size * 1.7), 1.0, float4 { 1.0, 0.9, 0.6, (0.3 + 0.3 * glint) * alpha });
+    if rand.rand_int(2) == 0 { emit(pos, v2(0.0, 20.0), 0.5, 2.5, float4 { 1.0, 0.9, 0.6, 0.9 * alpha }, 0.0); }
+    draw_key(out, pos, size, metal, KEY_TILT + 0.3 + (turn1 - KEY_TILT - 0.3) * f, glint, float4_0, alpha);
+}
+
+// A door opening: its key turns in the lock, the lock gives with a flash,
+// and as the leaves swing open toward us (draw_board draws the door) dust
+// puffs up along the threshold and sifts down from the lintel.
+fn draw_door_opening(out: Inst[>..]&, e: Beat, k: f32) {
+    if e.door < 0 || e.door >= shown.door_count { return; }
+    let lo, hi = door_box(e.door);
+    if lo.x >= hi.x { return; }
+    let hole, r = keyhole_at(lo, hi);
+    let metal = shown.doors[e.door].color;
+    let gone = clamp((k - LOCK_TURNED) / 0.12, 0.0, 1.0);
+    if gone < 1.0 { draw_key_in_lock(out, hole, r, metal, ease(k / LOCK_TURNED), 0.0, 1.0 - gone); }
+    let flash = clamp(1.0 - abs(k - LOCK_TURNED) / 0.1, 0.0, 1.0);
+    if flash > 0.0 {
+        glow(out, hole, v2(r * 3.0, r * 3.0), 1.0, with_alpha(key_tint(metal), 0.7 * flash));
+        spark(out, hole - v2(0.0, r * 0.5), r * 1.8 * flash, white(flash));
+    }
+    if k > DOOR_SWING && k < DOOR_SWING + 0.35 {
+        for n in 2 {
+            let x = lo.x + (hi.x - lo.x) * rand.rand_flt() as f32;
+            emit(v2(x, hi.y - 2.0), v2((rand.rand_flt() as f32 - 0.5) * 60.0, -20.0 - rand.rand_flt() as f32 * 30.0), 0.9,
+                 3.0 + rand.rand_flt() as f32 * 3.0, float4 { 0.62, 0.53, 0.42, 0.5 }, -10.0);
+            if n == 0 { emit(v2(x, lo.y + 4.0), v2(0.0, 20.0), 0.7, 2.0, float4 { 0.6, 0.52, 0.42, 0.6 }, 160.0); }
+        }
+    }
+}
+
+// A curtain opening: a ribbon of its color runs from the flask just
+// completed to its badge, the badge flares, and the drapes are drawn aside.
+fn draw_curtain_opening(out: Inst[>..]&, e: Beat, k: f32) {
+    let i = e.bottle;
+    let a = slot_anchors(i);
+    let badge = shown.bottles[i].badge;
+    let col = palette_color(badge, save.color_safe);
+    let bp = badge_at(a);
+    if e.from >= 0 && e.from < shown.count && e.from != i {
+        let fa = slot_anchors(e.from);
+        let src = at(fa, fa.body);
+        let ctrl = v2((src.x + bp.x) * 0.5, min(src.y, bp.y) - fa.hx * 2.0);
+        let head = clamp(k / CURTAIN_REACHED, 0.0, 1.0);
+        let fade = 1.0 - clamp((k - CURTAIN_REACHED) / 0.3, 0.0, 1.0);
+        if fade > 0.0 {
+            glow(out, src, fa.half * v2(1.2, 0.9), 1.0, with_alpha(col, 0.35 * fade));
+            curve(out, Shape.Beam, src, ctrl, bp, fa.hx * 0.24, head, with_alpha(mix4(col, white(1.0), 0.25), 0.95 * fade));
+        }
+    }
+    let flash = clamp(1.0 - abs(k - CURTAIN_REACHED) / 0.2, 0.0, 1.0);
+    draw_curtain(out, a, badge, ease((k - CURTAIN_REACHED) / (1.0 - CURTAIN_REACHED)), flash, save.color_safe);
+    if flash > 0.0 { spark(out, bp, badge_r(a) * 2.5 * flash, white(flash)); }
 }
 
 fn forces_lively() -> bool { beats.len > 0 || bits_alive() }
