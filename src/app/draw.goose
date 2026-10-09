@@ -135,7 +135,7 @@ fn spark(out: Inst[>..]&, center: float2, r: f32, color: float4) {
     out.push(inst(Shape.Spark, center, float2 { r, r }, color));
 }
 
-// A shape drawn along the quadratic curve a-ctrl-b (Stream, Beam, Heat): the
+// A shape drawn along the quadratic curve a-ctrl-b (Stream, Beam, Heat, GildPath): the
 // instance covers the curve's box and holds the points relative to it.
 fn curve(out: Inst[>..]&, shape: Shape, a: float2, ctrl: float2, b: float2, width: f32, last: f32, color: float4) {
     let lo = float2 { min(min(a.x, b.x), ctrl.x), min(min(a.y, b.y), ctrl.y) };
@@ -164,7 +164,8 @@ fn scale_inst(i: Inst&, scale: f32, offset: float2) {
     let shape = (i.misc.x + 0.5) as! i64;
     if shape == shape_index(Shape.Rect) || shape == shape_index(Shape.Wood) { i.p0.x *= scale; i.p0.y *= scale; }
     if shape == shape_index(Shape.Ring) { i.p0.x *= scale; }
-    if shape == shape_index(Shape.Stream) || shape == shape_index(Shape.Beam) || shape == shape_index(Shape.Heat) {
+    if shape == shape_index(Shape.Stream) || shape == shape_index(Shape.Beam) || shape == shape_index(Shape.Heat) ||
+       shape == shape_index(Shape.GildPath) {
         i.p0 = i.p0 * float4 { scale, scale, scale, scale };
         i.p1.x *= scale;
         i.p1.y *= scale;

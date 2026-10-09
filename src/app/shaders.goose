@@ -54,15 +54,25 @@ enum Shape {
     Shard,      // a flying bit; p0.x: 0 ice, 1 wax, 2 leaf, 3 ember
     Key,        // a key, its bow on the left; color: its metal; p0: glint 0..1, which (1..3: its
                 // bow's shape), under liquid 0..1, seed; p1: the liquid's color
+    Sanctum,    // the title screen's room; p0.x: unscaled half width
+    Astrolabe,  // gilt rings turning behind the title flask; p0: flared rune, flare 0..1, cut below
+                // (in radii)
+    Wisp,       // an alchemical sign drawn in steam; p0: seed, which sign, shown 0..1
+    Flourish,   // a gilded scroll divider; p0.x: where the glint is, -1..1
+    Parchment,  // the map's page on a dark desk; p0.x: unscaled half width
+    Medallion,  // a chapter's roundel on the map; p0: theme, 0 locked 1 open 2 done; p1: its potion
+    GildPath,   // a gilt line along a curve, faint ink dots past its head; p0: start, control;
+                // p1: end, width, head 0..1
 }
 
-let ALL_SHAPES: const Shape[42] = [
+let ALL_SHAPES: const Shape[49] = [
     Shape.Rect, Shape.Glow, Shape.FlaskBack, Shape.Liquid, Shape.Glass, Shape.Stream, Shape.Symbol,
     Shape.Spark, Shape.Ice, Shape.Cloth, Shape.Wax, Shape.Vines, Shape.Tap, Shape.Lantern, Shape.Wood,
     Shape.Backdrop, Shape.Icon, Shape.Seal, Shape.Ring, Shape.Candle, Shape.Beam, Shape.Glyph, Shape.Stone,
     Shape.Ink, Shape.Alembic, Shape.Steam, Shape.Label, Shape.Pebble, Shape.Vial, Shape.Smoke, Shape.Ribbon,
     Shape.Frame, Shape.Dial, Shape.Furnace, Shape.Bloom, Shape.Brazier, Shape.Roots, Shape.Door,
     Shape.Salamander, Shape.Heat, Shape.Shard, Shape.Key,
+    Shape.Sanctum, Shape.Astrolabe, Shape.Wisp, Shape.Flourish, Shape.Parchment, Shape.Medallion, Shape.GildPath,
 ];
 
 fn shape_index(s: Shape) -> i64 {
@@ -73,6 +83,8 @@ fn shape_index(s: Shape) -> i64 {
         Glyph => 21, Stone => 22, Ink => 23, Alembic => 24, Steam => 25, Label => 26, Pebble => 27,
         Vial => 28, Smoke => 29, Ribbon => 30, Frame => 31, Dial => 32, Furnace => 33, Bloom => 34,
         Brazier => 35, Roots => 36, Door => 37, Salamander => 38, Heat => 39, Shard => 40, Key => 41,
+        Sanctum => 42, Astrolabe => 43, Wisp => 44, Flourish => 45, Parchment => 46, Medallion => 47,
+        GildPath => 48,
     }
 }
 
@@ -91,6 +103,9 @@ fn shape_define(s: Shape) -> const u8[:] {
         Frame => "SHAPE_FRAME", Dial => "SHAPE_DIAL", Furnace => "SHAPE_FURNACE", Bloom => "SHAPE_BLOOM",
         Brazier => "SHAPE_BRAZIER", Roots => "SHAPE_ROOTS", Door => "SHAPE_DOOR",
         Salamander => "SHAPE_SALAMANDER", Heat => "SHAPE_HEAT", Shard => "SHAPE_SHARD", Key => "SHAPE_KEY",
+        Sanctum => "SHAPE_SANCTUM", Astrolabe => "SHAPE_ASTROLABE", Wisp => "SHAPE_WISP",
+        Flourish => "SHAPE_FLOURISH", Parchment => "SHAPE_PARCHMENT", Medallion => "SHAPE_MEDALLION",
+        GildPath => "SHAPE_GILDPATH",
     }
 }
 
@@ -207,6 +222,13 @@ let FRAGMENT_SHADER = """
     #define SHAPE_HEAT 39
     #define SHAPE_SHARD 40
     #define SHAPE_KEY 41
+    #define SHAPE_SANCTUM 42
+    #define SHAPE_ASTROLABE 43
+    #define SHAPE_WISP 44
+    #define SHAPE_FLOURISH 45
+    #define SHAPE_PARCHMENT 46
+    #define SHAPE_MEDALLION 47
+    #define SHAPE_GILDPATH 48
     #define ICON_UNDO 0
     #define ICON_RESTART 1
     #define ICON_SHUFFLE 2
@@ -1611,6 +1633,97 @@ let FRAGMENT_SHADER = """
         return mix(c, m, fill_aa(plate));
     }
 
+    // --- the title screen and the map ----------------------------------------
+    // An alchemical sign as strokes about one unit across, centered: its
+    // distance in those units. 0 gold (the sun), 1 silver (the moon), 2
+    // mercury, 3 sulfur, 4 salt, 5 air.
+    float sd_alchemy(vec2 q, int which) {
+        if (which == 0) return min(abs(length(q) - 0.36), length(q) - 0.05);
+        if (which == 1) return abs(max(length(q) - 0.4, -(length(q - vec2(0.2, -0.06)) - 0.34)));
+        if (which == 2) {
+            float d = abs(length(q) - 0.19);
+            d = min(d, sd_arc(q - vec2(0.0, -0.36), 0.16, 0.0, 3.14159265, 0.0));
+            d = min(d, sd_segment(q, vec2(0.0, 0.19), vec2(0.0, 0.5)));
+            return min(d, sd_segment(q, vec2(-0.13, 0.35), vec2(0.13, 0.35)));
+        }
+        if (which == 3) {
+            float d = abs(sd_triangle(q, vec2(0.0, -0.48), vec2(0.28, 0.04), vec2(-0.28, 0.04)));
+            d = min(d, sd_segment(q, vec2(0.0, 0.04), vec2(0.0, 0.5)));
+            return min(d, sd_segment(q, vec2(-0.15, 0.28), vec2(0.15, 0.28)));
+        }
+        if (which == 4) return min(abs(length(q) - 0.36), sd_segment(q, vec2(-0.36, 0.0), vec2(0.36, 0.0)));
+        float d = abs(sd_triangle(q, vec2(0.0, -0.42), vec2(0.36, 0.24), vec2(-0.36, 0.24)));
+        return min(d, sd_segment(q, vec2(-0.44, 0.0), vec2(0.44, 0.0)));
+    }
+    // Gilt: dark at the bottom of a raised line, bright along its top, in
+    // the room's candlelight. k is across the line, -1 top to 1 bottom.
+    vec3 gilt(float k) {
+        vec3 c = mix(vec3(1.0, 0.9, 0.6), vec3(0.55, 0.33, 0.1), smoothstep(-0.8, 1.0, k));
+        return mix(c, c * light.rgb * 1.15, 0.3);
+    }
+    // A chapter's room in a roundel (q: radius 1, y down): its air, and its
+    // emblem, the color in rgb and coverage in a; r is the radius in pixels.
+    vec3 medallion_air(int theme, vec2 q) {
+        float k = q.y * 0.5 + 0.5;
+        if (theme == 1) return mix(vec3(0.20, 0.32, 0.45), vec3(0.08, 0.13, 0.24), k);
+        if (theme == 2) return mix(vec3(0.24, 0.08, 0.05), vec3(0.55, 0.20, 0.06), k);
+        if (theme == 3) return mix(vec3(0.03, 0.04, 0.14), vec3(0.10, 0.12, 0.30), k);
+        if (theme == 4) return mix(vec3(0.08, 0.22, 0.20), vec3(0.04, 0.12, 0.09), k);
+        if (theme == 5) return mix(vec3(0.22, 0.04, 0.05), vec3(0.45, 0.10, 0.05), k);
+        if (theme == 6) return mix(vec3(0.16, 0.08, 0.26), vec3(0.42, 0.25, 0.10), k);
+        return mix(vec3(0.30, 0.17, 0.12), vec3(0.16, 0.08, 0.06), k);
+    }
+    vec4 medallion_emblem(int theme, vec2 q, float r, float t) {
+        if (theme == 1) {           // frost cellar: a snowflake
+            float d = 1e3;
+            for (int k = 0; k < 3; k++) {
+                vec2 dir = vec2(cos(float(k) * 1.0472 + 0.5236), sin(float(k) * 1.0472 + 0.5236));
+                d = min(d, sd_segment(q, -dir * 0.55, dir * 0.55));
+                vec2 qa = vec2(abs(dot(q, dir)), abs(dot(q, vec2(-dir.y, dir.x))));
+                d = min(d, sd_segment(qa, vec2(0.28, 0.0), vec2(0.42, 0.13)));
+            }
+            return vec4(0.88, 0.96, 1.0, fill_aa((d - 0.06) * r));
+        }
+        if (theme == 2) {           // glassworks: the furnace's mouth, burning
+            vec2 m = q - vec2(0.0, 0.2);
+            float arch = sd_round_box(m, vec2(0.42, 0.42), vec4(0.42, 0.0, 0.42, 0.0));
+            float fl = 0.8 + 0.2 * sin(t * 3.0 + q.x * 6.0);
+            vec3 c = mix(vec3(1.0, 0.88, 0.45), vec3(0.95, 0.32, 0.05), smoothstep(-0.2, 0.55, -m.y + 0.2)) * fl;
+            float brick = fill_aa((abs(arch + 0.07) - 0.07) * r);
+            return vec4(mix(c, vec3(0.30, 0.13, 0.08), brick), max(fill_aa(arch * r), brick));
+        }
+        if (theme == 3) {           // observatory: the moon and a star
+            float moon = max(length(q + vec2(0.12, 0.05)) - 0.42, -(length(q + vec2(-0.06, 0.16)) - 0.36));
+            float star = sd_star5(q - vec2(0.34, -0.3), 0.16, 0.45);
+            return vec4(1.0, 0.95, 0.75, fill_aa(min(moon, star) * r));
+        }
+        if (theme == 4) {           // greenhouse: a leaf and its vein
+            vec2 l = rot(0.7854) * q;
+            float leaf = max(length(l - vec2(0.3, 0.0)) - 0.52, length(l + vec2(0.3, 0.0)) - 0.52);
+            float vein = max(abs(l.x) - 0.035, abs(l.y) - 0.38);
+            vec3 c = mix(vec3(0.6, 0.9, 0.42), vec3(0.25, 0.58, 0.2), clamp(l.x + 0.5, 0.0, 1.0));
+            return vec4(mix(c, vec3(0.15, 0.35, 0.12), fill_aa(vein * r)), fill_aa(leaf * r));
+        }
+        if (theme == 5) {           // athanor: a flame
+            return flame((q - vec2(0.0, 0.3)) * r, r * 0.24, light.a, 2.0, t);
+        }
+        if (theme == 6) {           // the Great Work: the Stone, its rays turning
+            float d = sd_hexagon(rot(0.5236) * q, 0.24);
+            float a = atan(q.y, q.x);
+            float rays = pow(abs(sin(a * 4.0 + t * 0.3)), 8.0) * (1.0 - smoothstep(0.2, 0.8, length(q)));
+            vec3 c = mix(vec3(1.0, 0.85, 0.5), vec3(0.9, 0.15, 0.2), fill_aa(d * r));
+            return vec4(c, max(fill_aa(d * r), rays * 0.7));
+        }
+        // apothecary: a stoppered bottle on its shelf
+        float body = sd_round_box(q - vec2(0.0, 0.12), vec2(0.27, 0.25), vec4(0.15));
+        float neck = sd_box(q - vec2(0.0, -0.22), vec2(0.09, 0.12));
+        float shelf = sd_box(q - vec2(0.0, 0.43), vec2(0.62, 0.045));
+        float d = min(min(body, neck), shelf);
+        vec3 c = mix(vec3(0.95, 0.45, 0.3), vec3(0.7, 0.48, 0.28), step(0.4, q.y));
+        c = mix(c, vec3(0.75, 0.55, 0.35), step(q.y, -0.1));
+        return vec4(c, fill_aa(d * r));
+    }
+
     void main() {
         int kind = int(v_misc.x + 0.5);
         vec2 p = v_local;
@@ -2284,21 +2397,31 @@ let FRAGMENT_SHADER = """
             float band = fill_aa(abs(p.y + h.y - 3.0) - 1.3);
             c = mix(c, v_p1.rgb, band);
             col = vec4(c, a * v_color.a);
-        } else if (kind == SHAPE_PEBBLE) {              // a level stone on the map
+        } else if (kind == SHAPE_PEBBLE) {              // a level stone on the map's parchment
             float r = min(h.x, h.y);
             float ang = atan(p.y, p.x);
-            float d = length(p) - r * (0.9 + 0.05 * sin(ang * 3.0 + v_p0.y) + 0.03 * sin(ang * 5.0 - v_p0.y));
+            float d = length(p) - r * (0.9 + 0.035 * sin(ang * 3.0 + v_p0.y) + 0.02 * sin(ang * 5.0 - v_p0.y));
             vec2 u = p / r;
-            float z = sqrt(max(0.0, 1.0 - dot(u, u)));
-            float diff = clamp(dot(normalize(vec3(u, z + 0.3)), normalize(vec3(-0.4, -0.6, 0.7))), 0.0, 1.0);
-            vec3 base = v_p0.x < 0.5 ? vec3(0.26, 0.24, 0.30) : v_color.rgb;
-            vec3 c = base * (0.45 + 0.7 * diff);
-            c *= 0.9 + 0.15 * noise(p * 0.25 + v_p0.y);
-            float edge = fill_aa(abs(d + 1.2) - 1.0);
-            c = mix(c, v_p0.x < 0.5 ? vec3(0.4, 0.38, 0.45) : vec3(1.0, 0.88, 0.55), edge * 0.6);
-            float shadow = exp(-max(length(p - vec2(0.0, r * 0.25)) - r, 0.0) / 4.0) * 0.5;
             float body = fill_aa(d);
-            col = vec4(c * body, max(body, shadow));
+            if (v_p0.x < 0.5) {
+                // Still to come: a ring drawn in ink round a pale wash.
+                float ring = fill_aa(abs(d + 1.4) - 1.0);
+                float wash = body * 0.13 * (0.7 + 0.6 * noise(p * 0.15 + v_p0.y));
+                col = vec4(0.33, 0.2, 0.1, max(ring * 0.65, wash));
+            } else {
+                // Walked: a glazed disc of the chapter's color in a gilt rim;
+                // the current one ivory, warm at its heart.
+                float z = sqrt(max(0.0, 1.0 - dot(u, u)));
+                float diff = clamp(dot(normalize(vec3(u, z + 0.3)), normalize(vec3(-0.4, -0.6, 0.7))), 0.0, 1.0);
+                vec3 c = v_color.rgb * (0.5 + 0.65 * diff);
+                c *= 0.92 + 0.12 * noise(p * 0.2 + v_p0.y);
+                c += vec3(1.0) * pow(diff, 14.0) * 0.3;
+                if (v_p0.x > 1.5) c += vec3(1.0, 0.75, 0.4) * exp(-length(u) * 2.2) * (0.12 + 0.06 * sin(t * 2.4));
+                c = mix(c, gilt(u.y), fill_aa(abs(d + 1.7) - 1.7));
+                float shadow = exp(-max(length(p - vec2(r * 0.05, r * 0.14)) - r * 0.9, 0.0) / 3.5) * 0.4;
+                float a = max(body, shadow);
+                col = vec4(c * body / max(a, 0.001), a);
+            }
             col.a *= v_color.a;
         } else if (kind == SHAPE_VIAL) {                // a little bottle on the back shelf
             float lit = v_p0.x;
@@ -2652,6 +2775,244 @@ let FRAGMENT_SHADER = """
             vec4 c = vec4(edge, 0.85 * fill_aa(d - 1.5));
             c = over(c, m, fill_aa(d));
             col = vec4(c.rgb, c.a * v_color.a);
+        } else if (kind == SHAPE_SANCTUM) {             // the title screen: a study at dusk, in candlelight
+            vec2 cv = p * (v_p0.x / h.x) + vec2(270.0, 480.0);         // canvas units
+            float f = 0.85 + 0.15 * light.a;
+            // A painted wall: deep blue above, warming to umber at the bench.
+            vec3 c = mix(vec3(0.045, 0.04, 0.10), vec3(0.14, 0.075, 0.18), smoothstep(-100.0, 560.0, cv.y));
+            c = mix(c, vec3(0.24, 0.12, 0.09), smoothstep(400.0, 640.0, cv.y));
+            // Broad brushstrokes: noise bent by noise, drifting very slowly.
+            vec2 q = cv * vec2(0.0045, 0.009);
+            float w = noise(q * 1.3 + vec2(t * 0.012, 3.0));
+            float n = noise(q + vec2(w * 1.8, w * 0.6) + vec2(t * 0.01, 0.0));
+            float fine = noise(cv * vec2(0.045, 0.014) + w * 3.0);
+            c *= 0.7 + 0.55 * n + 0.14 * (fine - 0.5);
+            // Shelves at either side in silhouette, their glass catching the
+            // light.
+            float side = abs(cv.x - 270.0);
+            if (side > 130.0 && cv.y < 628.0) {
+                float sy = cv.y < 380.0 ? 300.0 : 468.0;
+                float jx = floor(cv.x / 38.0);
+                float hj = hash12(vec2(jx, sy));
+                float jh = 20.0 + hj * 36.0;
+                vec2 jp = vec2(mod(cv.x, 38.0) - 19.0, cv.y - (sy - jh * 0.5));
+                float jar = min(sd_round_box(jp, vec2(9.0 + hj * 6.0, jh * 0.5), vec4(5.0)),
+                                sd_box(jp + vec2(0.0, jh * 0.5 + 4.0), vec2(4.0, 5.0)));
+                float shelf = abs(cv.y - sy - 4.0) - 4.0;
+                float far = smoothstep(130.0, 220.0, side);
+                vec3 glass = mix(vec3(0.3, 0.12, 0.2), vec3(0.12, 0.25, 0.3), hash12(vec2(jx, sy + 1.0)));
+                float sil = max(fill_aa(shelf), hj > 0.2 ? fill_aa(jar) : 0.0);
+                c = mix(c, c * 0.35 + glass * 0.12 * step(-jh * 0.1, jp.y), sil * far);
+                float facing = clamp(-sign(cv.x - 270.0) * jp.x / 10.0, 0.0, 1.0);
+                c += light.rgb * fill_aa(abs(jar + 1.0) - 1.0) * facing * 0.25 * far * step(0.2, hj) * f;
+            }
+            // The candlelight round the flask, in layers, and slow rays
+            // turning through the dusty air.
+            vec2 L = (cv - vec2(270.0, 480.0)) * vec2(1.0, 1.1);
+            float r = length(L);
+            c += light.rgb * (0.32 * exp(-r / 150.0) + 0.13 * exp(-r / 400.0)) * f;
+            float ang = atan(L.y, L.x);
+            float rays = noise(vec2(ang * 5.0, t * 0.05)) * noise(vec2(ang * 9.0 + 5.0, 2.0 - t * 0.04));
+            c += light.rgb * smoothstep(0.12, 0.5, rays) * exp(-r / 330.0) * smoothstep(80.0, 200.0, r) * 0.22 * f;
+            // Mist drifting through the lower air.
+            float mist = noise(vec2(cv.x * 0.004 - t * 0.02, cv.y * 0.01)) * noise(vec2(cv.x * 0.009 + t * 0.03, cv.y * 0.02 + 4.0));
+            c += vec3(0.32, 0.24, 0.42) * mist * smoothstep(240.0, 520.0, cv.y) * (1.0 - smoothstep(560.0, 640.0, cv.y)) * 0.4;
+            // The bench's front, dark wood in the candles' spill.
+            if (cv.y > 626.0) {
+                float k = cv.y - 628.0;
+                float g = noise(vec2(cv.x * 0.012, cv.y * 0.12)) * 0.6 + noise(vec2(cv.x * 0.05, cv.y * 0.45)) * 0.4;
+                vec3 wood = vec3(0.23, 0.125, 0.075) * (0.65 + 0.6 * g);
+                wood *= 1.0 - 0.45 * (1.0 - smoothstep(0.0, 2.0, abs(mod(k, 112.0) - 56.0) - 54.0));
+                wood += light.rgb * 0.22 * exp(-k / 70.0) * exp(-abs(cv.x - 270.0) / 240.0) * f;
+                wood *= 1.0 - 0.4 * smoothstep(0.0, 330.0, k);
+                c = mix(c, wood, smoothstep(626.0, 628.0, cv.y));
+            }
+            vec2 vq = (cv / vec2(540.0, 960.0) - 0.5) * vec2(1.25, 0.8);
+            c *= mix(0.35, 1.0, smoothstep(0.85, 0.2, length(vq)));
+            col = vec4(c, 1.0);
+        } else if (kind == SHAPE_ASTROLABE) {           // gilt rings and runes, turning
+            float R = min(h.x, h.y);
+            vec2 u = p / R;
+            float px = 1.0 / R;
+            float r = length(u);
+            float a = atan(u.y, u.x);
+            // The outer band: two rings and the hours' ticks, turning one way.
+            float ft = (a + t * 0.012) / 6.2831853 * 72.0;
+            float k = floor(ft + 0.5);
+            float major = 1.0 - step(0.5, mod(k + 72.0, 6.0));
+            float along = abs(ft - k) * 0.0872665 * r;
+            float d = min(abs(r - 0.97) - 0.9 * px, abs(r - 0.91) - 0.6 * px);
+            d = min(d, max(along - mix(0.5, 0.9, major) * px, max(mix(0.94, 0.91, major) - r, r - 0.97)));
+            // A band of runes, turning the other way; one may flare.
+            float flare = 0.0;
+            float rd = 1e3;
+            if (r > 0.72 && r < 0.88) {
+                float fc = (a - t * 0.02) / 6.2831853 * 24.0;
+                float cell = floor(fc);
+                float cid = mod(cell + 24.0, 24.0);
+                vec2 g = vec2((fc - cell - 0.5) * 0.2094, r - 0.80);
+                rd = sd_segment(g, vec2(0.0, -0.045), vec2(0.0, 0.045));
+                for (int s = 1; s < 3; s++) {
+                    vec2 hs = vec2(hash12(vec2(cid, float(s) * 7.0)), hash12(vec2(cid, float(s) * 7.0 + 3.0)));
+                    vec2 ha = vec2(hash12(vec2(cid, float(s) * 5.0 + 1.0)), hash12(vec2(cid, float(s) * 5.0 + 2.0)));
+                    vec2 pa = (floor(hs * 3.0) - 1.0) * vec2(0.035, 0.045);
+                    vec2 pb = (floor(ha * 3.0) - 1.0) * vec2(0.035, 0.045) + vec2(0.001, 0.0);
+                    rd = min(rd, sd_segment(g, pa, pb));
+                }
+                flare = v_p0.y * (1.0 - step(0.5, abs(cid - v_p0.x)));
+                rd -= (0.7 + flare) * px;
+                d = min(d, rd);
+            }
+            d = min(d, min(abs(r - 0.86), abs(r - 0.74)) - 0.5 * px);
+            // Within, fainter: a hexagram turning slowly in its circle, and a
+            // planet on its orbit.
+            float di = 1e3;
+            if (r < 0.7) {
+                vec2 hq = rot(t * 0.03) * u;
+                float tri = min(abs(sd_triangle(hq, vec2(0.0, -0.62), vec2(0.537, 0.31), vec2(-0.537, 0.31))),
+                                abs(sd_triangle(hq, vec2(0.0, 0.62), vec2(0.537, -0.31), vec2(-0.537, -0.31))));
+                di = min(tri - 0.6 * px, min(abs(r - 0.62), abs(r - 0.36)) - 0.6 * px);
+                vec2 p1 = 0.49 * vec2(cos(t * 0.11), sin(t * 0.11));
+                di = min(di, length(u - p1) - 0.025);
+            }
+            vec2 p2 = 0.80 * vec2(cos(-t * 0.07 + 2.0), sin(-t * 0.07 + 2.0));
+            d = min(d, abs(length(u - p2) - 0.035) - 0.6 * px);
+            // A slow gleam going round, a soft glow off the lines, and the
+            // flaring rune's own bright halo.
+            float sheen = 0.45 + 0.55 * pow(0.5 + 0.5 * cos(a - t * 0.25), 3.0);
+            float line = max(fill_aa(d * R), 0.5 * fill_aa(di * R));
+            float halo = exp(-max(min(d, di), 0.0) * R / 4.0) * 0.16;
+            float burst = flare * exp(-max(rd, 0.0) * R / 3.5) * 0.85;
+            vec3 c = mix(vec3(0.95, 0.74, 0.42), vec3(1.0, 0.96, 0.85), clamp(burst * 1.5, 0.0, 1.0));
+            float aa = (line * sheen + halo + burst) * (1.0 - smoothstep(v_p0.z - 0.15, v_p0.z, u.y));
+            aa *= 1.0 - smoothstep(0.98, 1.02, r);
+            col = vec4(c, clamp(aa, 0.0, 1.0) * v_color.a);
+        } else if (kind == SHAPE_WISP) {                // a sign drawn in steam
+            float s = min(h.x, h.y);
+            vec2 q = p / (s * 0.8);
+            float shown = v_p0.z;
+            // Steam wavers: the sign seen through moving noise, looser as it
+            // comes and goes.
+            vec2 wob = vec2(noise(q * 2.5 + vec2(v_p0.x, t * 0.35)), noise(q * 2.5 + vec2(t * 0.3, v_p0.x + 5.0))) - 0.5;
+            q += wob * (0.08 + 0.25 * (1.0 - shown));
+            float d = sd_alchemy(q, int(v_p0.y + 0.5));
+            float n = noise(q * 5.0 + vec2(0.0, t * 0.6) + v_p0.x);
+            float a = (smoothstep(0.06, 0.0, d) * 0.7 + exp(-d * d / 0.012) * 0.3) * (0.5 + 0.6 * n);
+            a *= shown * (1.0 - smoothstep(0.8, 1.0, length(p / s)));
+            vec3 c = mix(vec3(0.95, 0.92, 1.0), v_color.rgb, 0.35);
+            col = vec4(c, clamp(a, 0.0, 1.0) * v_color.a);
+        } else if (kind == SHAPE_FLOURISH) {            // a gilded scroll divider
+            float L = h.x;
+            float s = h.y;
+            vec2 q = vec2(abs(p.x), p.y);
+            // A lozenge in the middle, open at its heart, lines tapering out
+            // from it to a bead and a curl at each end.
+            float dia = max(q.x + abs(p.y) * 1.6 - s * 0.8, -(q.x + abs(p.y) * 1.6 - s * 0.4));
+            float taper = clamp((q.x - s) / (L - s * 2.2), 0.0, 1.0);
+            float line = max(abs(q.y) - (0.6 + s * 0.12 * (1.0 - taper)), max(s - q.x, q.x - (L - s * 1.1)));
+            float curl = sd_arc(q - vec2(L - s * 0.75, -s * 0.38), s * 0.38, -1.2, 3.6, 0.8);
+            float bead = length(q - vec2(s * 1.75, 0.0)) - s * 0.16;
+            float d = min(min(min(dia, line), curl), min(bead, length(p) - s * 0.16));
+            vec3 c = gilt(p.y / s);
+            c += vec3(1.0, 0.95, 0.8) * exp(-pow((p.x / L - v_p0.x) * 5.0, 2.0)) * 0.6;
+            float halo = exp(-max(d, 0.0) / 4.0) * 0.2;
+            col = vec4(c, clamp(fill_aa(d) + halo, 0.0, 1.0) * v_color.a);
+        } else if (kind == SHAPE_PARCHMENT) {           // the map's page on a dark desk
+            vec2 cv = p * (v_p0.x / h.x) + vec2(270.0, 480.0);
+            float f = 0.88 + 0.12 * light.a;
+            vec3 desk = vec3(0.10, 0.06, 0.04) * (0.6 + 0.6 * noise(vec2(cv.x * 0.01, cv.y * 0.07)));
+            // The page: its edge worn and a little torn.
+            float en = noise(cv * 0.05) * 0.6 + noise(cv * 0.17) * 0.4;
+            float d = sd_box(cv - vec2(270.0, 480.0), vec2(262.0, 470.0)) + (en - 0.5) * 8.0;
+            vec2 q = cv * 0.0045;
+            float stain = noise(q + 2.0) * 0.6 + noise(q * 2.7 + 5.0) * 0.4;
+            vec3 c = mix(vec3(0.87, 0.77, 0.57), vec3(0.68, 0.51, 0.32), smoothstep(0.3, 0.85, stain));
+            c *= 0.95 + 0.07 * noise(cv * vec2(0.5, 0.07));
+            // Foxing: a brown spot here and there, and a ring where a cup stood.
+            c = mix(c, vec3(0.6, 0.4, 0.22), dots(cv / 64.0 + 3.1, 0.22) * 0.3 * step(0.65, hash12(floor(cv / 64.0 + 3.1))));
+            c = mix(c, vec3(0.55, 0.38, 0.22), fill_aa(abs(length(cv - vec2(96.0, 872.0)) - 30.0) - 1.2) * 0.25 * noise(cv * 0.08));
+            // Rhumb lines from a wind rose, as on an old chart, and its circle.
+            vec2 rq = cv - vec2(270.0, 470.0);
+            float rr = length(rq);
+            float ra = atan(rq.y, rq.x);
+            float rhumb = abs(mod(ra + 0.19635, 0.3927) - 0.19635) * rr - 0.5;
+            float ink = fill_aa(rhumb) * 0.09 * smoothstep(30.0, 60.0, rr) * (1.0 - smoothstep(200.0, 430.0, rr));
+            ink = max(ink, fill_aa(min(abs(rr - 214.0), abs(rr - 208.0)) - 0.6) * 0.12);
+            // A ruled border with knots at its corners.
+            float bd = sd_box(cv - vec2(270.0, 480.0), vec2(240.0, 448.0));
+            float corner = length(abs(cv - vec2(270.0, 480.0)) - vec2(240.0, 448.0));
+            float heading = (1.0 - smoothstep(170.0, 190.0, abs(cv.x - 280.0))) * (1.0 - smoothstep(50.0, 60.0, cv.y));
+            ink = max(ink, fill_aa(min(abs(bd) - 1.1, abs(bd + 6.0) - 0.5)) * 0.45 * (1.0 - heading));
+            ink = max(ink, fill_aa(min(abs(corner - 9.0) - 1.0, corner - 3.0)) * 0.5);
+            c = mix(c, vec3(0.30, 0.17, 0.08), ink);
+            // Folds: one down the middle, one across.
+            vec2 fd = cv - vec2(270.0, 480.0);
+            c *= 1.0 - 0.07 * exp(-abs(fd.x) / 2.0) - 0.07 * exp(-abs(fd.y) / 2.0);
+            c *= 1.0 + 0.04 * exp(-abs(fd.x - 3.0) / 3.0) + 0.04 * exp(-abs(fd.y - 3.0) / 3.0);
+            // Aged and darker toward the edge, a little scorched at it.
+            c *= mix(0.66, 1.0, smoothstep(0.0, 46.0, -d));
+            c = mix(c, vec3(0.32, 0.18, 0.09), (1.0 - smoothstep(0.0, 5.0, -d)) * 0.75);
+            // The room's candlelight falling on it.
+            c *= mix(vec3(1.0), light.rgb, 0.2) * f;
+            vec2 vq = (cv / vec2(540.0, 960.0) - 0.5) * vec2(1.1, 1.0);
+            c *= mix(0.74, 1.0, smoothstep(0.8, 0.15, length(vq)));
+            desk *= 1.0 - 0.7 * exp(-max(d, 0.0) / 10.0);
+            col = vec4(mix(desk, c, fill_aa(d)), 1.0);
+        } else if (kind == SHAPE_MEDALLION) {           // a chapter's roundel: its room, in a gilt rim
+            float r = min(h.x, h.y);
+            vec2 q = p / r;
+            float rr = length(q);
+            int theme = int(v_p0.x + 0.5);
+            float state = v_p0.y;
+            float lit = step(1.5, state);
+            vec3 c = medallion_air(theme, q / 0.8) * (0.85 + 0.25 * noise(q * 3.0 + float(theme) * 4.0));
+            vec4 em = medallion_emblem(theme, q / 0.8, r * 0.8, t);
+            c = mix(c, em.rgb * (1.0 + 0.25 * lit), em.a);
+            c += em.rgb * exp(-rr * 2.5) * 0.25 * lit;
+            // A locked room is a faded engraving, in sepia.
+            float lum = dot(c, vec3(0.3, 0.59, 0.11));
+            c = mix(c, vec3(0.62, 0.48, 0.32) * (0.5 + lum), 0.85 * (1.0 - step(0.5, state)));
+            float window = fill_aa((rr - 0.8) * r);
+            // The rim: gilt for the open, dull bronze for the locked.
+            float rim_d = (abs(rr - 0.9) - 0.1) * r;
+            vec3 rim = gilt(q.y * 0.9 + (rr - 0.9) * 4.0);
+            rim = mix(rim, vec3(0.45, 0.32, 0.2) * (1.0 - 0.3 * q.y), 0.8 * (1.0 - step(0.5, state)));
+            rim = mix(rim, rim * 0.5, fill_aa(abs(rr - 0.8) * r - 0.5));
+            c = mix(c, rim, fill_aa(rim_d));
+            // A gem at its foot once the chapter's potion is made.
+            vec2 gq = q - vec2(0.0, 0.9);
+            float gem = fill_aa((length(gq) - 0.2) * r) * lit;
+            vec3 gc = v_p1.rgb * (0.7 + 0.6 * smoothstep(0.2, -0.2, gq.y));
+            gc += vec3(0.7) * fill_aa((length(gq + vec2(0.06, 0.07)) - 0.05) * r);
+            c = mix(c, gc, gem);
+            float body = max(max(window, fill_aa(rim_d)), gem);
+            float shadow = exp(-max(length(q - vec2(0.03, 0.12)) - 1.0, 0.0) * r / 3.0) * 0.45;
+            float a = max(body, shadow);
+            col = vec4(c * body / max(a, 0.001), a * v_color.a);
+        } else if (kind == SHAPE_GILDPATH) {            // a gilt line along a curve, ink dots past its head
+            vec2 bz = sd_bezier(p, v_p0.xy, v_p0.zw, v_p1.xy);
+            float w = v_p1.z;
+            float head = v_p1.w;
+            float len = length(v_p0.zw - v_p0.xy) + length(v_p1.xy - v_p0.zw);
+            float s = bz.y * len;
+            // The way still to go, in faint ink dots.
+            float gap = w * 4.5;
+            float dot_d = length(vec2((fract(s / gap) - 0.5) * gap, bz.x)) - w * 0.55;
+            float ink = fill_aa(dot_d) * 0.55 * step(head, bz.y);
+            // The way gone, in gilt, with specks twinkling along it, and a
+            // bright point where it is being drawn.
+            float shown = 1.0 - smoothstep(head - 0.01, head, bz.y);
+            float line = fill_aa(bz.x - w * 0.7) * shown;
+            vec3 g = mix(vec3(1.0, 0.9, 0.6), vec3(0.6, 0.38, 0.12), smoothstep(0.0, 1.0, bz.x / (w * 0.7)));
+            float tw = speckle(vec2(s / (w * 3.0), hash12(v_p0.xy)), t, 1.3, 0.35) * shown * exp(-bz.x / w);
+            vec2 hp = mix(mix(v_p0.xy, v_p0.zw, head), mix(v_p0.zw, v_p1.xy, head), head);
+            float spot = exp(-length(p - hp) / (w * 1.4)) * step(0.001, head) * step(head, 0.999);
+            float halo = exp(-bz.x / (w * 1.8)) * 0.25 * shown;
+            float sparkle = clamp(tw + spot, 0.0, 1.0);
+            vec3 c = mix(vec3(0.33, 0.2, 0.1), g, clamp(line + halo, 0.0, 1.0));
+            c = mix(c, vec3(1.0, 0.97, 0.85), sparkle);
+            float a = max(max(line, ink), max(halo, sparkle));
+            col = vec4(c, clamp(a, 0.0, 1.0) * v_color.a);
         }
         if (col.a <= 0.001) discard;
         result = vec4(col.rgb * col.a, col.a);
