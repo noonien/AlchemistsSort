@@ -373,6 +373,8 @@ fn draw_card(out: Inst[>..]&) {
     let i = card_flask;
     let fade = clamp((now - card_t) * 6.0, 0.0, 1.0) as f32;
     for r in flask_card.related {
+        // A brazier's heat is only drawn going where it does something.
+        if r.tie == Tie.Heat && r.acts && r.flask < board.count && !heat_takes(board.bottles[r.flask]) { continue; }
         if r.flask >= 0 && r.flask < shown.count {
             pick_out(out, r.flask, tie_color(r.tie), fade * 0.8);
             tie_line(out, i, r.flask, r.tie, fade);

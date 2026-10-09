@@ -112,7 +112,6 @@ fn drops_alive() -> bool {
 // --- a finished potion: the stopper drops in and a label slides on --------------------------
 
 fn draw_completion(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: float2) {
-    if i >= 0 && busy(i) { return; }        // still being poured into
     let c = palette_color(flask_color(b), save.color_safe);
     let since = if i >= 0 { now - complete_at[i] } else { 10.0 };
     // A cork filling the opening, its top a little above the rim.
@@ -123,13 +122,8 @@ fn draw_completion(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: float2
     seal.color.w = a;
     out.push(seal);
     // The label, sliding on once the stopper is in.
-    var k = clamp((since - 0.35) / 0.35, 0.0, 1.0);
-    // Out of the way while a flask pours close by, as its text would show over it.
-    for p in pours {
-        if p.active && i >= 0 && (abs(slots[p.to].pos.x - pos.x) < half.x * 5.0 && abs(slots[p.to].pos.y - pos.y) < half.y * 2.0) {
-            k = 0.0;
-        }
-    }
+    // A flask moving past is drawn over it, words and all (main.goose's draw_board).
+    let k = clamp((since - 0.35) / 0.35, 0.0, 1.0);
     if k <= 0.0 { return; }
     let e = (1.0 - (1.0 - k) * (1.0 - k)) as f32;
     let name = COLOR_NAMES[clamp(flask_color(b), 0, COLOR_NAMES.len - 1)];
@@ -138,7 +132,7 @@ fn draw_completion(out: Inst[>..]&, i: i64, b: Bottle, pos: float2, half: float2
     var label = inst(Shape.Label, lp, float2 { w, 10.0 }, float4 { 1.0, 1.0, 1.0, e });
     label.p1 = c;
     out.push(label);
-    text(0, lp.x, lp.y + 1.5, name, TextStyle.Tiny, float4 { 0.28, 0.17, 0.08, e }, Align.Center);
+    text(parts_layer, lp.x, lp.y + 1.5, name, TextStyle.Tiny, float4 { 0.28, 0.17, 0.08, e }, Align.Center);
 }
 
 fn completing() -> bool {
